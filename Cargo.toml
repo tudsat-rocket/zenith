@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "firmware",
+]
+default-members = ["firmware"]
+
+# We specify dependencies we use in multiple places here, so we can make sure
+# every crate uses the same version.
+[workspace.dependencies]
+firmware = { path = "firmware" }
+
+[profile.release]
+debug = 2
