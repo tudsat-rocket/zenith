@@ -1,3 +1,4 @@
+use defmt::Debug2Format;
 use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber};
 use mavio::error::FrameError;
 use static_cell::StaticCell;
@@ -157,10 +158,19 @@ async fn run_socket(
             }
             Either::Second(res) => {
                 let Ok((len, _peer)) = res else {
+                    defmt::error!("Error receiving ethernet packet");
                     continue;
                 };
 
-                if let Err(..) = mavlink_buffer.extend_from_slice(&recv_buffer[..len]) {
+                defmt::info!("eth: received packet: len: {}", len);
+                if mavlink_buffer
+                    .extend_from_slice(&recv_buffer[..len])
+                    .is_err()
+                {
+                    defmt::error!(
+                        "mavlink buffer of {} bytes was to short for message",
+                        mavlink_buffer.len()
+                    );
                     mavlink_buffer.truncate(0);
                     continue;
                 }
@@ -171,8 +181,10 @@ async fn run_socket(
                         uplink_publisher.publish(frame).await;
                         mavlink_buffer.truncate(0);
                     }
+                    // Assume the next part of the frame is sent in the next udp packet.
                     Err(FrameError::FrameBufferIsTooSmall { .. }) => {}
-                    Err(..) => {
+                    Err(e) => {
+                        defmt::error!("eth: {}", Debug2Format(&e));
                         mavlink_buffer.truncate(0);
                     }
                 }

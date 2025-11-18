@@ -39,6 +39,7 @@ async fn run_can_rx(can_rx: &'static mut CanRx<'static>, publisher: CanTxPublish
     loop {
         match can_rx.read().await {
             Ok(envelope) => {
+                // info!("received can envelope");
                 let frame = envelope.frame;
                 publisher.publish_immediate(frame);
             }
@@ -55,6 +56,7 @@ async fn run_can_rx(can_rx: &'static mut CanRx<'static>, publisher: CanTxPublish
 async fn run_can_tx(can_tx: &'static mut CanTx<'static>, mut subscriber: CanRxSubscriber) -> ! {
     loop {
         let message = subscriber.next_message_pure().await;
+        defmt::trace!("publishing can message: {}", defmt::Debug2Format(&message));
         can_tx.write(&message).await;
     }
 }

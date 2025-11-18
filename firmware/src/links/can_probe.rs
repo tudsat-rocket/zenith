@@ -41,40 +41,39 @@ pub fn start(
 
 #[embassy_executor::task]
 async fn run_downlink(mut can_rx: CanRxSubscriber, eth_tx: EthTxPublisher) -> ! {
+    while !CAN_PROBE_ENABLED.wait().await {}
+
+    defmt::debug!("can probe enabled");
+
     loop {
-        while !CAN_PROBE_ENABLED.wait().await {}
-
-        defmt::info!("Forwarding CAN frames.");
-
-        loop {
-            match select(CAN_PROBE_ENABLED.wait(), can_rx.next_message_pure()).await {
-                Either::First(true) => {}
-                Either::First(false) => {
-                    break;
-                }
-                Either::Second(frame) => {
-                    let id = match frame.id() {
-                        Id::Standard(sid) => sid.as_raw() as u32,
-                        Id::Extended(eid) => eid.as_raw(),
-                    };
-                    let mut buffer = [0x00; 8];
-                    buffer.copy_from_slice(frame.data());
-                    let _ = eth_tx
-                        .publish(Common::CanFrame(CanFrame {
-                            target_system: 0xff,    // TODO
-                            target_component: 0xff, // TODO
-                            bus: 1,
-                            id,
-                            len: frame.data().len() as u8,
-                            data: buffer,
-                        }))
-                        .await;
-                }
+        match select(CAN_PROBE_ENABLED.wait(), can_rx.next_message_pure()).await {
+            Either::First(true) => {}
+            Either::First(false) => {
+                continue;
+            }
+            Either::Second(frame) => {
+                let id = match frame.id() {
+                    Id::Standard(sid) => sid.as_raw() as u32,
+                    Id::Extended(eid) => eid.as_raw(),
+                };
+                let mut buffer = [0x00; 8];
+                buffer.copy_from_slice(frame.data());
+                let _ = eth_tx
+                    .publish(Common::CanFrame(CanFrame {
+                        target_system: 0xff,    // TODO
+                        target_component: 0xff, // TODO
+                        bus: 1,
+                        id,
+                        len: frame.data().len() as u8,
+                        data: buffer,
+                    }))
+                    .await;
             }
         }
     }
 }
 
+// Receives Mavlink frames and publishes all valid CanFrames to the TODO: correct can bus.
 #[embassy_executor::task]
 async fn run_uplink(mut eth_rx: EthRxSubscriber, can_tx: CanTxPublisher) -> ! {
     loop {
@@ -84,14 +83,24 @@ async fn run_uplink(mut eth_rx: EthRxSubscriber, can_tx: CanTxPublisher) -> ! {
         };
 
         // TODO: CAN-FD?
-        let Common::CanFrame(inner) = msg else {
+        let Common::CanFrame(can_frame) = msg else {
             continue;
         };
-
-        // TODO: higher IDs
-        let id = Id::Standard(StandardId::new(inner.id as u16).unwrap());
-        let len = inner.len as usize;
-        let frame = Frame::new_data(id, &inner.data[..len]).unwrap();
-        can_tx.publish_immediate(frame);
+        defmt::info!("can frame: {}", defmt::Debug2Format(&can_frame));
+        if can_frame.id > StandardId::MAX.as_raw() as u32 {
+            defmt::warn!("refusing to publish non standard frame");
+            continue;
+        }
+        if can_frame.len > 8 {
+            defmt::warn!("refusing to publish malformed frame, longer than 8 bytes");
+            continue;
+        }
+        match embassy_stm32::can::Frame::new_standard(can_frame.id as u16, &can_frame.data) {
+            Err(e) => defmt::warn!(
+                "refusing to publish malformed frame: {}",
+                defmt::Debug2Format(&e)
+            ),
+            Ok(frame) => can_tx.publish(frame).await,
+        }
     }
 }
