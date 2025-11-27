@@ -76,13 +76,23 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
                 Timer::after(Duration::from_micros(10)).await;
 
                 baro.read_calibration_values().await?;
-                if baro.calibration_data.as_ref().map(|d| d.valid()).unwrap_or(false) {
+                if baro
+                    .calibration_data
+                    .as_ref()
+                    .map(|d| d.valid())
+                    .unwrap_or(false)
+                {
                     break 'outer;
                 }
             }
         }
 
-        if baro.calibration_data.as_ref().map(|d| d.valid()).unwrap_or(false) {
+        if baro
+            .calibration_data
+            .as_ref()
+            .map(|d| d.valid())
+            .unwrap_or(false)
+        {
             info!("MS56xx initialized");
         } else {
             error!("Failed to initialize MS56xx");
@@ -91,10 +101,16 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
         Ok(baro)
     }
 
-    async fn command(&mut self, command: MS56Command, response_len: usize) -> Result<Vec<u8, 32>, SPI::Error> {
+    async fn command(
+        &mut self,
+        command: MS56Command,
+        response_len: usize,
+    ) -> Result<Vec<u8, 32>, SPI::Error> {
         let mut payload = [0x00; 32];
         payload[0] = command.into();
-        self.spi.transfer_in_place(&mut payload[..1 + response_len]).await?;
+        self.spi
+            .transfer_in_place(&mut payload[..1 + response_len])
+            .await?;
         Ok(Vec::from_slice(&payload[1..1 + response_len]).unwrap_or_default())
     }
 
@@ -125,7 +141,13 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
 
     async fn read_sensor_data(&mut self) -> Result<(), SPI::Error> {
         let response = self.command(MS56Command::ReadAdc, 3).await?;
-        let value = ((response[0] as i32) << 16) + ((response[1] as i32) << 8) + (response[2] as i32);
+        // when read to fast after starting conversion, conversion is corrupted and data all 0
+        if response.iter().all(|&b| b == 0) {
+            debug!("invalid barometer response, polled to soon");
+            return Ok(());
+        }
+        let value =
+            ((response[0] as i32) << 16) | ((response[1] as i32) << 8) | (response[2] as i32);
         let cal = self.calibration_data.as_ref().unwrap();
 
         if self.read_temp {
@@ -139,8 +161,8 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
         if let Some((dt, raw_pressure)) = self.dt.zip(self.raw_pressure) {
             let mut temp = 2000 + (((dt as i64) * (cal.temp_coef_temperature as i64)) >> 23);
 
-            let mut offset =
-                ((cal.pressure_offset as i64) << 16) + ((cal.temp_coef_pressure_offset as i64 * dt as i64) >> 7);
+            let mut offset = ((cal.pressure_offset as i64) << 16)
+                + ((cal.temp_coef_pressure_offset as i64 * dt as i64) >> 7);
             let mut sens = ((cal.pressure_sensitivity as i64) << 15)
                 + (((cal.temp_coef_pressure_sensitivity as i64) * (dt as i64)) >> 8);
 
@@ -179,15 +201,18 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
     async fn start_next_conversion(&mut self) -> Result<(), SPI::Error> {
         let osr = MS56OSR::OSR256;
         if self.read_temp {
-            self.command(MS56Command::StartTempConversion(osr), 0).await?;
+            self.command(MS56Command::StartTempConversion(osr), 0)
+                .await?;
         } else {
-            self.command(MS56Command::StartPressureConversion(osr), 0).await?;
+            self.command(MS56Command::StartPressureConversion(osr), 0)
+                .await?;
         }
         Ok(())
     }
 
     pub async fn tick(&mut self) {
         if let Err(_) = self.read_sensor_data().await {
+            error!("baro spi error, read_sensor_data");
             self.dt = None;
             self.temp = None;
             self.raw_pressure = None;
@@ -198,6 +223,7 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
         }
 
         if let Err(_) = self.start_next_conversion().await {
+            error!("baro spi error, start_next_conversion");
             self.dt = None;
             self.temp = None;
             self.raw_pressure = None;
@@ -215,7 +241,8 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
     }
 
     pub fn altitude(&self) -> Option<f32> {
-        self.pressure().map(|p| 44330.769 * (1.0 - (p / 1012.5).powf(0.190223)))
+        self.pressure()
+            .map(|p| 44330.769 * (1.0 - (p / 1012.5).powf(0.190223)))
     }
 }
 
@@ -274,7 +301,8 @@ impl BaroFilter {
 
         let _ = self.previous_raw_values.push_back(input_value);
 
-        let mut sorted: Vec<_, BARO_MEDIAN_FILTER_LENGTH> = self.previous_raw_values.iter().collect();
+        let mut sorted: Vec<_, BARO_MEDIAN_FILTER_LENGTH> =
+            self.previous_raw_values.iter().collect();
         sorted.sort_unstable();
 
         if self.last_spike_warning_counter <= 100 {
