@@ -9,8 +9,9 @@ use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{Duration, Ticker};
 
-use firmware::links::Links;
+use firmware::links::{Links, UplinkCommand};
 use firmware::vehicle::Vehicle;
+use rapid_dialect::rapid::messages::Heartbeat;
 
 use {defmt_rtt as _, panic_probe as _};
 
@@ -49,12 +50,18 @@ async fn main(low_priority_spawner: Spawner) {
     )
     .await;
 
-    //let (usb_downlink, usb_uplink) = fw::usb::start(board.usb_driver, low_priority_spawner);
+    let vehicle = Vehicle::init(
+        board.sensors,
+        board.outputs,
+        board.adc,
+        low_priority_spawner,
+    )
+    .await;
 
-    let vehicle = Vehicle::init(board.sensors).await;
     let links = Links::init(
         board.ethernet,
         board.seed,
+        board.usb,
         (can1_tx.publisher().unwrap(), can1_rx.subscriber().unwrap()),
         low_priority_spawner,
     )
@@ -77,8 +84,18 @@ pub async fn main_loop(
     loop {
         vehicle.tick().await;
 
-        links.receive_uplink(&mut vehicle);
-        links.transmit_downlink(&vehicle);
+        // TODO: this belongs somewhere else
+        if let Some(cmd) = links.try_recv_command() {
+            match cmd {
+                UplinkCommand::SetFlightMode(fm) => {
+                    vehicle.set_mode(fm);
+                    links.send_telemetry_message::<Heartbeat>(&vehicle);
+                }
+                _ => {}
+            }
+        }
+
+        links.send_telemetry_messages(&vehicle);
 
         iwdg.pet();
         ticker.next().await;

@@ -1,4 +1,6 @@
 #![no_std]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
 
 use embassy_stm32::adc::AdcChannel;
 use embassy_stm32::adc::AnyAdcChannel;
@@ -8,7 +10,6 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::Delay;
 
-use embassy_stm32::Config;
 use embassy_stm32::adc::Adc;
 use embassy_stm32::bind_interrupts;
 use embassy_stm32::can::Can;
@@ -25,7 +26,9 @@ use embassy_stm32::spi::Spi;
 use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::Channel;
 use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
+use embassy_stm32::usb::Driver;
 use embassy_stm32::wdg::IndependentWatchdog;
+use embassy_stm32::{Config, Peri};
 
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 
@@ -87,19 +90,24 @@ pub struct BoardSensors {
     pub baro3: BMP580<OurSpiDevice<'static>>,
 }
 
-//pub struct BoardOutputs {
-//    pub leds: (Output<'static>, Output<'static>, Output<'static>),
-//    // pub load_outputs: embassy_sync::blocking_mutex::Mutex<CriticalSectionRawMutex, RefCell<LoadOutputs>>,
-//    // pub load_output_arm: Output<'static>,
-//    // pub recovery_lows: (Output<'static>, Output<'static>, Output<'static>, Output<'static>),
-//    // pub continuity_check: Output<'static>,
-//}
+pub struct BoardOutputs {
+    pub leds: (Output<'static>, Output<'static>, Output<'static>),
+    // pub load_outputs: embassy_sync::blocking_mutex::Mutex<CriticalSectionRawMutex, RefCell<LoadOutputs>>,
+    pub recovery_high: Output<'static>,
+    pub recovery_lows: (
+        Output<'static>,
+        Output<'static>,
+        Output<'static>,
+        Output<'static>,
+    ),
+    // pub continuity_check: Output<'static>,
+}
 
 pub struct BoardAdc {
+    pub dma: Peri<'static, DMA2_CH7>,
     pub adc1: Adc<'static, ADC1>,
     pub adc2: Adc<'static, ADC2>,
     pub adc3: Adc<'static, ADC3>,
-    pub dma: DMA2_CH7,
     pub main_voltage: AnyAdcChannel<ADC1>,
     pub supply_voltage: AnyAdcChannel<ADC1>,
     pub recovery_voltage: AnyAdcChannel<ADC1>,
@@ -110,16 +118,16 @@ pub struct BoardAdc {
 
 pub struct Board {
     pub sensors: BoardSensors,
-    // pub outputs: BoardOutputs,
+    pub outputs: BoardOutputs,
     // pub load_outputs: embassy_sync::blocking_mutex::Mutex<CriticalSectionRawMutex, RefCell<LoadOutputs>>,
     pub adc: BoardAdc,
     pub can1: Can<'static>,
     pub can2: Can<'static>,
-    //pub lora1: LoRa<LoraTransceiver, Delay>,
-    //pub lora2: LoRa<LoraTransceiver, Delay>,
+    pub lora1: LoRa<LoraTransceiver, Delay>,
+    pub lora2: LoRa<LoraTransceiver, Delay>,
     // pub flash: FlashType,
     // pub flash_handle: FlashHandle,
-    //pub usb_driver: Driver<'static, USB_OTG_FS>,
+    pub usb: Driver<'static, USB_OTG_FS>,
     pub ethernet: Ethernet<'static, ETH, GenericPhy>,
     pub rng: Rng<'static, RNG>,
     pub iwdg: IndependentWatchdog<'static, IWDG1>,
@@ -134,8 +142,6 @@ static SPI2_SHARED: StaticCell<Mutex<CriticalSectionRawMutex, Spi<Async>>> = Sta
 static SPI3_SHARED: StaticCell<Mutex<CriticalSectionRawMutex, Spi<Async>>> = StaticCell::new();
 static SPI4_SHARED: StaticCell<Mutex<CriticalSectionRawMutex, Spi<Async>>> = StaticCell::new();
 
-//static FLIGHT_MODE_SIGNAL: Signal<CriticalSectionRawMutex, FlightMode> = Signal::new();
-
 //static LOAD_OUTPUTS: StaticCell<
 //    embassy_sync::blocking_mutex::Mutex<CriticalSectionRawMutex, LoadOutputs>,
 //> = StaticCell::new();
@@ -148,57 +154,43 @@ pub async fn init_board() -> Board {
         mode: embassy_stm32::rcc::HseMode::Oscillator,
         freq: Hertz::mhz(25), // our high-speed external oscillator speed
     });
-    config.rcc.sys = Sysclk::HSE;
     config.rcc.hsi48 = Some(Hsi48Config {
         sync_from_usb: true,
     }); // needed for USB
     config.rcc.pll1 = Some(Pll {
         source: PllSource::HSE,
-        //prediv: PllPreDiv::DIV2,
         prediv: PllPreDiv::DIV5,
-        //mul: PllMul::MUL64,
         mul: PllMul::MUL192,
-        //divp: Some(PllDiv::DIV2),
         divp: Some(PllDiv::DIV4),
-        //divq: Some(PllDiv::DIV4),
         divq: Some(PllDiv::DIV30),
         divr: None,
     });
     config.rcc.pll2 = Some(Pll {
         source: PllSource::HSE,
-        //prediv: PllPreDiv::DIV2,
         prediv: PllPreDiv::DIV5,
-        //mul: PllMul::MUL64,
         mul: PllMul::MUL192,
-        //divp: Some(PllDiv::DIV2),
         divp: Some(PllDiv::DIV2),
-        //divq: Some(PllDiv::DIV4),
         divq: Some(PllDiv::DIV30),
         divr: None,
     });
     config.rcc.pll3 = Some(Pll {
         source: PllSource::HSE,
-        //prediv: PllPreDiv::DIV2,
         prediv: PllPreDiv::DIV5,
-        //mul: PllMul::MUL64,
         mul: PllMul::MUL192,
-        //divp: Some(PllDiv::DIV2),
         divp: Some(PllDiv::DIV2),
-        //divq: Some(PllDiv::DIV4),
         divq: Some(PllDiv::DIV30),
-        divr: None,
+        divr: Some(PllDiv::DIV96),
     });
-    //config.rcc.per_clock_source = PerClockSource::HSE;
-    config.rcc.sys = Sysclk::PLL1_P; // 400 Mhz
-    config.rcc.ahb_pre = AHBPrescaler::DIV2; // 200 Mhz
-    config.rcc.apb1_pre = APBPrescaler::DIV2; // 100 Mhz
-    config.rcc.apb2_pre = APBPrescaler::DIV2; // 100 Mhz
-    config.rcc.apb3_pre = APBPrescaler::DIV2; // 100 Mhz
-    config.rcc.apb4_pre = APBPrescaler::DIV2; // 100 Mhz
+    config.rcc.sys = Sysclk::PLL1_P;
+    config.rcc.ahb_pre = AHBPrescaler::DIV2;
+    config.rcc.apb1_pre = APBPrescaler::DIV2;
+    config.rcc.apb2_pre = APBPrescaler::DIV2;
+    config.rcc.apb3_pre = APBPrescaler::DIV2;
+    config.rcc.apb4_pre = APBPrescaler::DIV2;
     config.rcc.voltage_scale = VoltageScale::Scale1;
     config.rcc.mux.fdcansel = embassy_stm32::rcc::mux::Fdcansel::HSE;
-    // usbsel clock was chosen by trial and error
     config.rcc.mux.usbsel = embassy_stm32::rcc::mux::Usbsel::HSI48;
+    config.rcc.mux.adcsel = embassy_stm32::rcc::mux::Adcsel::PLL3_R;
 
     let p = embassy_stm32::init(config);
 
@@ -302,7 +294,7 @@ pub async fn init_board() -> Board {
     let lora1_spi = SpiDevice::new(spi4, lora1_cs);
     let lora1_iv =
         GenericSx126xInterfaceVariant::new(lora1_reset, lora1_irq, lora1_busy, None, None).unwrap();
-    let mut lora1 = LoRa::new(Sx126x::new(lora1_spi, lora1_iv, lora1_config), false, Delay)
+    let lora1 = LoRa::new(Sx126x::new(lora1_spi, lora1_iv, lora1_config), false, Delay)
         .await
         .unwrap();
 
@@ -315,7 +307,7 @@ pub async fn init_board() -> Board {
     let lora2_spi = SpiDevice::new(spi4, lora2_cs);
     let lora2_iv =
         GenericSx126xInterfaceVariant::new(lora2_reset, lora2_irq, lora2_busy, None, None).unwrap();
-    let mut lora2 = LoRa::new(Sx126x::new(lora2_spi, lora2_iv, lora2_config), false, Delay)
+    let lora2 = LoRa::new(Sx126x::new(lora2_spi, lora2_iv, lora2_config), false, Delay)
         .await
         .unwrap();
 
@@ -325,8 +317,8 @@ pub async fn init_board() -> Board {
     can1.set_bitrate(125_000);
     can2.set_bitrate(125_000);
 
-    let mut can1 = can1.into_normal_mode();
-    let mut can2 = can2.into_normal_mode();
+    let can1 = can1.into_normal_mode();
+    let can2 = can2.into_normal_mode();
 
     let mut rng = Rng::new(p.RNG, Irqs);
     let mut seed = [0; 8];
@@ -353,9 +345,9 @@ pub async fn init_board() -> Board {
         mac_addr,
     );
 
-    let mut led_red = Output::new(p.PA8, Level::Low, Speed::Low);
-    let mut led_yellow = Output::new(p.PA10, Level::Low, Speed::Low);
-    let mut led_green = Output::new(p.PA15, Level::Low, Speed::Low);
+    let led_red = Output::new(p.PA8, Level::Low, Speed::Low);
+    let led_yellow = Output::new(p.PA10, Level::Low, Speed::Low);
+    let led_green = Output::new(p.PA15, Level::Low, Speed::Low);
     let leds = (led_red, led_yellow, led_green);
 
     // Set up the independent watchdog. This reboots the processor
@@ -366,7 +358,7 @@ pub async fn init_board() -> Board {
 
     let mut config = embassy_stm32::usb::Config::default();
     config.vbus_detection = true;
-    let usb_driver = embassy_stm32::usb::Driver::new_fs(
+    let usb = embassy_stm32::usb::Driver::new_fs(
         p.USB_OTG_FS,
         Irqs,
         p.PA12,
@@ -447,13 +439,13 @@ pub async fn init_board() -> Board {
         Default::default(),
     );
     let buzzer_pwm_channel = Channel::Ch3;
-    //let load_outputs = LoadOutputs::new(
-    //    Output::new(p.PE13, Level::Low, Speed::Low),
-    //    Output::new(p.PC9, Level::Low, Speed::Low),
-    //    Output::new(p.PC8, Level::Low, Speed::Low),
-    //    Output::new(p.PC7, Level::Low, Speed::Low),
-    //    Output::new(p.PC6, Level::Low, Speed::Low),
-    //);
+    let recovery_high = Output::new(p.PE13, Level::Low, Speed::Low);
+    let recovery_lows = (
+        Output::new(p.PC9, Level::Low, Speed::Low),
+        Output::new(p.PC8, Level::Low, Speed::Low),
+        Output::new(p.PC7, Level::Low, Speed::Low),
+        Output::new(p.PC6, Level::Low, Speed::Low),
+    );
     //let load_outputs = LOAD_OUTPUTS.init(embassy_sync::blocking_mutex::Mutex::new(load_outputs));
 
     let _continuity_check = Output::new(p.PE14, Level::High, Speed::Low);
@@ -462,7 +454,7 @@ pub async fn init_board() -> Board {
     let adc2 = Adc::new(p.ADC2);
     let adc3 = Adc::new(p.ADC3);
 
-    let mut adc_dma = p.DMA2_CH7;
+    let adc_dma = p.DMA2_CH7;
     let adc_main_voltage = p.PB0.degrade_adc();
     let adc_supply_voltage = p.PB1.degrade_adc();
     let adc_recovery_voltage = p.PA3.degrade_adc();
@@ -481,18 +473,18 @@ pub async fn init_board() -> Board {
             baro2,
             baro3,
         },
-        //outputs: BoardOutputs {
-        //    leds,
-        //    // load_outputs: Mutex::new(RefCell::new(load_outputs)),
-        //    // load_output_arm: recovery_high,
-        //    // recovery_lows,
-        //    // continuity_check,
-        //},
+        outputs: BoardOutputs {
+            leds,
+            //load_outputs: Mutex::new(RefCell::new(load_outputs)),
+            recovery_high,
+            recovery_lows,
+            // continuity_check,
+        },
         adc: BoardAdc {
             adc1,
             adc2,
             adc3,
-            dma: *adc_dma,
+            dma: adc_dma,
             main_voltage: adc_main_voltage,
             supply_voltage: adc_supply_voltage,
             recovery_voltage: adc_recovery_voltage,
@@ -500,13 +492,13 @@ pub async fn init_board() -> Board {
             recovery_current: adc_recovery_current,
             continuity_check: adc_continuity_check,
         },
-        //lora1,
-        //lora2,
+        lora1,
+        lora2,
         can1,
         can2,
         //flash,
         //flash_handle,
-        //usb_driver,
+        usb,
         ethernet,
         rng,
         iwdg,

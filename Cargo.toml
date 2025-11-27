@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "state_estimator",
     "firmware",
 ]
 default-members = ["firmware"]
@@ -9,6 +10,12 @@ default-members = ["firmware"]
 # every crate uses the same version.
 [workspace.dependencies]
 firmware = { path = "firmware" }
+state_estimator = { path = "state_estimator" }
+
+nalgebra = { version = "0.32", default-features = false, features = ["macros", "libm", "mint", "serde-serialize-no-std"] }
+
+rapid-dialect = { git = "https://github.com/tudsat-rocket/rapid-dialect" }
+#rapid-dialect = { path = "../rapid-dialect" }
 
 [profile.release]
 debug = 2

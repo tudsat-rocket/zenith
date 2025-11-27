@@ -1,149 +1,136 @@
-use embassy_stm32::adc::{Adc, AdcPin, Instance, SampleTime, Temperature, VrefInt};
-use embassy_stm32::gpio::low_level::Pin;
-use embassy_time::{Duration, Instant, Timer};
+use embassy_executor::Spawner;
+use embassy_stm32::adc::{Adc, AdcChannel, Instance, SampleTime, Temperature, VrefInt};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
+use embassy_time::{Duration, Instant, Ticker, Timer};
 
-use shared_types::can::BatteryTelemetryMessage;
+use crate::BoardAdc;
 
-const VDIV: f32 = 2.8;
-const RES: f32 = 0.01;
+const VSENSE_DIVIDER: u64 = (100 + 10) / 10;
 
-const LOW_BATTERY_THRESHOLD: u16 = 7000;
-const NO_BATTERY_THRESHOLD: u16 = 5000;
+const SAMPLING_RATE_HZ: u64 = 100;
 
-#[derive(PartialEq, Clone, Copy)]
-pub enum BatteryStatus {
-    Low,
-    High,
-    NoBatteryAttached,
+static SIGNAL: Signal<CriticalSectionRawMutex, AdcData> = Signal::new();
+
+#[derive(Clone, Default)]
+pub struct AdcData {
+    pub bus_main_voltage: u16,
+    pub bus_supply_voltage: u16,
+    pub fc_current: i32,
+    pub recovery_voltage: u16,
+    pub recovery_current: i32,
+    pub temperature: i32,
+    // TODO: continuity check
 }
 
-pub struct PowerMonitor<ADC: Instance, H, L, A> {
-    adc: Adc<'static, ADC>,
-    vref_sample: u16,
-    internal_temperature: Temperature,
-    pin_bat_high: H,
-    pin_bat_low: L,
-    pin_arm: A,
-
-    battery_voltage: Option<u16>,
-    battery_current: Option<i32>,
-    arm_voltage: Option<u16>,
-    temperature: Option<f32>,
-
-    last_can_message: Option<BatteryTelemetryMessage>,
-    time_last_can_msg: Option<Instant>,
+pub struct PowerMonitor {
+    history: heapless::Deque<AdcData, 20>,
+    filtered: AdcData,
 }
 
-impl<ADC: Instance, H: Pin + AdcPin<ADC>, L: Pin + AdcPin<ADC>, A: Pin + AdcPin<ADC>> PowerMonitor<ADC, H, L, A>
-where
-    Temperature: AdcPin<ADC>,
-    VrefInt: AdcPin<ADC>,
-{
-    pub async fn init(mut adc: Adc<'static, ADC>, pin_bat_high: H, pin_bat_low: L, pin_arm: A) -> Self {
-        adc.set_sample_time(SampleTime::Cycles480);
+pub fn init(adc: BoardAdc, spawner: Spawner) -> PowerMonitor {
+    spawner.spawn(run(adc)).unwrap();
 
-        let mut internal_vref = adc.enable_vrefint();
-        let internal_temperature = adc.enable_temperature();
-        let start_time = Temperature::start_time_us().max(VrefInt::start_time_us());
-        Timer::after(Duration::from_micros(start_time as u64)).await;
+    PowerMonitor::new()
+}
 
-        let vref_sample = adc.read(&mut internal_vref);
+#[unsafe(link_section = ".ram_d3")]
+static mut DMA_BUF: [u16; 7] = [0; 7];
 
+#[embassy_executor::task]
+async fn run(mut adc: BoardAdc) -> ! {
+    let mut read_buffer = unsafe { &mut DMA_BUF[..] };
+
+    let mut vrefint = adc.adc1.enable_vrefint().degrade_adc();
+    let mut temperature = adc.adc1.enable_temperature().degrade_adc();
+
+    let mut ticker = Ticker::every(Duration::from_millis(1000 / SAMPLING_RATE_HZ));
+
+    loop {
+        adc.adc1
+            .read(
+                adc.dma.reborrow(),
+                [
+                    (&mut vrefint, SampleTime::CYCLES64_5),
+                    (&mut temperature, SampleTime::CYCLES64_5),
+                    (&mut adc.main_voltage, SampleTime::CYCLES64_5),
+                    (&mut adc.supply_voltage, SampleTime::CYCLES64_5),
+                    (&mut adc.main_current, SampleTime::CYCLES810_5),
+                    (&mut adc.recovery_voltage, SampleTime::CYCLES64_5),
+                    (&mut adc.recovery_current, SampleTime::CYCLES810_5),
+                ]
+                .into_iter(),
+                &mut read_buffer,
+            )
+            .await;
+
+        let temperature = read_buffer[1] as i32;
+
+        let bus_main_voltage = VSENSE_DIVIDER * 3300 * (read_buffer[2] as u64) / 65536;
+        let bus_supply_voltage = VSENSE_DIVIDER * 3300 * (read_buffer[3] as u64) / 65536;
+        let fc_current = (33000 * (read_buffer[4] as u64)) / 65536;
+
+        let recovery_voltage = VSENSE_DIVIDER * 3300 * (read_buffer[5] as u64) / 65536;
+        let recovery_current = (33000 * (read_buffer[6] as u64)) / 65536;
+
+        let data = AdcData {
+            bus_main_voltage: bus_main_voltage as u16,
+            bus_supply_voltage: bus_supply_voltage as u16,
+            fc_current: fc_current as i32,
+            //fc_current: read_buffer[4] as i32,
+            recovery_voltage: recovery_voltage as u16,
+            recovery_current: recovery_current as i32,
+            //recovery_current: read_buffer[6] as i32,
+            temperature,
+        };
+        SIGNAL.signal(data);
+
+        ticker.next().await;
+    }
+}
+
+impl PowerMonitor {
+    pub fn new() -> Self {
         Self {
-            adc,
-            internal_temperature,
-            vref_sample,
-            pin_bat_high,
-            pin_bat_low,
-            pin_arm,
-            battery_voltage: None,
-            battery_current: None,
-            arm_voltage: None,
-            temperature: None,
-            last_can_message: None,
-            time_last_can_msg: None,
+            history: heapless::Deque::new(),
+            filtered: AdcData::default(),
         }
     }
 
-    fn to_millivolts(&self, sample: u16) -> u16 {
-        // From http://www.st.com/resource/en/datasheet/DM00071990.pdf
-        // 6.3.24 Reference voltage
-        const VREFINT_MV: u32 = 1210; // mV
-
-        (u32::from(sample) * VREFINT_MV / u32::from(self.vref_sample)) as u16
-    }
-
-    fn to_celcius(&self, sample: u16) -> f32 {
-        // From http://www.st.com/resource/en/datasheet/DM00071990.pdf
-        // 6.3.22 Temperature sensor characteristics
-        const V25: i32 = 760; // mV
-        const AVG_SLOPE: f32 = 2.5; // mV/C
-
-        let sample_mv = self.to_millivolts(sample) as i32;
-
-        (sample_mv - V25) as f32 / AVG_SLOPE + 25.0
-    }
-
     pub fn tick(&mut self) {
-        let sample = self.adc.read(&mut self.internal_temperature);
-        self.temperature = Some(self.to_celcius(sample));
-
-        let sample = self.adc.read(&mut self.pin_bat_high);
-        let voltage_high = (self.to_millivolts(sample) as f32) * VDIV;
-
-        let sample = self.adc.read(&mut self.pin_bat_low);
-        let voltage_low = (self.to_millivolts(sample) as f32) * VDIV;
-        self.battery_voltage = Some(voltage_high as u16);
-        self.battery_current = Some(((voltage_high - voltage_low) / RES) as i32);
-
-        let sample = self.adc.read(&mut self.pin_arm);
-        self.arm_voltage = Some(((self.to_millivolts(sample) as f32) * VDIV) as u16);
-    }
-
-    pub fn battery_voltage(&self) -> Option<u16> {
-        self.current_can_msg().map(|msg| msg.voltage_battery).or(self.battery_voltage)
-    }
-    pub fn battery_status(&self) -> Option<BatteryStatus> {
-        self.battery_voltage.map(|n| {
-            #[allow(overlapping_range_endpoints)] // we can't use experimental features yet
-            match n {
-                LOW_BATTERY_THRESHOLD.. => BatteryStatus::High,
-                NO_BATTERY_THRESHOLD..=LOW_BATTERY_THRESHOLD => BatteryStatus::Low,
-                _ => BatteryStatus::NoBatteryAttached,
+        if let Some(data) = SIGNAL.try_take() {
+            if self.history.is_full() {
+                let _ = self.history.pop_front();
             }
-        })
+            let _ = self.history.push_back(data);
+        } else if self.history.len() == 0 {
+            return;
+        }
+
+        let mut bus_main_voltage: u64 = 0;
+        let mut bus_supply_voltage: u64 = 0;
+        let mut fc_current: i64 = 0;
+        let mut recovery_voltage: u64 = 0;
+        let mut recovery_current: i64 = 0;
+        for data in &self.history {
+            bus_main_voltage += data.bus_main_voltage as u64;
+            bus_supply_voltage += data.bus_supply_voltage as u64;
+            fc_current += data.fc_current as i64;
+            recovery_voltage += data.recovery_voltage as u64;
+            recovery_current += data.recovery_current as i64;
+        }
+
+        let len = self.history.len() as u64;
+        self.filtered = AdcData {
+            bus_main_voltage: (bus_main_voltage / len) as u16,
+            bus_supply_voltage: (bus_supply_voltage / len) as u16,
+            fc_current: (fc_current / (len as i64)) as i32,
+            recovery_voltage: (recovery_voltage / len) as u16,
+            recovery_current: (recovery_current / (len as i64)) as i32,
+            temperature: 0,
+        }
     }
 
-    pub fn battery_current(&self) -> Option<i32> {
-        self.current_can_msg().map(|msg| msg.current).or(self.battery_current)
-    }
-
-    pub fn arm_voltage(&self) -> Option<u16> {
-        self.arm_voltage
-    }
-
-    pub fn armed(&self) -> bool {
-        self.arm_voltage.map(|v| v > 50).unwrap_or(false)
-    }
-
-    pub fn temperature(&self) -> Option<f32> {
-        self.temperature
-    }
-
-    pub fn charge_voltage(&self) -> Option<u16> {
-        self.current_can_msg().map(|msg| msg.voltage_charge)
-    }
-
-    pub fn handle_battery_can_msg(&mut self, msg: BatteryTelemetryMessage) {
-        self.last_can_message = Some(msg);
-        self.time_last_can_msg = Some(Instant::now());
-    }
-
-    // the time current, not the amperage current
-    fn current_can_msg<'a>(&'a self) -> Option<&'a BatteryTelemetryMessage> {
-        self.time_last_can_msg
-            .map(|i| i.elapsed().as_millis() < 250)?
-            .then_some(self.last_can_message.as_ref())
-            .flatten()
+    pub fn adc(&self) -> Option<AdcData> {
+        Some(self.filtered.clone())
     }
 }
