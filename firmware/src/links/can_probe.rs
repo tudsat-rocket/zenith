@@ -41,35 +41,42 @@ pub fn start(
 
 #[embassy_executor::task]
 async fn run_downlink(mut can_rx: CanRxSubscriber, eth_tx: EthTxPublisher) -> ! {
-    while !CAN_PROBE_ENABLED.wait().await {}
-
-    defmt::debug!("can probe enabled");
-
     loop {
-        match select(CAN_PROBE_ENABLED.wait(), can_rx.next_message_pure()).await {
-            Either::First(true) => {}
-            Either::First(false) => {
-                continue;
-            }
-            Either::Second(frame) => {
-                let id = match frame.id() {
-                    Id::Standard(sid) => sid.as_raw() as u32,
-                    Id::Extended(eid) => eid.as_raw(),
-                };
-                let mut buffer = [0x00; 8];
-                buffer.copy_from_slice(frame.data());
-                let _ = eth_tx
-                    .publish(Common::CanFrame(CanFrame {
-                        target_system: 0xff,    // TODO
-                        target_component: 0xff, // TODO
-                        bus: 1,
-                        id,
-                        len: frame.data().len() as u8,
-                        data: buffer,
-                    }))
-                    .await;
+        while !CAN_PROBE_ENABLED.wait().await {}
+
+        defmt::info!("can probe enabled");
+
+        loop {
+            match select(CAN_PROBE_ENABLED.wait(), can_rx.next_message_pure()).await {
+                Either::First(true) => {}
+                Either::First(false) => {
+                    break;
+                }
+                Either::Second(frame) => {
+                    let id = match frame.id() {
+                        Id::Standard(sid) => sid.as_raw() as u32,
+                        Id::Extended(eid) => eid.as_raw(),
+                    };
+                    let mut buffer = [0x00; 8];
+                    // copy data from frame data 'vec' into buffer
+                    for (i, byte) in frame.data().iter().enumerate().take(frame.data().len()) {
+                        buffer[i] = *byte
+                    }
+
+                    let _ = eth_tx
+                        .publish(Common::CanFrame(CanFrame {
+                            target_system: 0xff,    // TODO
+                            target_component: 0xff, // TODO
+                            bus: 1,
+                            id,
+                            len: frame.data().len() as u8,
+                            data: buffer,
+                        }))
+                        .await;
+                }
             }
         }
+        defmt::info!("can probe disabled");
     }
 }
 

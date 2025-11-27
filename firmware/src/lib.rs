@@ -1,39 +1,22 @@
 #![no_std]
 
-use core::borrow::Borrow;
-use core::cell::RefCell;
-use core::net::Ipv4Addr;
-use core::net::SocketAddr;
-use core::net::SocketAddrV4;
-
 use embassy_stm32::adc::AdcChannel;
 use embassy_stm32::adc::AnyAdcChannel;
 use embassy_stm32::timer::simple_pwm::PwmPinConfig;
-use embassy_stm32::usb::Driver;
-use embassy_sync::blocking_mutex;
-use embassy_usb::UsbDevice;
-use rand::RngCore;
 
-use embassy_executor::{InterruptExecutor, Spawner};
-use embassy_futures::join::join;
-use embassy_futures::select::Either;
-use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_sync::signal::Signal;
-use embassy_time::Timer;
-use embassy_time::{Delay, Duration, Instant, Ticker};
+use embassy_time::Delay;
 
+use embassy_stm32::Config;
 use embassy_stm32::adc::Adc;
 use embassy_stm32::bind_interrupts;
 use embassy_stm32::can::Can;
 use embassy_stm32::can::CanConfigurator;
 use embassy_stm32::eth::GenericPhy;
 use embassy_stm32::eth::{Ethernet, PacketQueue};
-use embassy_stm32::exti::Channel as _;
 use embassy_stm32::exti::ExtiInput;
-use embassy_stm32::gpio::{AnyPin, Input, Level, Output, OutputType, Pin, Pull, Speed};
-use embassy_stm32::interrupt::{InterruptExt, Priority};
+use embassy_stm32::gpio::{Level, Output, OutputType, Pull, Speed};
 use embassy_stm32::mode::Async;
 use embassy_stm32::peripherals::*;
 use embassy_stm32::rcc::*;
@@ -41,29 +24,14 @@ use embassy_stm32::rng::Rng;
 use embassy_stm32::spi::Spi;
 use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::Channel;
-use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm, SimplePwmChannel};
+use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
 use embassy_stm32::wdg::IndependentWatchdog;
-use embassy_stm32::{Config, interrupt};
 
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
-use embedded_io_async::Write;
-use embedded_nal_async::TcpConnect;
 
-use embedded_can::Id;
-use embedded_can::StandardId;
-
-use embassy_net::Ipv4Cidr;
-use embassy_net::StackResources;
-use embassy_net::tcp::client::TcpClient;
-use embassy_net::tcp::client::TcpClientState;
-
+use lora_phy::LoRa;
 use lora_phy::iv::GenericSx126xInterfaceVariant;
-use lora_phy::mod_params::Bandwidth;
-use lora_phy::mod_params::CodingRate;
-use lora_phy::mod_params::PacketStatus;
-use lora_phy::mod_params::SpreadingFactor;
 use lora_phy::sx126x::{self, Sx126x, Sx1262};
-use lora_phy::{LoRa, RxMode};
 
 use static_cell::StaticCell;
 
