@@ -965,6 +965,7 @@ dependencies = [
  "siphasher",
  "state_estimator",
  "static_cell",
+ "telemetry",
 ]
 
 [[package]]
@@ -2086,6 +2087,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6db9d948e03cf2d8b332431588f65b8ef1bc0572f1c30434f96dd62241ffd074"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "telemetry"
+version = "0.1.0"
+dependencies = [
+ "half",
+ "rapid-dialect",
 ]
 
 [[package]]

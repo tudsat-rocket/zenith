@@ -110,8 +110,6 @@ impl EthernetHandle {
 }
 
 impl TelemetryLink for EthernetHandle {
-    const MAVLINK_SYSTEM_ID: u8 = ETHERNET_SYSTEM_ID;
-
     fn send_message(&mut self, message: Rapid) {
         let _ = self.tx.publish_immediate(message.into());
     }

@@ -112,8 +112,6 @@ impl UsbHandle {
 }
 
 impl TelemetryLink for UsbHandle {
-    const MAVLINK_SYSTEM_ID: u8 = USB_SYSTEM_ID;
-
     const SENSOR_INTERVAL_MS: u32 = 200;
 
     fn send_message(&mut self, message: Rapid) {

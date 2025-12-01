@@ -40,11 +40,8 @@ pub enum UplinkCommand {
 }
 
 trait TelemetryLink {
-    const MAVLINK_SYSTEM_ID: u8;
-
     const HEARTBEAT_INTERVAL_MS: u32 = 500;
     const SENSOR_INTERVAL_MS: u32 = 100;
-    // TODO
 
     // TODO: error type
     fn send_message(&mut self, message: Rapid);
