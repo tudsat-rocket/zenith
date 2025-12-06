@@ -41,22 +41,15 @@ use static_cell::StaticCell;
 pub mod links;
 pub mod vehicle;
 
-//use shared_types::FlightMode;
-//use shared_types::Settings;
-//
 //pub mod board;
 //pub mod buzzer;
 pub mod can;
 //pub mod drivers;
-//pub mod ethernet;
 //pub mod links;
-//pub mod lora;
 //pub mod recovery;
 //pub mod storage;
 //pub mod subsystems;
-//pub mod usb;
 //pub mod vehicle;
-
 pub mod sensors;
 
 use sensors::*;
