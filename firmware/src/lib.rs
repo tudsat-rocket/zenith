@@ -36,27 +36,20 @@ use lora_phy::LoRa;
 use lora_phy::iv::GenericSx126xInterfaceVariant;
 use lora_phy::sx126x::{self, Sx126x, Sx1262};
 
+use rand::prelude::*;
+use rand_chacha::ChaCha20Rng;
 use static_cell::StaticCell;
 
 pub mod links;
 pub mod vehicle;
-
-//pub mod board;
 //pub mod buzzer;
 pub mod can;
-//pub mod drivers;
-//pub mod links;
 //pub mod recovery;
 //pub mod storage;
 //pub mod subsystems;
-//pub mod vehicle;
 pub mod sensors;
 
 use sensors::*;
-
-//use board::load_outputs::LoadOutputs;
-//use drivers::sensors::*;
-//use storage::{Flash, FlashHandle, FlashType};
 
 bind_interrupts!(struct Irqs {
     FDCAN1_IT0 => embassy_stm32::can::IT0InterruptHandler<FDCAN1>;
@@ -135,10 +128,6 @@ static SPI2_SHARED: StaticCell<Mutex<CriticalSectionRawMutex, Spi<Async>>> = Sta
 static SPI3_SHARED: StaticCell<Mutex<CriticalSectionRawMutex, Spi<Async>>> = StaticCell::new();
 static SPI4_SHARED: StaticCell<Mutex<CriticalSectionRawMutex, Spi<Async>>> = StaticCell::new();
 
-//static LOAD_OUTPUTS: StaticCell<
-//    embassy_sync::blocking_mutex::Mutex<CriticalSectionRawMutex, LoadOutputs>,
-//> = StaticCell::new();
-
 pub async fn init_board() -> Board {
     // Basic setup, including clocks
     // Divider values taken from STM32CubeMx
@@ -187,8 +176,6 @@ pub async fn init_board() -> Board {
 
     let p = embassy_stm32::init(config);
 
-    // let (usb, usb_flash) = UsbHandle::init(p.USB_OTG_FS, p.PA12, p.PA11).await;
-
     let mut spi1_config = embassy_stm32::spi::Config::default();
     spi1_config.frequency = Hertz::mhz(10);
     let spi1 = Spi::new(
@@ -226,8 +213,6 @@ pub async fn init_board() -> Board {
     let spi2_cs_imu3 = Output::new(p.PC13, Level::High, Speed::VeryHigh);
     let spi2_cs_baro2 = Output::new(p.PE4, Level::High, Speed::VeryHigh);
     let spi2_cs_baro3 = Output::new(p.PE3, Level::High, Speed::VeryHigh);
-
-    //let spi1_cs_radio = Output::new(p.PA1, Level::High, Speed::VeryHigh);
 
     let imu1 = LSM6::init(SpiDevice::new(spi1, spi1_cs_imu1))
         .await
@@ -281,7 +266,7 @@ pub async fn init_board() -> Board {
     let lora1_config = sx126x::Config {
         chip: Sx1262,
         tcxo_ctrl: None,
-        rx_boost: true,
+        rx_boost: false,
         use_dcdc: false,
     };
     let lora1_spi = SpiDevice::new(spi4, lora1_cs);
@@ -294,7 +279,7 @@ pub async fn init_board() -> Board {
     let lora2_config = sx126x::Config {
         chip: Sx1262,
         tcxo_ctrl: None,
-        rx_boost: true,
+        rx_boost: false,
         use_dcdc: false,
     };
     let lora2_spi = SpiDevice::new(spi4, lora2_cs);
@@ -313,12 +298,14 @@ pub async fn init_board() -> Board {
     let can1 = can1.into_normal_mode();
     let can2 = can2.into_normal_mode();
 
-    let mut rng = Rng::new(p.RNG, Irqs);
-    let mut seed = [0; 8];
-    rng.fill_bytes(&mut seed);
-    let seed = u64::from_le_bytes(seed);
-
-    let mac_addr = [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF];
+    // We use 64 bits of the the STM32's 96-bit UID to seed a PRNG, which we then use to generate
+    // a deterministic MAC address for this device.
+    let uid = embassy_stm32::uid::uid();
+    let uid_seed: u64 = u64::from_be_bytes(uid[0..8].try_into().unwrap());
+    let mut rng = ChaCha20Rng::seed_from_u64(uid_seed);
+    let mut mac_addr = [0x00; 6];
+    rng.fill_bytes(&mut mac_addr);
+    mac_addr[0] = 0x02;
 
     static PACKETS: StaticCell<PacketQueue<4, 4>> = StaticCell::new();
     let ethernet = Ethernet::new(
@@ -337,6 +324,11 @@ pub async fn init_board() -> Board {
         GenericPhy::new(0),
         mac_addr,
     );
+
+    let mut rng = Rng::new(p.RNG, Irqs);
+    let mut seed = [0; 8];
+    rng.fill_bytes(&mut seed);
+    let seed = u64::from_le_bytes(seed);
 
     let led_red = Output::new(p.PA8, Level::Low, Speed::Low);
     let led_yellow = Output::new(p.PA10, Level::Low, Speed::Low);
@@ -359,28 +351,8 @@ pub async fn init_board() -> Board {
         USB_EP_OUT_BUFFER.init([0; 256]),
         config,
     );
-    //
-    // let mut config = embassy_usb::Config::new(0x0483, 0x5740);
-    // config.manufacturer = Some("TUDSaT");
-    // config.product = Some("Sting FC"); // TODO
-    // config.serial_number = Some("12345678"); // TODO
-    // config.device_class = 0xEF;
-    // config.device_sub_class = 0x02;
-    // config.device_protocol = 0x01;
-    // config.composite_with_iads = true;
-    //
-    // let mut builder = embassy_usb::Builder::new(
-    //     driver,
-    //     config,
-    //     USB_CONFIG_DESCRIPTOR_BUFFER.init([0; 256]),
-    //     USB_BOS_DESCRIPTOR_BUFFER.init([0; 256]),
-    //     USB_MSOS_DESCRIPTOR_BUFFER.init([0; 256]),
-    //     USB_CONTROL_BUFFER.init([0; 128]),
-    // );
-    // let usb = builder.build();
-    // let usb_class = CdcAcmClass::new(&mut builder, CDC_ACM_STATE.init(State::new()), 64);
 
-    //// SPI 3
+    // SPI 3
     let mut spi3_config = embassy_stm32::spi::Config::default();
     spi3_config.frequency = Hertz::mhz(20);
     let spi3 = Spi::new(

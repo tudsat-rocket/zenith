@@ -1,3 +1,4 @@
+use embassy_sync::watch::Watch;
 use heapless::Vec;
 use rapid_dialect::Rapid;
 use static_cell::StaticCell;
@@ -24,13 +25,19 @@ use crate::links::interfaces::{
     InterfaceCommandSubscriber, InterfaceCommands, InterfaceRx, InterfaceRxPublisher,
     InterfaceRxSubscriber, InterfaceTx, InterfaceTxPublisher, InterfaceTxSubscriber,
 };
+use crate::links::protocols::link_quality::LinkQuality;
 use crate::links::{TelemetryLink, UplinkCommand, protocols};
 
+#[cfg(not(feature = "gcs"))]
 pub const USB_SYSTEM_ID: u8 = 0x05;
+#[cfg(feature = "gcs")]
+pub const USB_SYSTEM_ID: u8 = 0x07;
 
 pub static DOWNLINK: StaticCell<InterfaceTx> = StaticCell::new();
 pub static UPLINK: StaticCell<InterfaceRx> = StaticCell::new();
 pub static COMMANDS: StaticCell<InterfaceCommands> = StaticCell::new();
+
+static LINK_QUALITY: Watch<CriticalSectionRawMutex, LinkQuality, 3> = Watch::new();
 
 static EP_OUT_BUFFER: StaticCell<[u8; 256]> = StaticCell::new();
 static CONFIG_DESCRIPTOR_BUFFER: StaticCell<[u8; 256]> = StaticCell::new();
@@ -94,6 +101,14 @@ impl UsbHandle {
                 tx.publisher().unwrap(),
                 rx.subscriber().unwrap(),
                 commands.publisher().unwrap(),
+                LINK_QUALITY.sender(),
+            ))
+            .unwrap();
+
+        spawner
+            .spawn(protocols::link_quality::run(
+                tx.publisher().unwrap(),
+                LINK_QUALITY.receiver().unwrap(),
             ))
             .unwrap();
 
@@ -108,6 +123,11 @@ impl UsbHandle {
             tx: tx.publisher().unwrap(),
             cmd_rx: commands.subscriber().unwrap(),
         }
+    }
+
+    pub fn split(self) -> (InterfaceTxPublisher, InterfaceCommandSubscriber) {
+        let Self { tx, cmd_rx } = self;
+        (tx, cmd_rx)
     }
 }
 
@@ -181,6 +201,8 @@ async fn run_downlink(
                 Rapid::ScaledPressure2(m) => endpoint.next_frame(&m).unwrap(),
                 Rapid::ScaledPressure3(m) => endpoint.next_frame(&m).unwrap(),
                 Rapid::BatteryStatus(m) => endpoint.next_frame(&m).unwrap(),
+                Rapid::RadioStatus(m) => endpoint.next_frame(&m).unwrap(),
+                Rapid::LinkNodeStatus(m) => endpoint.next_frame(&m).unwrap(),
                 _ => continue,
             };
 

@@ -9,8 +9,17 @@ name = "rocket"
 path = "src/bin/rocket.rs"
 
 [[bin]]
+name = "gcs"
+path = "src/bin/gcs.rs"
+required-features = ["gcs"]
+
+[[bin]]
 name = "selftest"
 path = "src/bin/selftest.rs"
+
+[features]
+default = []
+gcs = []
 
 [dependencies]
 state_estimator = { workspace = true }

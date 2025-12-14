@@ -1,14 +1,16 @@
 use core::f32::consts::PI;
 use core::u16;
 
-use embassy_executor::Spawner;
+use embassy_executor::{SendSpawner, Spawner};
 use embassy_stm32::eth::{Ethernet, GenericPhy};
 use embassy_stm32::peripherals::*;
 use embassy_stm32::usb::Driver;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Sender};
 use embassy_sync::pubsub::PubSubChannel;
+use embassy_time::Delay;
 
+use lora_phy::LoRa;
 use mavio::prelude::V2;
 use mavio::{Frame, Message};
 use nalgebra::{Quaternion, Unit};
@@ -23,21 +25,18 @@ use rapid_dialect::rapid::messages::{
 };
 use rapid_dialect::{FlightMode, Rapid};
 
+use crate::LoraTransceiver;
 use crate::can::{CanRxSubscriber, CanTxPublisher};
 use crate::links::interfaces::ethernet::EthernetHandle;
+use crate::links::interfaces::lora::LoraHandle;
 use crate::links::interfaces::usb::UsbHandle;
 use crate::vehicle::Vehicle;
 
-mod interfaces;
+pub mod interfaces;
 mod protocols;
 mod vehicle;
 
-#[derive(Clone, PartialEq, Eq)]
-pub enum UplinkCommand {
-    SetFlightMode(FlightMode),
-    RequestAvailableModes(usize),
-    RequestCanForwarding,
-}
+pub use telemetry::UplinkCommand;
 
 trait TelemetryLink {
     const HEARTBEAT_INTERVAL_MS: u32 = 500;
@@ -82,6 +81,7 @@ trait TelemetryLink {
 }
 
 pub struct Links {
+    lora: LoraHandle,
     ethernet: EthernetHandle,
     usb: UsbHandle,
 }
@@ -91,29 +91,43 @@ impl Links {
         ethernet: Ethernet<'static, ETH, GenericPhy>,
         seed: u64,
         usb: Driver<'static, USB_OTG_FS>,
+        lora1: LoRa<LoraTransceiver, Delay>,
+        lora2: LoRa<LoraTransceiver, Delay>,
         can: (CanTxPublisher, CanRxSubscriber),
-        spawner: Spawner,
+        medium_priority_spawner: SendSpawner,
+        low_priority_spawner: Spawner,
     ) -> Self {
-        let ethernet = EthernetHandle::init(ethernet, seed, can, spawner);
-        let usb = UsbHandle::init(usb, spawner);
+        let lora = LoraHandle::init(lora1, lora2, medium_priority_spawner);
+        let ethernet = EthernetHandle::init(ethernet, seed, can, low_priority_spawner);
+        let usb = UsbHandle::init(usb, low_priority_spawner);
 
-        Self { ethernet, usb }
+        Self {
+            lora,
+            ethernet,
+            usb,
+        }
     }
 
     pub fn send_telemetry_message<M: Message + Into<Rapid>>(&mut self, vehicle: &Vehicle)
     where
         for<'a> &'a Vehicle: Into<M>,
     {
+        self.lora.send_telemetry_message(vehicle);
         self.ethernet.send_telemetry_message(vehicle);
         self.usb.send_telemetry_message(vehicle);
     }
 
     pub fn send_telemetry_messages(&mut self, vehicle: &Vehicle) {
+        self.lora.send_telemetry_messages(vehicle);
         self.ethernet.send_telemetry_messages(vehicle);
         self.usb.send_telemetry_messages(vehicle);
     }
 
     pub fn try_recv_command(&mut self) -> Option<UplinkCommand> {
+        if let Some(cmd) = self.lora.try_recv_command() {
+            return Some(cmd);
+        }
+
         if let Some(cmd) = self.ethernet.try_recv_command() {
             return Some(cmd);
         }

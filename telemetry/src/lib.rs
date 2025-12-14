@@ -117,7 +117,7 @@
 //!   OO  Flight Computer 1    XX  Flight Computer 2
 //!
 //!   863                                                                   870 MHz
-//!
+//!            u             u               u                       u
 //!    |  1 |  2 |  3 |  4 |  5 |  6 |  7 |  8 |  9 | 10 | 11 | 12 | 13 | 14 |
 //!    +----+----+----+----+----+----+----+----+----+----+----+----+----+----+
 //!  t | OO |    |    |    |    |    |    |    |    |    | XX |    |    |    | ^
@@ -154,30 +154,29 @@
 //!
 //!
 //!   - time: time since boot and/or message counter, depending on your point of view.
-//!
-//!       Time is encoded as 11bits of time in 16*ms (time_in_ms >> 4). Since we assume our message
-//!       interval to be a multiple of 16ms (see below), so we can recover full time in ms by
-//!       assuming 4 bits of zeros, and the value should cleanly overflow every 32.8 seconds.
+//!     Time is encoded as 11bits of time in 16*ms (time_in_ms >> 4). Since we assume our message
+//!     interval to be a multiple of 16ms (see below), so we can recover full time in ms by
+//!     assuming 4 bits of zeros, and the value should cleanly overflow every 32.8 seconds.
 //!
 //!   - message identifier: allows identifying the content of the message payload.
+//!     Since we have just 5 bits for this, we are limited to just 32 possible downlink messages.
+//!     However, we have some options:
+//!       - These telemetry messages are short-lived, since on reception they are turned into
+//!         actual MAVLink messages. This means we can change these IDs fairly flexibly compared
+//!         to MAVLink messages that may be stored in some telemetry log and will have to be
+//!         parsable long into the future
 //!
-//!       Since we have just 5 bits for this, we are limited to just 32 possible downlink messages.
-//!       However, we have some options:
-//!           - These telemetry messages are short-lived, since on reception they are turned into
-//!               actual MAVLink messages. This means we can change these IDs fairly flexibly compared
-//!               to MAVLink messages that may be stored in some telemetry log and will have to be
-//!               parsable long into the future
-//!           - Similar to actual MAVLink and dialects, different vehicles could use different sets
-//!               of message IDs, as long as all vehicles transmit the heartbeat message,
-//!               which allows identifying the profile of vehicle. This is not something we do at the
-//!               moment.
+//!       - Similar to actual MAVLink and dialects, different vehicles could use different sets
+//!         of message IDs, as long as all vehicles transmit the heartbeat message,
+//!         which allows identifying the profile of vehicle. This is not something we do at the
+//!         moment.
 //!
 //!   - payload: 14 bytes of actual payload, depending on the message identifier.
 //!
 //!   - HMAC: 16 bits of HMAC calculated over the other 14 bytes using a key known by both the
-//!       vehicle and the receiver. This provides some integrity and authenticity protection, and it
-//!       also allows us to differentiate between multiple transmitters in the same band. If
-//!       different keys are used, the HMAC will only match with one of them.
+//!     vehicle and the receiver. This provides some integrity and authenticity protection, and it
+//!     also allows us to differentiate between multiple transmitters in the same band. If
+//!     different keys are used, the HMAC will only match with one of them.
 //!
 //! ## The Heartbeat
 //!
@@ -216,6 +215,9 @@
 //! TODO
 
 #![no_std]
+#![allow(async_fn_in_trait)]
+
+use rapid_dialect::FlightMode;
 
 /// Interval between messages in ms.
 ///
@@ -232,10 +234,27 @@
 ///   | 256      |     3.91 Hz |                     62.5 B/s |              4.6% |
 ///
 /// This ensures that our message sequence aligns to the overflows of our time value.
-pub const DOWNLINK_MESSAGE_INTERVAL_MS: u16 = 32;
+pub const DOWNLINK_MESSAGE_INTERVAL_MS: u32 = 32;
+pub const UPLINK_HOP_INTERVAL_MS: u32 = 128;
 
-pub const UPLINK_HOP_INTERVAL_MS: u16 = 128;
+#[derive(Debug, thiserror::Error)]
+pub enum TelemetryError {
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] postcard::Error),
+    #[error("Unknown message id: {0}")]
+    UnknownMessageId(u8),
+    #[error("HMAC Mismatch")]
+    HmacMismatch,
+}
 
 pub mod config;
-pub mod downlink;
-pub mod uplink;
+pub mod messages;
+pub mod trx;
+
+// TODO: split or move somewhere else?
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UplinkCommand {
+    SetFlightMode(FlightMode),
+    RequestAvailableModes(usize),
+    RequestCanForwarding,
+}
