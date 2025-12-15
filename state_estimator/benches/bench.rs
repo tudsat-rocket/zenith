@@ -1,6 +1,6 @@
 use std::num::Wrapping;
 
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use nalgebra::Vector3;
 use shared_types::{FlightMode, Settings};
@@ -21,18 +21,31 @@ fn mocked_sensor_values() -> (Vector3<f32>, Vector3<f32>, Vector3<f32>, Vector3<
 fn update(c: &mut Criterion) {
     let mut group = c.benchmark_group("update");
     for mode in [Armed, Burn, Coast, RecoveryDrogue, RecoveryMain] {
-        group.bench_with_input(BenchmarkId::from_parameter(format!("{:?}", mode)), &mode, |b, mode| {
-            let mut state_estimator = StateEstimator::new(1000.0, Settings::default());
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("{:?}", mode)),
+            &mode,
+            |b, mode| {
+                let mut state_estimator = StateEstimator::new(1000.0, Settings::default());
 
-            let t: u32 = 0;
-            b.iter_batched(
-                || mocked_sensor_values(),
-                |(g, a1, a2, m, b)| {
-                    state_estimator.update(Wrapping(t), *mode, Some(g), Some(a1), Some(a2), Some(m), Some(b), None)
-                },
-                BatchSize::PerIteration,
-            );
-        });
+                let t: u32 = 0;
+                b.iter_batched(
+                    || mocked_sensor_values(),
+                    |(g, a1, a2, m, b)| {
+                        state_estimator.update(
+                            Wrapping(t),
+                            *mode,
+                            Some(g),
+                            Some(a1),
+                            Some(a2),
+                            Some(m),
+                            Some(b),
+                            None,
+                        )
+                    },
+                    BatchSize::PerIteration,
+                );
+            },
+        );
     }
 }
 
