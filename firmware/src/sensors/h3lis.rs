@@ -26,9 +26,13 @@ impl<SPI: SpiDevice<u8>> H3LIS331DL<SPI> {
         }
 
         // set normal mode, high ODR, all axes enabled
-        h3lis.write_u8(H3LIS331DLRegister::CtrlReg1, 0b0011_1111).await?;
+        h3lis
+            .write_u8(H3LIS331DLRegister::CtrlReg1, 0b0011_1111)
+            .await?;
         // set BDU, set +/- 200G scale
-        h3lis.write_u8(H3LIS331DLRegister::CtrlReg4, 0b0001_0000).await?;
+        h3lis
+            .write_u8(H3LIS331DLRegister::CtrlReg4, 0b0001_0000)
+            .await?;
 
         if whoami != 0x32 {
             error!("Failed to initialize H3LIS331DL (0x{:02x} != 0x32)", whoami);
@@ -61,7 +65,8 @@ impl<SPI: SpiDevice<u8>> H3LIS331DL<SPI> {
         let acc_y = i16::from_le_bytes([buffer[3], buffer[4]]);
         let acc_z = i16::from_le_bytes([buffer[5], buffer[6]]);
 
-        let acc: Vector3<f32> = Vector3::new(acc_x.saturating_neg() as f32, acc_z as f32, acc_y as f32);
+        let acc: Vector3<f32> =
+            Vector3::new(acc_x.saturating_neg() as f32, acc_z as f32, acc_y as f32);
         self.acc = Some(acc * 200.0 / 32768.0 * G_TO_MS2);
 
         Ok(())
