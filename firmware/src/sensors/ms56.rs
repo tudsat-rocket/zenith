@@ -65,7 +65,7 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
             temp: None,
             raw_pressure: None,
             pressure: None,
-            baro_filter: BaroFilter::new(),
+            baro_filter: BaroFilter::default(),
         };
 
         'outer: for _i in 0..3 {
@@ -79,7 +79,7 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
                 if baro
                     .calibration_data
                     .as_ref()
-                    .map(|d| d.valid())
+                    .map(MS56CalibrationData::valid)
                     .unwrap_or(false)
                 {
                     break 'outer;
@@ -90,7 +90,7 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
         if baro
             .calibration_data
             .as_ref()
-            .map(|d| d.valid())
+            .map(MS56CalibrationData::valid)
             .unwrap_or(false)
         {
             info!("MS56xx initialized");
@@ -109,9 +109,9 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
         let mut payload = [0x00; 32];
         payload[0] = command.into();
         self.spi
-            .transfer_in_place(&mut payload[..1 + response_len])
+            .transfer_in_place(&mut payload[..=response_len])
             .await?;
-        Ok(Vec::from_slice(&payload[1..1 + response_len]).unwrap_or_default())
+        Ok(Vec::from_slice(&payload[1..=response_len]).unwrap_or_default())
     }
 
     async fn reset(&mut self) -> Result<(), SPI::Error> {
@@ -242,7 +242,7 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
 
     pub fn altitude(&self) -> Option<f32> {
         self.pressure()
-            .map(|p| 44330.769 * (1.0 - (p / 1012.5).powf(0.190223)))
+            .map(|p| 44_330.77 * (1.0 - (p / 1012.5).powf(0.190_223)))
     }
 }
 
@@ -256,14 +256,14 @@ enum MS56Command {
     ReadProm(u8),
 }
 
-impl Into<u8> for MS56Command {
-    fn into(self: Self) -> u8 {
-        match self {
-            Self::Reset => 0x1e,
-            Self::StartPressureConversion(osr) => 0x40 + ((osr as u8) << 1),
-            Self::StartTempConversion(osr) => 0x50 + ((osr as u8) << 1),
-            Self::ReadAdc => 0x00,
-            Self::ReadProm(adr) => 0xa0 + (adr << 1),
+impl From<MS56Command> for u8 {
+    fn from(cmd: MS56Command) -> u8 {
+        match cmd {
+            MS56Command::Reset => 0x1e,
+            MS56Command::StartPressureConversion(osr) => 0x40 + ((osr as u8) << 1),
+            MS56Command::StartTempConversion(osr) => 0x50 + ((osr as u8) << 1),
+            MS56Command::ReadAdc => 0x00,
+            MS56Command::ReadProm(adr) => 0xa0 + (adr << 1),
         }
     }
 }
@@ -278,22 +278,16 @@ enum MS56OSR {
     OSR4096 = 0b100,
 }
 
+#[derive(Default)]
 pub struct BaroFilter {
     previous_raw_values: Deque<i32, BARO_MEDIAN_FILTER_LENGTH>,
     last_spike_warning_counter: u32,
 }
 
 impl BaroFilter {
-    pub fn new() -> Self {
-        Self {
-            previous_raw_values: Deque::new(),
-            last_spike_warning_counter: 0,
-        }
-    }
-
     //median filter
     pub fn filter(&mut self, input_value: i32) -> i32 {
-        const SPIKE_WARNING_THRESHOLD: i32 = 8000000;
+        const SPIKE_WARNING_THRESHOLD: i32 = 8_000_000;
 
         while self.previous_raw_values.len() > (BARO_MEDIAN_FILTER_LENGTH - 1) {
             let _ = self.previous_raw_values.pop_front();

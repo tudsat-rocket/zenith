@@ -15,7 +15,7 @@ impl<SPI: SpiDevice<u8>> LIS3MDL<SPI> {
     pub async fn init(spi: SPI) -> Result<Self, SPI::Error> {
         let mut lis3 = Self {
             spi,
-            scale: LIS3MDLFullScale::Max16Gauss,
+            scale: LIS3MDLFullScale::Max16G,
             mag: None,
             offset: Vector3::default(),
         };
@@ -23,11 +23,14 @@ impl<SPI: SpiDevice<u8>> LIS3MDL<SPI> {
         let whoami = lis3.read_u8(LIS3MDLRegister::WhoAmI).await?;
 
         // Enable temperature sensor and fast output data rate
-        lis3.write_u8(LIS3MDLRegister::CtrlReg1, 0b1000_0010).await?;
+        lis3.write_u8(LIS3MDLRegister::CtrlReg1, 0b1000_0010)
+            .await?;
         // Set full scale
-        lis3.write_u8(LIS3MDLRegister::CtrlReg2, (lis3.scale as u8) << 5).await?;
+        lis3.write_u8(LIS3MDLRegister::CtrlReg2, (lis3.scale as u8) << 5)
+            .await?;
         // Enable continuous-conversion mode
-        lis3.write_u8(LIS3MDLRegister::CtrlReg3, 0b0000_0000).await?;
+        lis3.write_u8(LIS3MDLRegister::CtrlReg3, 0b0000_0000)
+            .await?;
 
         if whoami != 0x3d {
             error!("Failed to initialize LIS3MDL (0x{:02x} != 0x3d)", whoami);
@@ -63,10 +66,10 @@ impl<SPI: SpiDevice<u8>> LIS3MDL<SPI> {
 
         // convert to gauss using LSB/gauss values from datasheet, then to uT
         let lsb_to_gauss = match self.scale {
-            LIS3MDLFullScale::Max4Gauss => 6842.0,
-            LIS3MDLFullScale::Max8Gauss => 3421.0,
-            LIS3MDLFullScale::Max12Gauss => 2281.0,
-            LIS3MDLFullScale::Max16Gauss => 1711.0,
+            LIS3MDLFullScale::Max4G => 6842.0,
+            LIS3MDLFullScale::Max8G => 3421.0,
+            LIS3MDLFullScale::Max12G => 2281.0,
+            LIS3MDLFullScale::Max16G => 1711.0,
         };
 
         let mag_x = (mag_x as f32) / lsb_to_gauss * 100.0;
@@ -120,8 +123,8 @@ enum LIS3MDLRegister {
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 enum LIS3MDLFullScale {
-    Max4Gauss = 0b00,
-    Max8Gauss = 0b01,
-    Max12Gauss = 0b10,
-    Max16Gauss = 0b11,
+    Max4G = 0b00,
+    Max8G = 0b01,
+    Max12G = 0b10,
+    Max16G = 0b11,
 }

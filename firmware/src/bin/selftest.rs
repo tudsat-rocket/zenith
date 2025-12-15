@@ -9,6 +9,7 @@ use core::net::SocketAddr;
 use core::net::SocketAddrV4;
 
 use defmt::*;
+use embassy_net::DhcpConfig;
 use rand::RngCore;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -117,7 +118,7 @@ async fn run_lora_loopback_test(
         &mdltn_params,
         &mut tx_pkt_params,
         LORA_TEST_TX_POWER.into(),
-        &TEST_PACKET,
+        TEST_PACKET,
     )
     .await
     .unwrap();
@@ -231,7 +232,7 @@ async fn main(spawner: Spawner) {
 
     // Init network stack
     static ETH_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
-    let config = embassy_net::Config::dhcpv4(Default::default());
+    let config = embassy_net::Config::dhcpv4(DhcpConfig::default());
     let (stack, runner) = embassy_net::new(
         board.ethernet,
         config,
@@ -316,7 +317,7 @@ async fn main(spawner: Spawner) {
 
     let result = with_timeout(Duration::from_secs(1), stack.wait_config_up()).await;
     match (result, stack.config_v4()) {
-        (Ok(_), Some(config)) => info!("[SUCCESS] Ethernet ({})", config.address),
+        (Ok(()), Some(config)) => info!("[SUCCESS] Ethernet ({})", config.address),
         _ => error!("[FAILED]  Ethernet"),
     }
 
@@ -329,7 +330,7 @@ async fn main(spawner: Spawner) {
         );
     } else {
         error!("[FAILED]  LoRa 1 -> LoRa 2: FAILED");
-    };
+    }
 
     Timer::after(Duration::from_millis(200)).await;
 
@@ -342,7 +343,7 @@ async fn main(spawner: Spawner) {
         );
     } else {
         error!("[FAILED]  LoRa 2 -> LoRa 1");
-    };
+    }
 
     if run_can_loopback_test(&mut board.can1, &mut board.can2).await {
         info!("[SUCCESS] CAN 1 -> CAN 2 (1Mbps)");

@@ -1,6 +1,6 @@
 // https://www.lcsc.com/datasheet/lcsc_datasheet_2407240928_Bosch-Sensortec-BMP580_C22391138.pdf
 
-use embassy_time::{Timer, Duration};
+use embassy_time::{Duration, Timer};
 use embedded_hal_async::spi::SpiDevice;
 
 use num_traits::float::Float;
@@ -25,7 +25,7 @@ impl<SPI: SpiDevice<u8>> BMP580<SPI> {
         for _i in 0..10 {
             whoami = baro.read_u8(BMP580Register::WhoAmI).await?;
             if whoami == 0x50 {
-                break
+                break;
             }
 
             Timer::after(Duration::from_micros(100)).await;
@@ -55,8 +55,10 @@ impl<SPI: SpiDevice<u8>> BMP580<SPI> {
     }
 
     async fn configure(&mut self) -> Result<(), SPI::Error> {
-        self.write_u8(BMP580Register::OsrConfig, 0b01000000).await?;
-        self.write_u8(BMP580Register::OdrConfig, 0b00000001).await?;
+        self.write_u8(BMP580Register::OsrConfig, 0b0100_0000)
+            .await?;
+        self.write_u8(BMP580Register::OdrConfig, 0b0000_0001)
+            .await?;
         //self.write_u8(BMP580Register::CtrlReg2, 0b00010000).await?;
         Ok(())
     }
@@ -69,7 +71,8 @@ impl<SPI: SpiDevice<u8>> BMP580<SPI> {
 
         let press = ((payload[6] as u32) << 16) + ((payload[5] as u32) << 8) + (payload[4] as u32);
         // using i32 because of 2s complement, divided by 2^8 later
-        let temp = ((payload[3] as i32) << 24) + ((payload[2] as i32) << 16) + ((payload[1] as i32) << 8);
+        let temp =
+            ((payload[3] as i32) << 24) + ((payload[2] as i32) << 16) + ((payload[1] as i32) << 8);
 
         self.pressure = Some(press as f32 / 6400.0);
         self.temperature = Some(temp as f32 / 2.0.powi(24));
@@ -94,7 +97,7 @@ impl<SPI: SpiDevice<u8>> BMP580<SPI> {
 
     pub fn altitude(&self) -> Option<f32> {
         self.pressure()
-            .map(|p| 44330.769 * (1.0 - (p / 1012.5).powf(0.190223)))
+            .map(|p| 44_330.77 * (1.0 - (p / 1012.5).powf(0.190_223)))
     }
 }
 

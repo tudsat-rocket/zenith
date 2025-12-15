@@ -15,21 +15,12 @@ use embassy_sync::{
     watch::Watch,
 };
 use embassy_sync::{channel::Channel, pubsub::PubSubChannel};
-use embassy_time::{Delay, Duration, Instant, Timer, with_timeout};
+use embassy_time::{Duration, Instant, Timer, with_timeout};
 
-use lora_phy::LoRa;
-
+use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG};
+use telemetry::messages::{DownlinkMessage, SetFlightModeMessage, UplinkMessage};
 use telemetry::trx::receiver::HoppingReceiver;
-use telemetry::{
-    config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG, FREQUENCIES, LinkConfig},
-    trx::transmitter::HoppingTransmitter,
-};
-use telemetry::{
-    messages::{
-        DownlinkMessage, SetFlightModeMessage, TelemetryMessage, UPLINK_PACKET_SIZE, UplinkMessage,
-    },
-    trx::receiver,
-};
+use telemetry::trx::transmitter::HoppingTransmitter;
 
 use firmware::links::UplinkCommand;
 use firmware::links::interfaces::InterfaceTxPublisher;
@@ -140,8 +131,8 @@ async fn run_uplink(
 #[embassy_executor::task]
 async fn split_downlink(
     rx: Receiver<'static, CriticalSectionRawMutex, Rapid, 5>,
-    mut eth_tx: InterfaceTxPublisher,
-    mut usb_tx: InterfaceTxPublisher,
+    eth_tx: InterfaceTxPublisher,
+    usb_tx: InterfaceTxPublisher,
     mut led_activity: Output<'static>,
 ) -> ! {
     led_activity.set_high();
@@ -177,8 +168,7 @@ async fn join_uplink(
         )
         .await
         {
-            Ok(Either::First(cmd)) => Some(cmd),
-            Ok(Either::Second(cmd)) => Some(cmd),
+            Ok(Either::First(cmd) | Either::Second(cmd)) => Some(cmd),
             Err(_timeout) => None,
         };
 

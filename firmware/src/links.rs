@@ -1,5 +1,4 @@
 use core::f32::consts::PI;
-use core::u16;
 
 use embassy_executor::{SendSpawner, Spawner};
 use embassy_stm32::eth::{Ethernet, GenericPhy};

@@ -48,7 +48,8 @@ impl<SPI: SpiDevice<u8>> LSM6<SPI> {
             info!("LSM6DSR initialized");
         }
 
-        imu.configure_gyroscope(LSM6GyroscopeMode::HighPerformance1660Hz, gyro_scale).await?;
+        imu.configure_gyroscope(LSM6GyroscopeMode::HighPerformance1660Hz, gyro_scale)
+            .await?;
 
         imu.configure_accelerometer(
             LSM6AccelerometerMode::HighPerformance1660Hz,
@@ -94,7 +95,7 @@ impl<SPI: SpiDevice<u8>> LSM6<SPI> {
         self.spi.transfer_in_place(&mut payload).await?;
 
         // TODO: do we need this temp?
-        let _temp = ((payload[2] as i16) << 8) + (payload[1] as i16);
+        // let temp = ((payload[2] as i16) << 8) + (payload[1] as i16);
         let gyro_x = ((payload[4] as i16) << 8) + (payload[3] as i16);
         let gyro_y = ((payload[6] as i16) << 8) + (payload[5] as i16);
         let gyro_z = ((payload[8] as i16) << 8) + (payload[7] as i16);
@@ -184,7 +185,7 @@ enum LSM6AccelerometerScale {
 }
 
 impl LSM6AccelerometerScale {
-    fn scale_raw_values(&self, raw: Vector3<i16>) -> Vector3<f32> {
+    fn scale_raw_values(self, raw: Vector3<i16>) -> Vector3<f32> {
         let factor = match self {
             Self::Max2G => (i16::MAX as f32) / (2.0 * G_TO_MS2),
             Self::Max4G => (i16::MAX as f32) / (4.0 * G_TO_MS2),
@@ -222,7 +223,7 @@ enum LSM6GyroscopeScale {
 }
 
 impl LSM6GyroscopeScale {
-    fn scale_raw_values(&self, raw: Vector3<i16>) -> Vector3<f32> {
+    fn scale_raw_values(self, raw: Vector3<i16>) -> Vector3<f32> {
         let factor = match self {
             Self::Max125Dps => (i16::MAX as f32) / 125.0,
             Self::Max250Dps => (i16::MAX as f32) / 250.0,

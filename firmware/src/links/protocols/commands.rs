@@ -29,6 +29,7 @@ use crate::links::interfaces::{
 use crate::links::protocols::link_quality::LinkQuality;
 
 #[embassy_executor::task(pool_size = 2)]
+#[allow(clippy::too_many_lines, reason = "TODO")]
 pub async fn run(
     system_id: u8,
     component_id: u8,
@@ -118,7 +119,7 @@ pub async fn run(
                 let _ = tx.publish(Rapid::CommandAck(ack)).await;
             }
             _ => {}
-        };
+        }
 
         while received_queue
             .front()
@@ -133,7 +134,7 @@ pub async fn run(
         // Messages might arrive out of order, so to track packet loss we attempt to reorder minor
         // shuffles, otherwise we end up with big bursts of 255 "lost" packets.
         let mut received_sorted: heapless::Vec<u8, 64> = heapless::Vec::new();
-        for (t, seq, _) in received_queue.iter() {
+        for (t, seq, _) in &received_queue {
             let mut i = received_sorted.len();
 
             // We look back into the past by at most 5 packets and insert the packet before any

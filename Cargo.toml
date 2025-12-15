@@ -42,3 +42,64 @@ rapid-dialect = { git = "https://github.com/tudsat-rocket/rapid-dialect" }
 
 [profile.release]
 debug = 2
+
+[workspace.lints.clippy]
+# Groups
+pedantic = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+
+# opt-outs for default group
+enum_variant_names = "allow" # we often have common unit suffixes for driver enums
+from_over_into = "allow" # TODO
+manual_is_multiple_of = "allow" # TODO
+redundant_pattern_matching = "allow" # we want to be able to do `let Err(_) = something`
+single_match = "allow"
+too_many_arguments = "allow" # TODO
+
+# opt-outs for pedantic group
+single_match_else = "allow" # match statements can be more explicit and easy to expand sometimes
+ignored_unit_patterns = "allow" # TODO
+wildcard_imports = "allow"
+unused_async = "allow"
+missing_panics_doc = "allow" # TODO
+must_use_candidate = "allow"
+if_not_else = "allow"
+missing_errors_doc = "allow"
+map_unwrap_or = "allow"
+doc_markdown = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_lossless = "allow"
+cast_sign_loss = "allow"
+
+# opt-ins for restrictions group, we should aspire to enable more of these
+# allow_attributes_without_reason = "warn"
+# arithmetic_side_effects = "warn"
+# as_conversions = "warn"
+assertions_on_result_states = "warn"
+clone_on_ref_ptr = "warn"
+# else_if_without_else = "warn"
+expect_used = "warn"
+# indexing_slicing = "warn"
+# integer_division_remainder_used = "warn"
+# let_underscore_must_use = "warn"
+map_err_ignore = "warn"
+mem_forget = "warn"
+panic = "warn"
+redundant_type_annotations = "warn"
+same_name_method = "warn"
+# shadow_reuse = "warn"
+# shadow_same = "warn"
+# shadow_unrelated = "warn"
+todo = "warn"
+unimplemented = "warn"
+# unreachable = "warn"
+unused_result_ok = "warn"
+# unused_trait_names = "warn"
+unwrap_in_result = "warn"
+# unwrap_used = "warn"
+
+# opt-outs for cargo group
+multiple_crate_versions = "allow" # TODO
+cargo_common_metadata = "allow" # TODO

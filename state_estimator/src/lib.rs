@@ -1,6 +1,8 @@
 #![cfg_attr(target_os = "none", no_std)] // this is imported by the firmware, so no standard library
 
-use core::convert::Infallible;
+// TODO: until we clean/split this up.
+#![allow(dead_code)]
+
 #[cfg(target_os = "none")]
 use core::num::Wrapping;
 #[cfg(not(target_os = "none"))]
@@ -110,63 +112,59 @@ impl StateEstimator {
             initial_orientation,
         );
 
-        let mut kalman = KalmanFilter::default();
-
-        // State Vector
-        kalman.x = vector![
-            0.0, 0.0, 0.0, // XYZ position (m)
-            0.0, 0.0, 0.0, // XYZ velocity (m/s)
-            0.0, 0.0, 0.0 // XYZ acceleration (m/s^2)
-        ];
-
-        // State Transition Matrix
-        kalman.F = matrix![
-                1.0, 0.0, 0.0, dt, 0.0, 0.0, 0.5 * dt * dt, 0.0, 0.0;
-                0.0, 1.0, 0.0, 0.0, dt, 0.0, 0.0, 0.5 * dt * dt, 0.0;
-                0.0, 0.0, 1.0, 0.0, 0.0, dt, 0.0, 0.0, 0.5 * dt * dt;
-                0.0, 0.0, 0.0, 1.0, 0.0, 0.0, dt, 0.0, 0.0;
-                0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, dt, 0.0;
-                0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, dt;
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0;
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0;
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0;
-        ];
-
-        // Measurement Matrix
-        kalman.H = matrix![
-            0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0; // barometer measures Z pos
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0; // acceleration X
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0; // acceleration Y
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0; // acceleration Z
-            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0; // GPS X pos
-            0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0; // GPS Y pos
-        ];
-
-        // State Covariance Matrix (initialized to a high value)
-        kalman.P = Matrix::<f32, U9, U9, _>::identity() * 999.0;
-
-        // Process Covariance Matrix
-        kalman.Q = matrix![
-            0.25f32 * dt.powi(4), 0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, 0.5f32 * dt.powi(2), 0.0, 0.0;
-            0.0, 0.25f32 * dt.powi(4), 0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, 0.5f32 * dt.powi(2), 0.0;
-            0.0, 0.0, 0.25f32 * dt.powi(4), 0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, 0.5f32 * dt.powi(2);
-            0.5f32 * dt.powi(3), 0.0, 0.0, dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0;
-            0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, dt.powi(2), 0.0, 0.0, dt, 0.0;
-            0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, dt.powi(2), 0.0, 0.0, dt;
-            0.5f32 * dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0, 1.0, 0.0, 0.0;
-            0.0, 0.5f32 * dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0, 1.0, 0.0;
-            0.0, 0.0, 0.5f32 * dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0, 1.0;
-        ] * settings.std_dev_process.powi(2);
-
-        // Measurement Covariance Matrix
-        kalman.R = matrix!(
-            settings.std_dev_barometer.powi(2), 0.0, 0.0, 0.0, 0.0, 0.0;
-            0.0, settings.std_dev_accelerometer.powi(2), 0.0, 0.0, 0.0, 0.0;
-            0.0, 0.0, settings.std_dev_accelerometer.powi(2), 0.0, 0.0, 0.0;
-            0.0, 0.0, 0.0, settings.std_dev_accelerometer.powi(2), 0.0, 0.0;
-            0.0, 0.0, 0.0, 0.0, GPS_NO_FIX_STD_DEV.powi(2), 0.0;
-            0.0, 0.0, 0.0, 0.0, 0.0, GPS_NO_FIX_STD_DEV.powi(2);
-        );
+        let kalman = KalmanFilter {
+            // State Vector
+            x: vector![
+                0.0, 0.0, 0.0, // XYZ position (m)
+                0.0, 0.0, 0.0, // XYZ velocity (m/s)
+                0.0, 0.0, 0.0 // XYZ acceleration (m/s^2)
+            ],
+            // State Transition Matrix
+            F: matrix![
+                    1.0, 0.0, 0.0, dt, 0.0, 0.0, 0.5 * dt * dt, 0.0, 0.0;
+                    0.0, 1.0, 0.0, 0.0, dt, 0.0, 0.0, 0.5 * dt * dt, 0.0;
+                    0.0, 0.0, 1.0, 0.0, 0.0, dt, 0.0, 0.0, 0.5 * dt * dt;
+                    0.0, 0.0, 0.0, 1.0, 0.0, 0.0, dt, 0.0, 0.0;
+                    0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, dt, 0.0;
+                    0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, dt;
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0;
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0;
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0;
+            ],
+            // Measurement Matrix
+            H: matrix![
+                0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0; // barometer measures Z pos
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0; // acceleration X
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0; // acceleration Y
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0; // acceleration Z
+                1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0; // GPS X pos
+                0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0; // GPS Y pos
+            ],
+            // State Covariance Matrix (initialized to a high value)
+            P: Matrix::<f32, U9, U9, _>::identity() * 999.0,
+            // Process Covariance Matrix
+            Q: matrix![
+                0.25f32 * dt.powi(4), 0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, 0.5f32 * dt.powi(2), 0.0, 0.0;
+                0.0, 0.25f32 * dt.powi(4), 0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, 0.5f32 * dt.powi(2), 0.0;
+                0.0, 0.0, 0.25f32 * dt.powi(4), 0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, 0.5f32 * dt.powi(2);
+                0.5f32 * dt.powi(3), 0.0, 0.0, dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0;
+                0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, dt.powi(2), 0.0, 0.0, dt, 0.0;
+                0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, dt.powi(2), 0.0, 0.0, dt;
+                0.5f32 * dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0, 1.0, 0.0, 0.0;
+                0.0, 0.5f32 * dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0, 1.0, 0.0;
+                0.0, 0.0, 0.5f32 * dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0, 1.0;
+            ] * settings.std_dev_process.powi(2),
+            // Measurement Covariance Matrix
+            R: matrix!(
+                settings.std_dev_barometer.powi(2), 0.0, 0.0, 0.0, 0.0, 0.0;
+                0.0, settings.std_dev_accelerometer.powi(2), 0.0, 0.0, 0.0, 0.0;
+                0.0, 0.0, settings.std_dev_accelerometer.powi(2), 0.0, 0.0, 0.0;
+                0.0, 0.0, 0.0, settings.std_dev_accelerometer.powi(2), 0.0, 0.0;
+                0.0, 0.0, 0.0, 0.0, GPS_NO_FIX_STD_DEV.powi(2), 0.0;
+                0.0, 0.0, 0.0, 0.0, 0.0, GPS_NO_FIX_STD_DEV.powi(2);
+            ),
+            ..Default::default()
+        };
 
         Self {
             time: Wrapping(0),
@@ -192,7 +190,7 @@ impl StateEstimator {
         &mut self,
         altitude_baro: f32,
         accel: Vector3<f32>,
-        gps: Option<GpsDatum>,
+        gps: Option<&GpsDatum>,
     ) {
         // Update GPS measurement noise
         let std_dev = self.hdop_to_std_dev(gps.as_ref().map(|gps| gps.hdop));
@@ -289,9 +287,9 @@ impl StateEstimator {
             //if self.mode != FlightMode::Burn {
             self.orientation = self
                 .ahrs
-                .update(&(gyro * 3.14159 / 180.0), &acc, &mag)
+                .update(&(gyro * core::f32::consts::PI / 180.0), acc, &mag)
                 .ok()
-                .cloned();
+                .copied();
             //}
 
             // Rotate acceleration vector to get world-space acceleration
@@ -326,15 +324,15 @@ impl StateEstimator {
 
         match (accel, altitude_baro) {
             (Some(accel), Some(altitude_baro)) => {
-                self.apply_measurements(altitude_baro, accel, gps);
+                self.apply_measurements(altitude_baro, accel, gps.as_ref());
             }
             (Some(accel), None) => {
                 // Use predicted altitude values, basically attempting to do inertial navigation.
-                self.apply_measurements(self.altitude_asl(), accel, gps);
+                self.apply_measurements(self.altitude_asl(), accel, gps.as_ref());
             }
             (None, Some(altitude_baro)) => {
                 // Just assume acceleration is zero.
-                self.apply_measurements(altitude_baro, Vector3::new(0.0, 0.0, 0.0), gps);
+                self.apply_measurements(altitude_baro, Vector3::new(0.0, 0.0, 0.0), gps.as_ref());
             }
             (None, None) => {
                 // Do nothing, as long as this gap isn't too big and barometer values come back,
@@ -559,6 +557,7 @@ impl StateEstimator {
             .unwrap_or(false)
     }
 
+    #[allow(clippy::unused_self)]
     fn correct_orientation(&self, raw: &Vector3<f32>) -> Vector3<f32> {
         *raw
         // TODO
@@ -568,7 +567,8 @@ impl StateEstimator {
         //}
     }
 
-    fn gps_reliable(&self, datum: &GpsDatum) -> bool {
+    #[allow(clippy::unused_self)]
+    fn gps_reliable(&self, _datum: &GpsDatum) -> bool {
         // TODO
         false
         //self.mode != FlightMode::Burn
@@ -581,6 +581,7 @@ impl StateEstimator {
         //    && datum.altitude.is_some()
     }
 
+    #[allow(clippy::unused_self)]
     fn hdop_to_std_dev(&self, hdop: Option<u16>) -> f32 {
         hdop.map(|hdop| (hdop as f32 / 100.0) * 0.003)
             .unwrap_or(GPS_NO_FIX_STD_DEV)

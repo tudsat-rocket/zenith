@@ -4,8 +4,8 @@ use static_cell::StaticCell;
 
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
-use embassy_net::StackResources;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
+use embassy_net::{DhcpConfig, StackResources};
 use embassy_stm32::eth::Ethernet;
 use embassy_stm32::eth::GenericPhy;
 use embassy_stm32::peripherals::ETH;
@@ -46,6 +46,10 @@ pub struct EthernetHandle {
 }
 
 impl EthernetHandle {
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "at the moment we always pass the CAN stuff, even for the GCS where we don't need it."
+    )]
     pub fn init(
         device: Ethernet<'static, ETH, GenericPhy>,
         seed: u64,
@@ -59,7 +63,7 @@ impl EthernetHandle {
         let commands = COMMANDS.init(PubSubChannel::new());
 
         // TODO
-        let config = embassy_net::Config::dhcpv4(Default::default());
+        let config = embassy_net::Config::dhcpv4(DhcpConfig::default());
 
         let (stack, runner) =
             embassy_net::new(device, config, RESOURCES.init(StackResources::new()), seed);
@@ -132,7 +136,7 @@ impl EthernetHandle {
 
 impl TelemetryLink for EthernetHandle {
     fn send_message(&mut self, message: Rapid) {
-        let _ = self.tx.publish_immediate(message.into());
+        self.tx.publish_immediate(message);
     }
 
     fn try_recv_command(&mut self) -> Option<UplinkCommand> {
@@ -160,7 +164,7 @@ async fn run_socket(
     mut subscriber: InterfaceTxSubscriber,
     publisher: InterfaceRxPublisher,
 ) -> ! {
-    let remote_endpoint = (embassy_net::Ipv4Address::new(255, 255, 255, 255), 14550);
+    let remote_endpoint = (embassy_net::Ipv4Address::BROADCAST, 14550);
     socket.bind(14551).unwrap();
     socket.set_hop_limit(Some(4));
 

@@ -1,5 +1,4 @@
 use core::f32::consts::PI;
-use core::u16;
 
 use embassy_executor::Spawner;
 use embassy_stm32::eth::{Ethernet, GenericPhy};
@@ -64,10 +63,10 @@ impl Into<LocalPositionNed> for &Vehicle {
             time_boot_ms: self.time.0,
             x: self.state_estimator.position_local().x,
             y: self.state_estimator.position_local().y,
-            z: self.state_estimator.position_local().z * -1.0,
+            z: -self.state_estimator.position_local().z,
             vx: self.state_estimator.velocity().x,
             vy: self.state_estimator.velocity().y,
-            vz: self.state_estimator.velocity().z * -1.0,
+            vz: -self.state_estimator.velocity().z,
         }
     }
 }
@@ -184,7 +183,7 @@ impl Into<BatteryStatus> for &Vehicle {
             // TODO: proper units
             current_battery: (adc.as_ref().map(|d| d.fc_current).unwrap_or(0)) as i16,
             // TODO: remove/find somewhere else to put this
-            current_consumed: (adc.as_ref().map(|d| d.recovery_current).unwrap_or(0)) as i32,
+            current_consumed: (adc.as_ref().map(|d| d.recovery_current).unwrap_or(0)),
             // TODO: remove/find somewhere else to put this
             energy_consumed: (adc.as_ref().map(|d| d.recovery_voltage).unwrap_or(0)) as i32,
             battery_remaining: -1,

@@ -1,6 +1,6 @@
 // https://www.lcsc.com/datasheet/lcsc_datasheet_2209222100_STMicroelectronics-LPS22HHTR_C2827824.pdf
 
-use embassy_time::{Timer, Duration};
+use embassy_time::{Duration, Timer};
 use embedded_hal_async::spi::SpiDevice;
 
 use num_traits::float::Float;
@@ -25,7 +25,7 @@ impl<SPI: SpiDevice<u8>> LPS22<SPI> {
         for _i in 0..10 {
             whoami = baro.read_u8(LPS22Register::WhoAmI).await?;
             if whoami == 0xb3 {
-                break
+                break;
             }
 
             Timer::after(Duration::from_micros(100)).await;
@@ -55,8 +55,8 @@ impl<SPI: SpiDevice<u8>> LPS22<SPI> {
     }
 
     async fn configure(&mut self) -> Result<(), SPI::Error> {
-        self.write_u8(LPS22Register::CtrlReg1, 0b01110010).await?;
-        self.write_u8(LPS22Register::CtrlReg2, 0b00010000).await?;
+        self.write_u8(LPS22Register::CtrlReg1, 0b0111_0010).await?;
+        self.write_u8(LPS22Register::CtrlReg2, 0b0001_0000).await?;
         Ok(())
     }
 
@@ -92,11 +92,12 @@ impl<SPI: SpiDevice<u8>> LPS22<SPI> {
 
     pub fn altitude(&self) -> Option<f32> {
         self.pressure()
-            .map(|p| 44330.769 * (1.0 - (p / 1012.5).powf(0.190223)))
+            .map(|p| 44_330.77 * (1.0 - (p / 1012.5).powf(0.190_223)))
     }
 }
 
 #[derive(Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 enum LPS22Register {
     WhoAmI = 0x0f,
     CtrlReg1 = 0x10,
