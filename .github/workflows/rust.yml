@@ -1,0 +1,40 @@
+name: Rust CI
+
+on: [push, pull_request]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-Dwarnings" # treat warnings as errors
+
+jobs:
+  cargo-check:
+    runs-on: ubuntu-latest
+    steps:
+    - run: rustup update stable && rustup default stable
+    - uses: actions/checkout@v5
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - run: cargo check --all --all-features
+
+  cargo-fmt:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - run: rustup update stable && rustup default stable
+    - uses: actions/checkout@v5
+    - run: cargo fmt --check
+
+  cargo-clippy:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - run: rustup update stable && rustup default stable
+    - uses: actions/checkout@v5
+    - run: cargo clippy --all --all-features
