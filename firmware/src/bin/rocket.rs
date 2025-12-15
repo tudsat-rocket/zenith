@@ -81,6 +81,8 @@ pub async fn main_loop(
 
         // TODO: this belongs somewhere else
         if let Some(cmd) = links.try_recv_command() {
+            #[allow(clippy::single_match)] // TODO: this will expand
+            #[allow(clippy::collapsible_match)] // TODO: this will expand
             match cmd {
                 UplinkCommand::SetFlightMode(fm) => {
                     vehicle.set_mode(fm);

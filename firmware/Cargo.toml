@@ -70,3 +70,6 @@ rand_chacha = { version = "0.3", default-features = false }
 bitflags = "2.9.1"
 
 rapid-dialect = { workspace = true }
+
+[lints]
+workspace = true

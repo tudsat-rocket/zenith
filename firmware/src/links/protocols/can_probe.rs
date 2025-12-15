@@ -81,7 +81,7 @@ pub async fn run(
                 }
             }
             // Received a request to enable CAN forwarding
-            Either3::Second(cmd) if cmd == UplinkCommand::RequestCanForwarding => {
+            Either3::Second(UplinkCommand::RequestCanForwarding) => {
                 defmt::info!("Enabling CAN forwarding.");
                 can_forwarding_enabled = true;
             }
@@ -94,7 +94,7 @@ pub async fn run(
                 let mut buffer = [0x00; 8];
                 // copy data from frame data 'vec' into buffer
                 for (i, byte) in frame.data().iter().enumerate().take(frame.data().len()) {
-                    buffer[i] = *byte
+                    buffer[i] = *byte;
                 }
 
                 let _ = eth_tx

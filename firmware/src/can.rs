@@ -47,7 +47,7 @@ async fn run_can_rx(can_rx: &'static mut CanRx<'static>, publisher: CanTxPublish
                 error!(
                     "Can Bus Error: Failed to read can envelope: {:?}",
                     Debug2Format(&e)
-                )
+                );
             }
         }
     }

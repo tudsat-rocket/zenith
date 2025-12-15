@@ -52,6 +52,6 @@ pub async fn run(tx: InterfaceTxPublisher, mut rx: InterfaceCommandSubscriber) {
                 }
             }
             _ => {}
-        };
+        }
     }
 }

@@ -39,7 +39,7 @@ pub static COMMANDS: StaticCell<InterfaceCommands> = StaticCell::new();
 
 static LINK_QUALITY: Watch<CriticalSectionRawMutex, LinkQuality, 3> = Watch::new();
 
-static EP_OUT_BUFFER: StaticCell<[u8; 256]> = StaticCell::new();
+// static EP_OUT_BUFFER: StaticCell<[u8; 256]> = StaticCell::new();
 static CONFIG_DESCRIPTOR_BUFFER: StaticCell<[u8; 256]> = StaticCell::new();
 static BOS_DESCRIPTOR_BUFFER: StaticCell<[u8; 256]> = StaticCell::new();
 static MSOS_DESCRIPTOR_BUFFER: StaticCell<[u8; 256]> = StaticCell::new();
@@ -135,7 +135,7 @@ impl TelemetryLink for UsbHandle {
     const SENSOR_INTERVAL_MS: u32 = 200;
 
     fn send_message(&mut self, message: Rapid) {
-        let _ = self.tx.publish_immediate(message.into());
+        self.tx.publish_immediate(message);
     }
 
     fn try_recv_command(&mut self) -> Option<UplinkCommand> {
@@ -212,7 +212,7 @@ async fn run_downlink(
 
             match with_timeout(
                 Duration::from_millis(10),
-                write_message(&mut sender, &serialized),
+                write_message(&mut sender, serialized),
             )
             .await
             {
@@ -224,9 +224,7 @@ async fn run_downlink(
                     defmt::error!("disabled");
                     break;
                 }
-                Err(_e) => {
-                    continue;
-                }
+                Err(_e) => {}
             }
         }
     }

@@ -22,6 +22,7 @@ pub struct AdcData {
     // TODO: continuity check
 }
 
+#[derive(Default)]
 pub struct PowerMonitor {
     history: heapless::Deque<AdcData, 20>,
     filtered: AdcData,
@@ -30,7 +31,7 @@ pub struct PowerMonitor {
 pub fn init(adc: BoardAdc, spawner: Spawner) -> PowerMonitor {
     spawner.spawn(run(adc)).unwrap();
 
-    PowerMonitor::new()
+    PowerMonitor::default()
 }
 
 #[unsafe(link_section = ".ram_d3")]
@@ -38,7 +39,7 @@ static mut DMA_BUF: [u16; 7] = [0; 7];
 
 #[embassy_executor::task]
 async fn run(mut adc: BoardAdc) -> ! {
-    let mut read_buffer = unsafe { &mut DMA_BUF[..] };
+    let read_buffer = unsafe { &mut DMA_BUF[..] };
 
     let mut vrefint = adc.adc1.enable_vrefint().degrade_adc();
     let mut temperature = adc.adc1.enable_temperature().degrade_adc();
@@ -59,7 +60,7 @@ async fn run(mut adc: BoardAdc) -> ! {
                     (&mut adc.recovery_current, SampleTime::CYCLES810_5),
                 ]
                 .into_iter(),
-                &mut read_buffer,
+                read_buffer,
             )
             .await;
 
@@ -89,20 +90,13 @@ async fn run(mut adc: BoardAdc) -> ! {
 }
 
 impl PowerMonitor {
-    pub fn new() -> Self {
-        Self {
-            history: heapless::Deque::new(),
-            filtered: AdcData::default(),
-        }
-    }
-
     pub fn tick(&mut self) {
         if let Some(data) = SIGNAL.try_take() {
             if self.history.is_full() {
                 let _ = self.history.pop_front();
             }
             let _ = self.history.push_back(data);
-        } else if self.history.len() == 0 {
+        } else if self.history.is_empty() {
             return;
         }
 

@@ -4,6 +4,7 @@
 
 use embassy_stm32::adc::AdcChannel;
 use embassy_stm32::adc::AnyAdcChannel;
+use embassy_stm32::timer::low_level::CountingMode;
 use embassy_stm32::timer::simple_pwm::PwmPinConfig;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -121,6 +122,7 @@ pub struct Board {
     pub seed: u64,
 }
 
+static ETHERNET_PACKETS: StaticCell<PacketQueue<4, 4>> = StaticCell::new();
 static USB_EP_OUT_BUFFER: StaticCell<[u8; 256]> = StaticCell::new();
 
 static SPI1_SHARED: StaticCell<Mutex<CriticalSectionRawMutex, Spi<Async>>> = StaticCell::new();
@@ -128,6 +130,7 @@ static SPI2_SHARED: StaticCell<Mutex<CriticalSectionRawMutex, Spi<Async>>> = Sta
 static SPI3_SHARED: StaticCell<Mutex<CriticalSectionRawMutex, Spi<Async>>> = StaticCell::new();
 static SPI4_SHARED: StaticCell<Mutex<CriticalSectionRawMutex, Spi<Async>>> = StaticCell::new();
 
+#[allow(clippy::too_many_lines)]
 pub async fn init_board() -> Board {
     // Basic setup, including clocks
     // Divider values taken from STM32CubeMx
@@ -301,15 +304,14 @@ pub async fn init_board() -> Board {
     // We use 64 bits of the the STM32's 96-bit UID to seed a PRNG, which we then use to generate
     // a deterministic MAC address for this device.
     let uid = embassy_stm32::uid::uid();
-    let uid_seed: u64 = u64::from_be_bytes(uid[0..8].try_into().unwrap());
+    let uid_seed = u64::from_be_bytes(uid[0..8].try_into().unwrap());
     let mut rng = ChaCha20Rng::seed_from_u64(uid_seed);
     let mut mac_addr = [0x00; 6];
     rng.fill_bytes(&mut mac_addr);
     mac_addr[0] = 0x02;
 
-    static PACKETS: StaticCell<PacketQueue<4, 4>> = StaticCell::new();
     let ethernet = Ethernet::new(
-        PACKETS.init(PacketQueue::<4, 4>::new()),
+        ETHERNET_PACKETS.init(PacketQueue::<4, 4>::new()),
         p.ETH,
         Irqs,
         p.PA1,  // ref_clk
@@ -401,7 +403,7 @@ pub async fn init_board() -> Board {
         Some(buzzer_pin),
         None,
         Hertz::hz(440),
-        Default::default(),
+        CountingMode::default(),
     );
     let buzzer_pwm_channel = Channel::Ch3;
     let recovery_high = Output::new(p.PE13, Level::Low, Speed::Low);
@@ -427,7 +429,7 @@ pub async fn init_board() -> Board {
     let adc_recovery_current = p.PA6.degrade_adc();
     let adc_continuity_check = p.PC0.degrade_adc();
 
-    let board = Board {
+    Board {
         sensors: BoardSensors {
             imu1,
             imu2,
@@ -469,7 +471,5 @@ pub async fn init_board() -> Board {
         iwdg,
         buzzer: (buzzer_pwm, buzzer_pwm_channel),
         seed,
-    };
-
-    board
+    }
 }
