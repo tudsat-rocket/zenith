@@ -32,14 +32,6 @@ async fn main(low_priority_spawner: Spawner) {
     interrupt::I2C3_ER.set_priority(Priority::P7);
     let medium_priority_spawner = EXECUTOR_MEDIUM.start(interrupt::I2C3_ER);
 
-    //let (lora_downlink, downlink_settings) = fw::lora::start_rocket_downlink(
-    //    board.lora1,
-    //    settings.lora.clone(),
-    //    medium_priority_spawner,
-    //);
-    //let (lora_uplink, rssi_glob) =
-    //    fw::lora::start_rocket_uplink(board.lora2, settings.lora.clone(), medium_priority_spawner);
-
     let can1_rx = fw::can::CAN1_RX_CH.init(PubSubChannel::new());
     let can1_tx = fw::can::CAN1_TX_CH.init(PubSubChannel::new());
     fw::can::spawn_can1(
@@ -62,7 +54,10 @@ async fn main(low_priority_spawner: Spawner) {
         board.ethernet,
         board.seed,
         board.usb,
+        board.lora1,
+        board.lora2,
         (can1_tx.publisher().unwrap(), can1_rx.subscriber().unwrap()),
+        medium_priority_spawner,
         low_priority_spawner,
     )
     .await;

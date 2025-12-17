@@ -2,7 +2,9 @@
 resolver = "2"
 members = [
     "state_estimator",
+    "telemetry",
     "firmware",
+    "utils",
 ]
 default-members = ["firmware"]
 
@@ -11,8 +13,29 @@ default-members = ["firmware"]
 [workspace.dependencies]
 firmware = { path = "firmware" }
 state_estimator = { path = "state_estimator" }
+telemetry = { path = "telemetry" }
+utils = { path = "utils" }
 
+heapless = { version = "0.8.0", features = ["serde"] } # TODO: serde?
+thiserror = { version = "2.0", default-features = false }
 nalgebra = { version = "0.32", default-features = false, features = ["macros", "libm", "mint", "serde-serialize-no-std"] }
+
+defmt = "0.3"
+defmt-rtt = "0.4"
+
+embedded-hal = "1.0"
+embedded-hal-async = "1.0"
+embedded-can = "0.4.1"
+embedded-nal-async = "0.8.0"
+embedded-io-async = "0.6.1"
+embedded-storage-async = "0.4.1"
+
+embassy-embedded-hal = "0.5"
+embassy-futures = "0.1"
+embassy-sync = "0.7"
+embassy-time = { version = "0.5", features = ["tick-hz-1_000_000"] }
+
+lora-phy = { git = "https://github.com/lora-rs/lora-rs.git", features = ["defmt-03"] }
 
 rapid-dialect = { git = "https://github.com/tudsat-rocket/rapid-dialect" }
 #rapid-dialect = { path = "../rapid-dialect" }

@@ -1,3 +1,4 @@
+use embassy_sync::watch::Watch;
 use rapid_dialect::Rapid;
 use static_cell::StaticCell;
 
@@ -20,13 +21,19 @@ use crate::links::interfaces::{
     InterfaceCommandSubscriber, InterfaceCommands, InterfaceRx, InterfaceRxPublisher,
     InterfaceRxSubscriber, InterfaceTx, InterfaceTxPublisher, InterfaceTxSubscriber,
 };
+use crate::links::protocols::link_quality::LinkQuality;
 use crate::links::{TelemetryLink, UplinkCommand, protocols};
 
+#[cfg(not(feature = "gcs"))]
 pub const ETHERNET_SYSTEM_ID: u8 = 0x04;
+#[cfg(feature = "gcs")]
+pub const ETHERNET_SYSTEM_ID: u8 = 0x06;
 
 pub static DOWNLINK: StaticCell<InterfaceTx> = StaticCell::new();
 pub static UPLINK: StaticCell<InterfaceRx> = StaticCell::new();
 pub static COMMANDS: StaticCell<InterfaceCommands> = StaticCell::new();
+
+static LINK_QUALITY: Watch<CriticalSectionRawMutex, LinkQuality, 3> = Watch::new();
 
 static RX_META: StaticCell<[PacketMetadata; 8]> = StaticCell::new();
 static RX_BUFFER: StaticCell<[u8; 1024]> = StaticCell::new();
@@ -82,9 +89,18 @@ impl EthernetHandle {
                 tx.publisher().unwrap(),
                 rx.subscriber().unwrap(),
                 commands.publisher().unwrap(),
+                LINK_QUALITY.sender(),
             ))
             .unwrap();
 
+        spawner
+            .spawn(protocols::link_quality::run(
+                tx.publisher().unwrap(),
+                LINK_QUALITY.receiver().unwrap(),
+            ))
+            .unwrap();
+
+        #[cfg(not(feature = "gcs"))]
         spawner
             .spawn(protocols::can_probe::run(
                 can.0,
@@ -107,11 +123,14 @@ impl EthernetHandle {
             cmd_rx: commands.subscriber().unwrap(),
         }
     }
+
+    pub fn split(self) -> (InterfaceTxPublisher, InterfaceCommandSubscriber) {
+        let Self { tx, cmd_rx } = self;
+        (tx, cmd_rx)
+    }
 }
 
 impl TelemetryLink for EthernetHandle {
-    const MAVLINK_SYSTEM_ID: u8 = ETHERNET_SYSTEM_ID;
-
     fn send_message(&mut self, message: Rapid) {
         let _ = self.tx.publish_immediate(message.into());
     }
@@ -142,7 +161,7 @@ async fn run_socket(
     publisher: InterfaceRxPublisher,
 ) -> ! {
     let remote_endpoint = (embassy_net::Ipv4Address::new(255, 255, 255, 255), 14550);
-    socket.bind(14550).unwrap();
+    socket.bind(14551).unwrap();
     socket.set_hop_limit(Some(4));
 
     let endpoint = mavio::Endpoint::v2(mavio::MavLinkId::new(ETHERNET_SYSTEM_ID, 0x01));
@@ -172,6 +191,8 @@ async fn run_socket(
                     Rapid::ScaledPressure2(m) => endpoint.next_frame(&m).unwrap(),
                     Rapid::ScaledPressure3(m) => endpoint.next_frame(&m).unwrap(),
                     Rapid::BatteryStatus(m) => endpoint.next_frame(&m).unwrap(),
+                    Rapid::RadioStatus(m) => endpoint.next_frame(&m).unwrap(),
+                    Rapid::LinkNodeStatus(m) => endpoint.next_frame(&m).unwrap(),
                     _ => continue,
                 };
 
@@ -196,7 +217,7 @@ async fn run_socket(
                 let frame_result = unsafe { mavio::Frame::deserialize(&mavlink_buffer) };
                 match frame_result {
                     Ok(frame) => {
-                        publisher.publish_immediate(frame);
+                        publisher.publish(frame).await;
                         mavlink_buffer.truncate(0);
                     }
                     Err(FrameError::FrameBufferIsTooSmall { .. }) => {}

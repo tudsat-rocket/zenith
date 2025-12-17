@@ -9,48 +9,58 @@ name = "rocket"
 path = "src/bin/rocket.rs"
 
 [[bin]]
+name = "gcs"
+path = "src/bin/gcs.rs"
+required-features = ["gcs"]
+
+[[bin]]
 name = "selftest"
 path = "src/bin/selftest.rs"
 
-[dependencies]
-rapid-dialect = { workspace = true }
-state_estimator = { workspace = true }
-nalgebra = { workspace = true }
+[features]
+default = []
+gcs = []
 
-defmt = "0.3"
-defmt-rtt = "0.4"
+[dependencies]
+state_estimator = { workspace = true }
+telemetry = { workspace = true }
+
+thiserror = { workspace = true }
+nalgebra = { workspace = true }
+heapless = { workspace = true }
+
+defmt = { workspace = true }
+defmt-rtt = { workspace = true }
+
 #panic-probe = "0.3" # print-defmt is really useful for debugging, but dramatically increases binary size
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 
-embedded-hal = "1.0"
-embedded-hal-async = "1.0"
-embedded-can = "0.4.1"
-embedded-nal-async = "0.8.0"
-embedded-io-async = "0.6.1"
-embedded-storage-async = "0.4.1"
+embedded-hal = { workspace = true }
+embedded-hal-async = { workspace = true }
+embedded-can = { workspace = true }
+embedded-nal-async = { workspace = true }
+embedded-io-async = { workspace = true }
+embedded-storage-async = { workspace = true }
 
 cortex-m = { version = "0.7", features = ["inline-asm", "critical-section-single-core"] }
 cortex-m-rt = "0.7"
 
-embassy-embedded-hal = "0.5"
-embassy-futures = "0.1"
-embassy-sync = "0.7"
+embassy-embedded-hal = { workspace = true }
+embassy-futures = { workspace = true }
+embassy-sync = { workspace = true }
+embassy-time = { workspace = true }
 
-embassy-time = { version = "0.5", features = ["tick-hz-1_000_000"] }
 embassy-executor = { version = "0.9", features = ["defmt", "arch-cortex-m", "executor-thread", "executor-interrupt"] }
-
 embassy-stm32 = {  version = "0.4", features = ["stm32h743vi", "unstable-pac", "memory-x", "time-driver-tim15", "exti"] }
-
 embassy-usb = { version = "0.5", features = ["defmt"] }
 embassy-net = { version = "0.7", features = ["defmt", "udp", "tcp", "dhcpv4", "medium-ethernet", "proto-ipv4", "dns"] }
 
-lora-phy = { git = "https://github.com/lora-rs/lora-rs.git", features = ["defmt-03"] }
+lora-phy = { workspace = true }
 
 mavio = { version = "0.5.10", features = ["dlct-common"] }
 
 static_cell = "2"
 num-traits = { version = "0.2.15", default-features = false }
-heapless = { version = "0.8.0", features = ["serde"] } # TODO: serde?
 serde = { version = "1", default-features = false, features = ["derive"] }
 postcard = "1.0"
 crc = "3"
@@ -58,3 +68,5 @@ siphasher = { version = "0.3", default-features = false }
 rand = { version = "0.8", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
 bitflags = "2.9.1"
+
+rapid-dialect = { workspace = true }
