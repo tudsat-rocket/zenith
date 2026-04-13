@@ -1,8 +1,8 @@
+use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::{
     MavAutopilot, MavBatteryChargeState, MavBatteryFault, MavBatteryFunction, MavBatteryMode,
     MavBatteryType, MavModeFlag, MavType,
 };
-use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::messages::{
     Attitude, BatteryStatus, Heartbeat, LocalPositionNed, ScaledImu, ScaledImu2, ScaledImu3,
     ScaledPressure, ScaledPressure2, ScaledPressure3,

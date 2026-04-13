@@ -3,23 +3,25 @@ use std::sync::atomic::Ordering;
 use mission::{AdcData, BaroReading, Outputs, SensorReadings, Sensors};
 use rapid_dialect::FlightMode;
 
-use crate::simulation::{self, FlightSimulation};
+use crate::simulation::{FlightSimulation, RecoveryFlags};
 
 pub struct StdSensors {
     sim: FlightSimulation,
 }
 
-impl Default for StdSensors {
-    fn default() -> Self {
+impl StdSensors {
+    pub fn new(flags: RecoveryFlags) -> Self {
         Self {
-            sim: FlightSimulation::new(),
+            sim: FlightSimulation::new(flags),
         }
     }
-}
 
-impl StdSensors {
     pub fn set_flight_mode(&mut self, mode: FlightMode) {
         self.sim.set_flight_mode(mode);
+    }
+
+    pub fn sim(&self) -> &FlightSimulation {
+        &self.sim
     }
 }
 
@@ -54,14 +56,19 @@ impl Sensors for StdSensors {
     }
 }
 
-#[derive(Default)]
 pub struct StdOutputs {
+    flags: RecoveryFlags,
     #[allow(dead_code)]
     recovery_armed: bool,
-    #[allow(dead_code)]
-    drogue_high: bool,
-    #[allow(dead_code)]
-    main_high: bool,
+}
+
+impl StdOutputs {
+    pub fn new(flags: RecoveryFlags) -> Self {
+        Self {
+            flags,
+            recovery_armed: false,
+        }
+    }
 }
 
 impl Outputs for StdOutputs {
@@ -70,12 +77,10 @@ impl Outputs for StdOutputs {
     }
 
     fn set_drogue(&mut self, high: bool) {
-        self.drogue_high = high;
-        simulation::DROGUE_ACTIVE.store(high, Ordering::Relaxed);
+        self.flags.drogue.store(high, Ordering::Relaxed);
     }
 
     fn set_main(&mut self, high: bool) {
-        self.main_high = high;
-        simulation::MAIN_ACTIVE.store(high, Ordering::Relaxed);
+        self.flags.main.store(high, Ordering::Relaxed);
     }
 }

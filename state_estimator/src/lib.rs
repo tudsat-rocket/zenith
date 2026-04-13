@@ -24,7 +24,7 @@ pub struct GpsDatum {
     hdop: u16,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StateEstimatorSettings {
     /// proportional filter gain for Mahony attitude estimator
     pub mahony_kp: f32,

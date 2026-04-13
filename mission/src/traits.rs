@@ -44,13 +44,13 @@ pub trait Outputs {
     fn set_main(&mut self, high: bool);
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Settings {
     pub state_estimator: StateEstimatorSettings,
     pub recovery: RecoverySettings,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RecoverySettings {
     /// Altitude AGL (meters) at which to deploy the main parachute
     pub main_deploy_altitude: f32,

@@ -1,6 +1,4 @@
 mod networking;
-mod sensors;
-mod simulation;
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Ticker};
@@ -9,9 +7,7 @@ use links::UplinkCommand;
 use mission::TelemetryLink;
 
 use networking::Links;
-use sensors::{StdOutputs, StdSensors};
-
-pub type Vehicle = mission::Vehicle<StdSensors, StdOutputs, mission::NoStorage>;
+use sitl::{RecoveryFlags, StdOutputs, StdSensors, Vehicle};
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -22,9 +18,10 @@ async fn main(spawner: Spawner) {
 
     log::info!("Starting rocket-std");
 
+    let flags = RecoveryFlags::default();
     let vehicle = Vehicle::new(
-        StdSensors::default(),
-        StdOutputs::default(),
+        StdSensors::new(flags.clone()),
+        StdOutputs::new(flags),
         mission::NoStorage,
     )
     .await;

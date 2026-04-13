@@ -34,6 +34,10 @@ check:
     cargo check -p sitl --all-features
     cargo check -p state_estimator -p telemetry -p utils -p links -p mission --all-features
 
+# cargo test, but with release due to all the state estimator sitl number crunching
+test:
+    cargo test --release
+
 # cargo clippy across the workspace, with the right target per crate
 clippy:
     cargo clippy -p firmware --all-features --target {{target}}

@@ -1,8 +1,18 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use nalgebra::Vector3;
 use rand::Rng;
 use rapid_dialect::FlightMode;
+
+/// Shared handle between `StdOutputs` (writer) and `FlightSimulation` (reader)
+/// for recovery output state. One handle per vehicle instance so multiple
+/// simulations can run in parallel (required for integration tests).
+#[derive(Clone, Default)]
+pub struct RecoveryFlags {
+    pub drogue: Arc<AtomicBool>,
+    pub main: Arc<AtomicBool>,
+}
 
 const GRAVITY: f32 = 9.80665;
 const DT: f32 = 0.001; // 1kHz tick rate
@@ -11,10 +21,6 @@ const DT: f32 = 0.001; // 1kHz tick rate
 const P0: f32 = 101_325.0; // sea level pressure (Pa)
 const T0: f32 = 288.15; // sea level temperature (K)
 const L: f32 = 0.0065; // temperature lapse rate (K/m)
-
-// Recovery output state, written by StdOutputs, read by simulation
-pub static DROGUE_ACTIVE: AtomicBool = AtomicBool::new(false);
-pub static MAIN_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Simple rocket flight simulation using Euler integration.
 pub struct FlightSimulation {
@@ -32,6 +38,7 @@ pub struct FlightSimulation {
 
     config: SimConfig,
     rng: rand::rngs::ThreadRng,
+    flags: RecoveryFlags,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -80,7 +87,7 @@ impl Default for SimConfig {
 }
 
 impl FlightSimulation {
-    pub fn new() -> Self {
+    pub fn new(flags: RecoveryFlags) -> Self {
         let config = SimConfig::default();
         Self {
             time: 0.0,
@@ -91,6 +98,7 @@ impl FlightSimulation {
             armed_time: None,
             config,
             rng: rand::thread_rng(),
+            flags,
         }
     }
 
@@ -136,7 +144,7 @@ impl FlightSimulation {
                 self.velocity.z += accel_z * DT;
                 self.position.z += self.velocity.z * DT;
 
-                if DROGUE_ACTIVE.load(Ordering::Relaxed) {
+                if self.flags.drogue.load(Ordering::Relaxed) {
                     self.transition(Phase::Drogue);
                 }
             }
@@ -146,7 +154,7 @@ impl FlightSimulation {
                 self.velocity.z += (target - self.velocity.z) * 2.0 * DT;
                 self.position.z += self.velocity.z * DT;
 
-                if MAIN_ACTIVE.load(Ordering::Relaxed) {
+                if self.flags.main.load(Ordering::Relaxed) {
                     self.transition(Phase::Main);
                 }
             }
