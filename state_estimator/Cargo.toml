@@ -10,6 +10,7 @@ num-traits = { version = "0.2.15", default-features = false }
 nalgebra = { workspace = true }
 ahrs = { git = "https://github.com/tudsat-rocket/ahrs-rs", branch="sensor-gains", default-features = false, features = ["field_access"] }
 filter = { git = "https://github.com/tudsat-rocket/filter-rs" }
+rapid-dialect = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

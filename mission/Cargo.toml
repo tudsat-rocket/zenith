@@ -1,0 +1,15 @@
+[package]
+name = "mission"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+state_estimator = { workspace = true }
+links = { workspace = true }
+rapid-dialect = { workspace = true }
+nalgebra = { workspace = true }
+mavio = { version = "0.5.10", features = ["dlct-common"] }
+log = { workspace = true }
+
+[lints]
+workspace = true

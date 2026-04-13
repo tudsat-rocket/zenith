@@ -26,13 +26,13 @@ use telemetry::trx::receiver::HoppingReceiver;
 use telemetry::trx::transmitter::HoppingTransmitter;
 
 use crate::LoraTransceiver;
+use crate::Vehicle;
 use crate::can::{CanRxSubscriber, CanTxPublisher};
+use crate::links::UplinkCommand;
 use crate::links::interfaces::{
     InterfaceCommandSubscriber, InterfaceCommands, InterfaceRx, InterfaceRxPublisher,
     InterfaceRxSubscriber, InterfaceTx, InterfaceTxPublisher, InterfaceTxSubscriber,
 };
-use crate::links::{TelemetryLink, UplinkCommand, protocols};
-use crate::vehicle::Vehicle;
 
 pub static DOWNLINK: StaticCell<Channel<CriticalSectionRawMutex, (u16, DownlinkMessage), 5>> =
     StaticCell::new();
@@ -77,18 +77,12 @@ impl LoraHandle {
     }
 }
 
-impl TelemetryLink for LoraHandle {
-    fn send_message(&mut self, _message: Rapid) {
-        // TODO: this is not called since we overwrite send_telemetry_messages
-        //
-        // we should refactor this
-    }
-
-    fn try_recv_command(&mut self) -> Option<UplinkCommand> {
+impl LoraHandle {
+    pub fn try_recv_command(&mut self) -> Option<UplinkCommand> {
         self.rx.try_receive().ok()
     }
 
-    fn send_telemetry_messages(&mut self, vehicle: &Vehicle) {
+    pub fn send_telemetry_messages(&mut self, vehicle: &Vehicle) {
         const MESSAGE_PATTERN_LENGTH: u32 = 8;
 
         // While we can freely choose the messages we wish to send, we have to respect the message

@@ -7,6 +7,7 @@ edition = "2024"
 
 [dependencies]
 utils = { workspace = true }
+links = { workspace = true }
 rapid-dialect = { workspace = true }
 
 defmt = { workspace = true }

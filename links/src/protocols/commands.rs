@@ -6,29 +6,21 @@
 //!
 //! Executed for both Ethernet and USB links.
 
-use core::cmp::Ordering;
-
-use embassy_sync::watch::Sender;
-use static_cell::StaticCell;
-
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::{Channel, Receiver};
+use embassy_sync::watch::Sender;
 use embassy_time::{Duration, Instant};
 
 use rapid_dialect::rapid::{
-    enums::{MavCmd, MavModeProperty, MavResult, MavStandardMode},
+    enums::{MavCmd, MavResult},
     messages::{AvailableModes, CommandAck},
 };
 use rapid_dialect::{FlightMode, Rapid};
 
-use crate::links::UplinkCommand;
-use crate::links::interfaces::ethernet::ETHERNET_SYSTEM_ID;
-use crate::links::interfaces::{
-    InterfaceCommandPublisher, InterfaceRxSubscriber, InterfaceTxPublisher,
+use crate::protocols::link_quality::LinkQuality;
+use crate::{
+    InterfaceCommandPublisher, InterfaceRxSubscriber, InterfaceTxPublisher, UplinkCommand,
 };
-use crate::links::protocols::link_quality::LinkQuality;
 
-#[embassy_executor::task(pool_size = 2)]
 #[allow(clippy::too_many_lines, reason = "TODO")]
 pub async fn run(
     system_id: u8,
@@ -46,12 +38,23 @@ pub async fn run(
         // This is likely not a packet intended for us. Ground stations tend to have high IDs.
         // This may be something like another flight computer on the same network.
         if frame.system_id() < 0x7f {
+            log::debug!(
+                "commands: ignoring frame from sys_id={:#x} (< 0x7f)",
+                frame.system_id()
+            );
             continue;
         }
 
         let Ok(msg) = frame.decode::<Rapid>() else {
+            log::debug!("commands: failed to decode frame");
             continue;
         };
+
+        log::debug!(
+            "commands: received message from sys={} comp={}",
+            frame.system_id(),
+            frame.component_id()
+        );
 
         match msg {
             Rapid::CommandLong(cmd)
@@ -70,8 +73,13 @@ pub async fn run(
                         }
                     }
                     MavCmd::RequestMessage => {
+                        log::debug!("commands: RequestMessage id={}", cmd.param1 as u32);
                         let cmd = match cmd.param1 as u32 {
                             AvailableModes::ID => {
+                                log::info!(
+                                    "commands: RequestMessage for AvailableModes (index={})",
+                                    cmd.param2 as usize
+                                );
                                 Some(UplinkCommand::RequestAvailableModes(cmd.param2 as usize))
                             }
                             _ => None,
@@ -85,10 +93,6 @@ pub async fn run(
                         }
                     }
                     MavCmd::CanForward => {
-                        //let bus_enable = cmd.param1 as u8;
-                        // For now we only support bus1
-                        //can_forwarding_enabled = bus_enable > 0;
-                        // TODO: enable/disable, bus number
                         cmd_tx.publish(UplinkCommand::RequestCanForwarding).await;
                         MavResult::Accepted
                     }
@@ -134,7 +138,7 @@ pub async fn run(
         // Messages might arrive out of order, so to track packet loss we attempt to reorder minor
         // shuffles, otherwise we end up with big bursts of 255 "lost" packets.
         let mut received_sorted: heapless::Vec<u8, 64> = heapless::Vec::new();
-        for (t, seq, _) in &received_queue {
+        for (_t, seq, _) in &received_queue {
             let mut i = received_sorted.len();
 
             // We look back into the past by at most 5 packets and insert the packet before any

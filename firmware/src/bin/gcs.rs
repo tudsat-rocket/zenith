@@ -39,7 +39,7 @@ static UPLINK: StaticCell<Channel<CriticalSectionRawMutex, (u16, UplinkMessage),
 
 #[embassy_executor::main]
 async fn main(low_priority_spawner: Spawner) {
-    let board = fw::init_board().await;
+    let board = fw::board::init().await;
 
     // Start high priority executor
     interrupt::I2C3_EV.set_priority(Priority::P6);
@@ -81,6 +81,7 @@ async fn main(low_priority_spawner: Spawner) {
         ))
         .unwrap();
 
+    // TODO
     //board.iwdg.unleash();
 
     let downlink = HoppingReceiver::new(board.lora2, DEFAULT_DOWNLINK_CONFIG, tx.sender());

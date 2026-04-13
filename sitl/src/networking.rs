@@ -1,40 +1,31 @@
+use embassy_executor::Spawner;
+use embassy_futures::select::{Either, select};
+use embassy_net::StackResources;
+use embassy_net::udp::{PacketMetadata, UdpSocket};
+use embassy_net_tuntap::TunTapDevice;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::watch::Watch;
+
+use mavio::error::FrameError;
 use rapid_dialect::Rapid;
 use static_cell::StaticCell;
 
-use embassy_executor::Spawner;
-use embassy_futures::select::{Either, select};
-use embassy_net::udp::{PacketMetadata, UdpSocket};
-use embassy_net::{DhcpConfig, StackResources};
-use embassy_stm32::eth::Ethernet;
-use embassy_stm32::eth::GenericPhy;
-use embassy_stm32::peripherals::ETH;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber};
-
-use mavio::Frame;
-use mavio::error::FrameError;
-use mavio::prelude::V2;
-
-use crate::can::{CanRxSubscriber, CanTxPublisher};
-use crate::links::interfaces::{
+use links::protocols::link_quality::LinkQuality;
+use links::{
     InterfaceCommandPublisher, InterfaceCommandSubscriber, InterfaceCommands, InterfaceRx,
-    InterfaceRxPublisher, InterfaceRxSubscriber, InterfaceTx, InterfaceTxPublisher,
-    InterfaceTxSubscriber,
+    InterfaceRxPublisher, InterfaceTx, InterfaceTxPublisher, InterfaceTxSubscriber, UplinkCommand,
 };
-use crate::links::protocols::link_quality::LinkQuality;
 use mission::TelemetryLink;
 
-use crate::links::{UplinkCommand, protocols};
+use crate::Vehicle;
 
-#[cfg(not(feature = "gcs"))]
-pub const ETHERNET_SYSTEM_ID: u8 = 0x04;
-#[cfg(feature = "gcs")]
-pub const ETHERNET_SYSTEM_ID: u8 = 0x06;
+pub const SYSTEM_ID: u8 = 0x14;
+const COMPONENT_ID: u8 = 0x01;
 
-pub static DOWNLINK: StaticCell<InterfaceTx> = StaticCell::new();
-pub static UPLINK: StaticCell<InterfaceRx> = StaticCell::new();
-pub static COMMANDS: StaticCell<InterfaceCommands> = StaticCell::new();
+static DOWNLINK: StaticCell<InterfaceTx> = StaticCell::new();
+static UPLINK: StaticCell<InterfaceRx> = StaticCell::new();
+static COMMANDS: StaticCell<InterfaceCommands> = StaticCell::new();
 
 static LINK_QUALITY: Watch<CriticalSectionRawMutex, LinkQuality, 3> = Watch::new();
 
@@ -43,31 +34,27 @@ static RX_BUFFER: StaticCell<[u8; 1024]> = StaticCell::new();
 static TX_META: StaticCell<[PacketMetadata; 8]> = StaticCell::new();
 static TX_BUFFER: StaticCell<[u8; 1024]> = StaticCell::new();
 
-pub struct EthernetHandle {
+pub struct Links {
     tx: InterfaceTxPublisher,
     cmd_rx: InterfaceCommandSubscriber,
 }
 
-impl EthernetHandle {
-    #[allow(
-        clippy::needless_pass_by_value,
-        reason = "at the moment we always pass the CAN stuff, even for the GCS where we don't need it."
-    )]
-    pub fn init(
-        device: Ethernet<'static, ETH, GenericPhy>,
-        seed: u64,
-        can: (CanTxPublisher, CanRxSubscriber),
-        spawner: Spawner,
-    ) -> Self {
+impl Links {
+    pub fn init(spawner: Spawner) -> Self {
         static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
 
         let tx = DOWNLINK.init(PubSubChannel::new());
         let rx = UPLINK.init(PubSubChannel::new());
         let commands = COMMANDS.init(PubSubChannel::new());
 
-        // TODO
-        let config = embassy_net::Config::dhcpv4(DhcpConfig::default());
+        let device = TunTapDevice::new("tap99").unwrap();
 
+        let seed = rand::random();
+        let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
+            address: embassy_net::Ipv4Cidr::new(embassy_net::Ipv4Address::new(192, 168, 69, 2), 24),
+            gateway: Some(embassy_net::Ipv4Address::new(192, 168, 69, 1)),
+            dns_servers: heapless::Vec::new(),
+        });
         let (stack, runner) =
             embassy_net::new(device, config, RESOURCES.init(StackResources::new()), seed);
 
@@ -91,8 +78,8 @@ impl EthernetHandle {
 
         spawner
             .spawn(run_commands(
-                ETHERNET_SYSTEM_ID,
-                0x01,
+                SYSTEM_ID,
+                COMPONENT_ID,
                 tx.publisher().unwrap(),
                 rx.subscriber().unwrap(),
                 commands.publisher().unwrap(),
@@ -104,17 +91,6 @@ impl EthernetHandle {
             .spawn(run_link_quality(
                 tx.publisher().unwrap(),
                 LINK_QUALITY.receiver().unwrap(),
-            ))
-            .unwrap();
-
-        #[cfg(not(feature = "gcs"))]
-        spawner
-            .spawn(protocols::can_probe::run(
-                can.0,
-                can.1,
-                commands.subscriber().unwrap(),
-                tx.publisher().unwrap(),
-                rx.subscriber().unwrap(),
             ))
             .unwrap();
 
@@ -131,13 +107,12 @@ impl EthernetHandle {
         }
     }
 
-    pub fn split(self) -> (InterfaceTxPublisher, InterfaceCommandSubscriber) {
-        let Self { tx, cmd_rx } = self;
-        (tx, cmd_rx)
+    pub fn send_telemetry_messages(&mut self, vehicle: &Vehicle) {
+        vehicle.send_telemetry(self);
     }
 }
 
-impl TelemetryLink for EthernetHandle {
+impl TelemetryLink for Links {
     fn send_message(&mut self, message: Rapid) {
         self.tx.publish_immediate(message);
     }
@@ -154,40 +129,8 @@ impl TelemetryLink for EthernetHandle {
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
-async fn run_commands(
-    system_id: u8,
-    component_id: u8,
-    tx: InterfaceTxPublisher,
-    rx: InterfaceRxSubscriber,
-    cmd_tx: InterfaceCommandPublisher,
-    link_quality_sender: embassy_sync::watch::Sender<
-        'static,
-        CriticalSectionRawMutex,
-        LinkQuality,
-        3,
-    >,
-) {
-    protocols::commands::run(system_id, component_id, tx, rx, cmd_tx, link_quality_sender).await;
-}
-
-#[embassy_executor::task(pool_size = 2)]
-async fn run_link_quality(
-    tx: InterfaceTxPublisher,
-    rx: embassy_sync::watch::Receiver<'static, CriticalSectionRawMutex, LinkQuality, 3>,
-) {
-    protocols::link_quality::run(tx, rx).await;
-}
-
-#[embassy_executor::task(pool_size = 2)]
-async fn run_modes(tx: InterfaceTxPublisher, rx: InterfaceCommandSubscriber) {
-    protocols::modes::run(tx, rx).await;
-}
-
 #[embassy_executor::task]
-async fn run_network(
-    mut runner: embassy_net::Runner<'static, Ethernet<'static, ETH, GenericPhy>>,
-) -> ! {
+async fn run_network(mut runner: embassy_net::Runner<'static, TunTapDevice>) -> ! {
     runner.run().await
 }
 
@@ -201,8 +144,8 @@ async fn run_socket(
     socket.bind(14551).unwrap();
     socket.set_hop_limit(Some(4));
 
-    let endpoint = mavio::Endpoint::v2(mavio::MavLinkId::new(ETHERNET_SYSTEM_ID, 0x01));
-    let mut mavlink_buffer = heapless::Vec::<u8, 1024>::new();
+    let endpoint = mavio::Endpoint::v2(mavio::MavLinkId::new(SYSTEM_ID, COMPONENT_ID));
+    let mut mavlink_buffer = Vec::<u8>::new();
 
     loop {
         let mut recv_buffer = [0; 1024];
@@ -213,7 +156,6 @@ async fn run_socket(
         .await
         {
             Either::First(message) => {
-                // TODO: this is awful
                 let frame = match message {
                     Rapid::Heartbeat(m) => endpoint.next_frame(&m).unwrap(),
                     Rapid::CommandAck(m) => endpoint.next_frame(&m).unwrap(),
@@ -244,26 +186,53 @@ async fn run_socket(
                     continue;
                 };
 
-                defmt::debug!("received packet: len: {}", len);
-                if let Err(..) = mavlink_buffer.extend_from_slice(&recv_buffer[..len]) {
-                    defmt::error!("mavlink buffer overrun");
-                    mavlink_buffer.truncate(0);
-                    continue;
-                }
+                log::debug!("received packet: len: {len}");
+                mavlink_buffer.extend_from_slice(&recv_buffer[..len]);
 
                 let frame_result = unsafe { mavio::Frame::deserialize(&mavlink_buffer) };
                 match frame_result {
                     Ok(frame) => {
                         publisher.publish(frame).await;
-                        mavlink_buffer.truncate(0);
+                        mavlink_buffer.clear();
                     }
                     Err(FrameError::FrameBufferIsTooSmall { .. }) => {}
                     Err(e) => {
-                        defmt::error!("mavio error: {}", defmt::Debug2Format(&e));
-                        mavlink_buffer.truncate(0);
+                        log::error!("mavio error: {e:?}");
+                        mavlink_buffer.clear();
                     }
                 }
             }
         }
     }
+}
+
+#[embassy_executor::task]
+async fn run_commands(
+    system_id: u8,
+    component_id: u8,
+    tx: InterfaceTxPublisher,
+    rx: links::InterfaceRxSubscriber,
+    cmd_tx: InterfaceCommandPublisher,
+    link_quality_sender: embassy_sync::watch::Sender<
+        'static,
+        CriticalSectionRawMutex,
+        LinkQuality,
+        3,
+    >,
+) {
+    links::protocols::commands::run(system_id, component_id, tx, rx, cmd_tx, link_quality_sender)
+        .await;
+}
+
+#[embassy_executor::task]
+async fn run_link_quality(
+    tx: InterfaceTxPublisher,
+    rx: embassy_sync::watch::Receiver<'static, CriticalSectionRawMutex, LinkQuality, 3>,
+) {
+    links::protocols::link_quality::run(tx, rx).await;
+}
+
+#[embassy_executor::task]
+async fn run_modes(tx: InterfaceTxPublisher, rx: InterfaceCommandSubscriber) {
+    links::protocols::modes::run(tx, rx).await;
 }

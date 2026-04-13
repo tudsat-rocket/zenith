@@ -26,4 +26,4 @@ pub use lis3::*;
 //pub mod gps;
 pub mod power;
 //pub use gps::*;
-pub use power::{AdcData, PowerMonitor};
+pub use power::PowerMonitor;

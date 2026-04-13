@@ -9,9 +9,8 @@ use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{Duration, Ticker};
 
+use firmware::Vehicle;
 use firmware::links::{Links, UplinkCommand};
-use firmware::vehicle::Vehicle;
-use rapid_dialect::rapid::messages::Heartbeat;
 
 use {defmt_rtt as _, panic_probe as _};
 
@@ -22,7 +21,7 @@ static EXECUTOR_MEDIUM: InterruptExecutor = InterruptExecutor::new();
 
 #[embassy_executor::main]
 async fn main(low_priority_spawner: Spawner) {
-    let mut board = fw::init_board().await;
+    let mut board = fw::board::init().await;
 
     // Start high priority executor
     interrupt::I2C3_EV.set_priority(Priority::P6);
@@ -42,13 +41,8 @@ async fn main(low_priority_spawner: Spawner) {
     )
     .await;
 
-    let vehicle = Vehicle::init(
-        board.sensors,
-        board.outputs,
-        board.adc,
-        low_priority_spawner,
-    )
-    .await;
+    fw::sensors::power::init(board.adc, low_priority_spawner);
+    let vehicle = Vehicle::new(board.sensors, board.outputs, mission::NoStorage).await;
 
     let links = Links::init(
         board.ethernet,
@@ -86,7 +80,6 @@ pub async fn main_loop(
             match cmd {
                 UplinkCommand::SetFlightMode(fm) => {
                     vehicle.set_mode(fm);
-                    links.send_telemetry_message::<Heartbeat>(&vehicle);
                 }
                 _ => {}
             }

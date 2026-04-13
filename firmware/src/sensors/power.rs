@@ -3,6 +3,8 @@ use embassy_stm32::adc::{Adc, AdcChannel, Instance, SampleTime, Temperature, Vre
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
 use embassy_time::{Duration, Instant, Ticker, Timer};
 
+use mission::AdcData;
+
 use crate::BoardAdc;
 
 const VSENSE_DIVIDER: u64 = (100 + 10) / 10;
@@ -10,17 +12,6 @@ const VSENSE_DIVIDER: u64 = (100 + 10) / 10;
 const SAMPLING_RATE_HZ: u64 = 100;
 
 static SIGNAL: Signal<CriticalSectionRawMutex, AdcData> = Signal::new();
-
-#[derive(Clone, Default)]
-pub struct AdcData {
-    pub bus_main_voltage: u16,
-    pub bus_supply_voltage: u16,
-    pub fc_current: i32,
-    pub recovery_voltage: u16,
-    pub recovery_current: i32,
-    pub temperature: i32,
-    // TODO: continuity check
-}
 
 #[derive(Default)]
 pub struct PowerMonitor {

@@ -217,8 +217,6 @@
 #![no_std]
 #![allow(async_fn_in_trait)]
 
-use rapid_dialect::FlightMode;
-
 /// Interval between messages in ms.
 ///
 /// Hardcoded right now, may become configurable.
@@ -251,10 +249,4 @@ pub mod config;
 pub mod messages;
 pub mod trx;
 
-// TODO: split or move somewhere else?
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UplinkCommand {
-    SetFlightMode(FlightMode),
-    RequestAvailableModes(usize),
-    RequestCanForwarding,
-}
+pub use links::UplinkCommand;

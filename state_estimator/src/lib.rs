@@ -11,8 +11,9 @@ use std::num::Wrapping;
 use ahrs::Ahrs;
 use filter::kalman::kalman_filter::KalmanFilter;
 use nalgebra::*;
+use rapid_dialect::FlightMode;
 
-const GRAVITY: f32 = 9.80665;
+pub const GRAVITY: f32 = 9.80665;
 const GPS_NO_FIX_STD_DEV: f32 = 999_999.0;
 
 // TODO
@@ -62,11 +63,11 @@ impl Default for StateEstimatorSettings {
 pub struct StateEstimator {
     /// current time
     time: Wrapping<u32>,
-    ///// current flight mode
-    //mode: FlightMode,
+    /// current flight mode
+    mode: FlightMode,
     /// time current flight mode was entered
     mode_time: Wrapping<u32>,
-    /// time current flight mode was entered
+    /// time of takeoff (entering Burn)
     takeoff_time: Wrapping<u32>,
     /// time since which flight mode logic condition has been true TODO: refactor
     condition_true_since: Option<Wrapping<u32>>,
@@ -168,6 +169,7 @@ impl StateEstimator {
 
         Self {
             time: Wrapping(0),
+            mode: FlightMode::default(),
             mode_time: Wrapping(0),
             takeoff_time: Wrapping(0),
             condition_true_since: None,
@@ -228,7 +230,7 @@ impl StateEstimator {
     pub fn update(
         &mut self,
         time: Wrapping<u32>,
-        //mode: FlightMo,
+        mode: FlightMode,
         gyroscope: Option<Vector3<f32>>,
         accelerometer1: Option<Vector3<f32>>,
         accelerometer2: Option<Vector3<f32>>,
@@ -237,31 +239,31 @@ impl StateEstimator {
         gps_datum: Option<GpsDatum>,
     ) {
         self.time = time;
-        // TODO
-        //if mode != self.mode {
-        //    if mode == FlightMode::Burn {
-        //        self.takeoff_time = self.time;
-        //    }
 
-        //    self.mode = mode;
-        //    self.mode_time = self.time;
-        //    self.condition_true_since = None;
+        if mode != self.mode {
+            if mode == FlightMode::Burn {
+                self.takeoff_time = self.time;
+            }
 
-        //    // In the free-fall flight modes we ignore the accelerometer data
-        //    // for orientation estimation.
-        //    (
-        //        *self.ahrs.acc_gain_mut(),
-        //        *self.ahrs.kp_mut(),
-        //        *self.ahrs.ki_mut(),
-        //    ) = match self.mode {
-        //        FlightMode::Burn | FlightMode::Coast => (
-        //            0.0,
-        //            self.settings.mahony_kp_ascent,
-        //            self.settings.mahony_ki_ascent,
-        //        ),
-        //        _ => (1.0, self.settings.mahony_kp, self.settings.mahony_ki),
-        //    }
-        //}
+            self.mode = mode;
+            self.mode_time = self.time;
+            self.condition_true_since = None;
+
+            // In the free-fall flight modes we ignore the accelerometer data
+            // for orientation estimation.
+            (
+                *self.ahrs.acc_gain_mut(),
+                *self.ahrs.kp_mut(),
+                *self.ahrs.ki_mut(),
+            ) = match self.mode {
+                FlightMode::Burn | FlightMode::Coast => (
+                    0.0,
+                    self.settings.mahony_kp_ascent,
+                    self.settings.mahony_ki_ascent,
+                ),
+                _ => (1.0, self.settings.mahony_kp, self.settings.mahony_ki),
+            };
+        }
 
         // Determine accelerometer to use. We prefer the primary because it is less noisy,
         // but have to switch to the secondary if we exceed +-16G (or get close enough) on any axis.
@@ -282,15 +284,19 @@ impl StateEstimator {
             let gyro = self.correct_orientation(gyro);
             let mag = self.correct_orientation(mag);
 
-            // Update the orientation estimator with IMU data
-            // TODO
-            //if self.mode != FlightMode::Burn {
-            self.orientation = self
-                .ahrs
-                .update(&(gyro * core::f32::consts::PI / 180.0), acc, &mag)
-                .ok()
-                .copied();
-            //}
+            // During burn, skip orientation updates entirely - assume the rocket
+            // flies straight. Less wrong than AHRS with launch rail vibrations.
+            if self.mode != FlightMode::Burn {
+                self.orientation = self
+                    .ahrs
+                    .update(
+                        &(gyro * <f32 as num_traits::FloatConst>::PI() / 180.0),
+                        acc,
+                        &mag,
+                    )
+                    .ok()
+                    .copied();
+            }
 
             // Rotate acceleration vector to get world-space acceleration
             // (where Z is straight up) and subtract gravity.
@@ -302,13 +308,12 @@ impl StateEstimator {
             self.acceleration_world = None;
         }
 
-        // Set the barometer variance depending on the current situation.
         // In the trans-/supersonic region, barometer readings become unreliable.
-        // TODO
-        //let mach = (self.mode == FlightMode::Burn || self.mode == FlightMode::Coast)
-        //    .then_some(self.mach())
-        //    .unwrap_or(0.0);
-        let mach = 0.0;
+        let mach = if self.mode == FlightMode::Burn || self.mode == FlightMode::Coast {
+            self.mach()
+        } else {
+            0.0
+        };
         let f = ((mach.clamp(0.1, 1.0) - 0.1) / 0.9).powi(1);
         self.kalman.R[0] =
             self.settings.std_dev_barometer + f * self.settings.std_dev_barometer_transsonic;
@@ -340,21 +345,29 @@ impl StateEstimator {
             }
         }
 
-        // TODO
+        // Continuously reset ground altitude before arming.
+        if mode < FlightMode::Armed {
+            self.altitude_ground = self.altitude_asl();
+        }
 
-        //// Continuously reset ground altitude before arming.
-        //if mode < Armed {
-        //    self.altitude_ground = self.altitude_asl();
-        //}
+        // Only track maximum height during flight
+        self.altitude_max = match mode {
+            FlightMode::Idle
+            | FlightMode::HardwareArmed
+            | FlightMode::Armed
+            | FlightMode::ArmedLaunchImminent => self.altitude_asl(),
+            FlightMode::Burn
+            | FlightMode::Coast
+            | FlightMode::RecoveryDrogue
+            | FlightMode::RecoveryMain => f32::max(self.altitude_max, self.altitude_asl()),
+            FlightMode::Landed => self.altitude_max,
+        };
+    }
 
-        //// Only track maximum height during flight
-        //self.altitude_max = match mode {
-        //    Idle | HardwareArmed | Armed | ArmedLaunchImminent => self.altitude_asl(),
-        //    Burn | Coast | RecoveryDrogue | RecoveryMain => {
-        //        f32::max(self.altitude_max, self.altitude_asl())
-        //    }
-        //    Landed => self.altitude_max,
-        //}
+    /// Vehicle-frame acceleration (body axes), after orientation correction and
+    /// accelerometer switching.
+    pub fn acceleration_vehicle(&self) -> Option<&Vector3<f32>> {
+        self.acceleration.as_ref()
     }
 
     pub fn acceleration_world_raw(&self) -> Option<&Vector3<f32>> {
@@ -460,90 +473,6 @@ impl StateEstimator {
     pub fn time_in_mode(&self) -> u32 {
         (self.time - self.mode_time).0
     }
-
-    // TODO
-    ///// Main flight logic. This function is responsible for deciding whether to switch to a new
-    ///// flight mode based on sensor data and therefore controls when the important events of the
-    ///// flight will take place.. Generally, all conditions have to be true for a given
-    ///// amount of time to avoid spurious decisions in case of weird sensor spikes/glitches.
-    //pub fn new_mode(&mut self, arm_voltage: u16) -> Option<FlightMode> {
-    //    let t_since_takeoff = self.time_since_takeoff();
-    //    let t_in_mode = self.time_in_mode();
-
-    //    let vertical_accel_vehicle_space = self.acceleration.map(|acc| acc.z).unwrap_or(0.0);
-    //    let drogue_duration = self.settings.drogue_output_settings.total_duration();
-    //    let main_duration = self.settings.main_output_settings.total_duration();
-
-    //    let gravity_present = self
-    //        .acceleration
-    //        .map(|acc| (GRAVITY * 0.95..GRAVITY * 1.05).contains(&acc.magnitude()))
-    //        .unwrap_or(true);
-    //    let condition_landed = gravity_present && self.vertical_speed().abs() < 1.0;
-
-    //    match self.mode {
-    //        // We switch between Idle and HwArmed based on the voltage behind the arm switch
-    //        FlightMode::Idle => self
-    //            .true_since(arm_voltage >= 100, 100)
-    //            .then(|| FlightMode::HardwareArmed),
-    //        FlightMode::HardwareArmed => self
-    //            .true_since(arm_voltage < 10, 100)
-    //            .then(|| FlightMode::Idle),
-    //        // Takeoff detection
-    //        FlightMode::Armed | FlightMode::ArmedLaunchImminent => {
-    //            // In the AND mode, we assume the breakwire to be open (pulled-out) when we lose
-    //            // contact with the power module. This way, if the CAN bus becomes damaged
-    //            // during/before takeoff, we simply fall back to acceleration-only detection.
-    //            let acceleration_high =
-    //                vertical_accel_vehicle_space > self.settings.min_takeoff_acc;
-    //            self.true_since(acceleration_high, self.settings.min_takeoff_acc_time)
-    //                .then(|| FlightMode::Burn)
-    //        }
-    //        // Wait for motor burnout
-    //        FlightMode::Burn => {
-    //            // TODO: acceleration
-    //            let burnout = self.true_since(
-    //                vertical_accel_vehicle_space < 0.0,
-    //                self.settings.min_takeoff_acc_time,
-    //            );
-    //            let min_exceeded = t_since_takeoff > self.settings.min_time_to_apogee;
-    //            (burnout || min_exceeded).then(|| FlightMode::Coast)
-    //        }
-    //        // Deployment of drogue parachute, i.e. apogee detection
-    //        FlightMode::Coast => {
-    //            let falling = self.true_since(
-    //                self.vertical_speed() < 0.0,
-    //                self.settings.apogee_min_falling_time,
-    //            );
-    //            let min_exceeded = t_since_takeoff > self.settings.min_time_to_apogee;
-    //            let max_exceeded = t_since_takeoff > self.settings.max_time_to_apogee;
-    //            ((min_exceeded && falling) || max_exceeded).then(|| FlightMode::RecoveryDrogue)
-    //        }
-    //        // Main parachute deployment, if required
-    //        FlightMode::RecoveryDrogue => match self.settings.main_output_mode {
-    //            MainOutputMode::AtApogee => {
-    //                (t_in_mode > drogue_duration).then(|| FlightMode::RecoveryMain)
-    //            }
-    //            MainOutputMode::BelowAltitude => {
-    //                let condition =
-    //                    self.altitude_agl() < self.settings.main_output_deployment_altitude;
-    //                let below_alt = self.true_since(condition, 100);
-    //                let min_time = u32::max(drogue_duration, self.settings.min_time_to_main);
-    //                (t_in_mode > min_time && below_alt).then(|| FlightMode::RecoveryMain)
-    //            }
-    //            MainOutputMode::Never => {
-    //                let landed = self.true_since(condition_landed, 1000);
-    //                (t_in_mode > drogue_duration && landed).then(|| FlightMode::Landed)
-    //            }
-    //        },
-    //        // Landing detection
-    //        FlightMode::RecoveryMain => {
-    //            let landed = self.true_since(condition_landed, 1000);
-    //            (t_in_mode > main_duration && landed).then(|| FlightMode::Landed)
-    //        }
-    //        // Once in the Landed mode, the vehicle will not do anything by itself
-    //        FlightMode::Landed => None,
-    //    }
-    //}
 
     fn true_since(&mut self, cond: bool, duration: u32) -> bool {
         self.condition_true_since = match (cond, self.condition_true_since) {

@@ -22,11 +22,14 @@ use mavio::error::FrameError;
 use mavio::prelude::V2;
 
 use crate::links::interfaces::{
-    InterfaceCommandSubscriber, InterfaceCommands, InterfaceRx, InterfaceRxPublisher,
-    InterfaceRxSubscriber, InterfaceTx, InterfaceTxPublisher, InterfaceTxSubscriber,
+    InterfaceCommandPublisher, InterfaceCommandSubscriber, InterfaceCommands, InterfaceRx,
+    InterfaceRxPublisher, InterfaceRxSubscriber, InterfaceTx, InterfaceTxPublisher,
+    InterfaceTxSubscriber,
 };
 use crate::links::protocols::link_quality::LinkQuality;
-use crate::links::{TelemetryLink, UplinkCommand, protocols};
+use mission::TelemetryLink;
+
+use crate::links::{UplinkCommand, protocols};
 
 #[cfg(not(feature = "gcs"))]
 pub const USB_SYSTEM_ID: u8 = 0x05;
@@ -95,7 +98,7 @@ impl UsbHandle {
             .unwrap();
 
         spawner
-            .spawn(protocols::commands::run(
+            .spawn(run_commands(
                 USB_SYSTEM_ID,
                 0x01,
                 tx.publisher().unwrap(),
@@ -106,14 +109,14 @@ impl UsbHandle {
             .unwrap();
 
         spawner
-            .spawn(protocols::link_quality::run(
+            .spawn(run_link_quality(
                 tx.publisher().unwrap(),
                 LINK_QUALITY.receiver().unwrap(),
             ))
             .unwrap();
 
         spawner
-            .spawn(protocols::modes::run(
+            .spawn(run_modes(
                 tx.publisher().unwrap(),
                 commands.subscriber().unwrap(),
             ))
@@ -132,8 +135,6 @@ impl UsbHandle {
 }
 
 impl TelemetryLink for UsbHandle {
-    const SENSOR_INTERVAL_MS: u32 = 200;
-
     fn send_message(&mut self, message: Rapid) {
         self.tx.publish_immediate(message);
     }
@@ -148,6 +149,39 @@ impl TelemetryLink for UsbHandle {
 
         None
     }
+}
+
+// These share pool_size with the ethernet wrappers (pool_size = 2 allows spawning from both
+// ethernet and USB interfaces).
+
+#[embassy_executor::task(pool_size = 2)]
+async fn run_commands(
+    system_id: u8,
+    component_id: u8,
+    tx: InterfaceTxPublisher,
+    rx: InterfaceRxSubscriber,
+    cmd_tx: InterfaceCommandPublisher,
+    link_quality_sender: embassy_sync::watch::Sender<
+        'static,
+        CriticalSectionRawMutex,
+        LinkQuality,
+        3,
+    >,
+) {
+    protocols::commands::run(system_id, component_id, tx, rx, cmd_tx, link_quality_sender).await;
+}
+
+#[embassy_executor::task(pool_size = 2)]
+async fn run_link_quality(
+    tx: InterfaceTxPublisher,
+    rx: embassy_sync::watch::Receiver<'static, CriticalSectionRawMutex, LinkQuality, 3>,
+) {
+    protocols::link_quality::run(tx, rx).await;
+}
+
+#[embassy_executor::task(pool_size = 2)]
+async fn run_modes(tx: InterfaceTxPublisher, rx: InterfaceCommandSubscriber) {
+    protocols::modes::run(tx, rx).await;
 }
 
 #[embassy_executor::task]

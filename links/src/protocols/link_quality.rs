@@ -1,22 +1,12 @@
 use embassy_futures::select::{Either, select};
-use embassy_sync::mutex::Mutex;
-use embassy_sync::watch::Receiver;
-use embassy_time::{Duration, Instant, Ticker, Timer};
-use rapid_dialect::rapid::messages::LinkNodeStatus;
-use static_cell::StaticCell;
-
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::watch::Receiver;
+use embassy_time::{Duration, Instant, Ticker};
 
-use rapid_dialect::rapid::{
-    enums::{MavModeProperty, MavStandardMode},
-    messages::AvailableModes,
-};
-use rapid_dialect::{FlightMode, Rapid};
+use rapid_dialect::Rapid;
+use rapid_dialect::rapid::messages::LinkNodeStatus;
 
-use crate::links::UplinkCommand;
-use crate::links::interfaces::{
-    InterfaceCommandSubscriber, InterfaceRxSubscriber, InterfaceTxPublisher,
-};
+use crate::InterfaceTxPublisher;
 
 #[derive(Clone, Default)]
 pub struct LinkQuality {
@@ -26,7 +16,6 @@ pub struct LinkQuality {
     pub messages_lost: u32,
 }
 
-#[embassy_executor::task(pool_size = 2)]
 pub async fn run(
     tx: InterfaceTxPublisher,
     mut rx: Receiver<'static, CriticalSectionRawMutex, LinkQuality, 3>,

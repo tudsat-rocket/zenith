@@ -5,8 +5,11 @@ members = [
     "telemetry",
     "firmware",
     "utils",
+    "links",
+    "mission",
+    "sitl",
 ]
-default-members = ["firmware"]
+default-members = ["sitl"]
 
 # We specify dependencies we use in multiple places here, so we can make sure
 # every crate uses the same version.
@@ -15,6 +18,13 @@ firmware = { path = "firmware" }
 state_estimator = { path = "state_estimator" }
 telemetry = { path = "telemetry" }
 utils = { path = "utils" }
+links = { path = "links" }
+mission = { path = "mission" }
+
+log = "0.4"
+env_logger = "0.11"
+embassy-net-tuntap = "0.1"
+critical-section = { version = "1.2", features = ["std"] }
 
 heapless = { version = "0.8.0", features = ["serde"] } # TODO: serde?
 thiserror = { version = "2.0", default-features = false }

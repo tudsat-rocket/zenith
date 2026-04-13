@@ -24,6 +24,8 @@ gcs = []
 [dependencies]
 state_estimator = { workspace = true }
 telemetry = { workspace = true }
+links = { workspace = true }
+mission = { workspace = true }
 
 thiserror = { workspace = true }
 nalgebra = { workspace = true }

@@ -1,6 +1,6 @@
 //! MAVLink protocols / "microservices"
 
 pub mod can_probe;
-pub mod commands;
-pub mod link_quality;
-pub mod modes;
+
+// Shared protocol handlers from the links crate
+pub use links::protocols::{commands, link_quality, modes};
