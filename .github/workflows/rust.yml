@@ -4,37 +4,41 @@ on: [push, pull_request]
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-Dwarnings" # treat warnings as errors
+  RUSTFLAGS: "-Dwarnings"
+
+# Toolchain (channel 1.91.1 + thumbv7em-none-eabihf target) is pinned in
+# rust-toolchain.toml and auto-installed by rustup on first cargo invocation.
 
 jobs:
-  cargo-check:
+  check:
     runs-on: ubuntu-latest
     steps:
-    - run: rustup update stable && rustup default stable
-    - uses: actions/checkout@v5
-    - uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-    - run: cargo check --all --all-features
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - run: sudo apt-get update && sudo apt-get install -y just
+      - run: just check
 
-  cargo-fmt:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - run: sudo apt-get update && sudo apt-get install -y just
+      - run: just test
+
+  fmt:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-    - run: rustup update stable && rustup default stable
-    - uses: actions/checkout@v5
-    - run: cargo fmt --check
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - run: sudo apt-get update && sudo apt-get install -y just
+      - run: just fmt-check
 
-  cargo-clippy:
+  clippy:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-    - run: rustup update stable && rustup default stable
-    - uses: actions/checkout@v5
-    - run: cargo clippy --all --all-features
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - run: sudo apt-get update && sudo apt-get install -y just
+      - run: just clippy
