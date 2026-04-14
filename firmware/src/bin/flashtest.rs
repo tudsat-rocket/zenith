@@ -7,6 +7,7 @@
 use core::net::Ipv4Addr;
 use core::net::SocketAddr;
 use core::net::SocketAddrV4;
+use core::ptr::read;
 
 use defmt::*;
 use embassy_net::DhcpConfig;
@@ -243,123 +244,14 @@ async fn main(spawner: Spawner) {
     // Launch network task
     spawner.spawn(net_task(runner)).unwrap();
 
-    Timer::after(Duration::from_secs(3)).await;
-
-    info!("===== STARTING SELF TEST =====");
-
-    sensor_test!(
-        "IMU1 accelerometer",
-        board.sensors.imu1,
-        accelerometer,
-        1000,
-        9.5..10.5,
-        0.0001..1.0
-    );
-    sensor_test!(
-        "IMU1 gyroscope    ",
-        board.sensors.imu1,
-        gyroscope,
-        1000,
-        0.1..5.0,
-        0.0001..1.0
-    );
-    sensor_test!(
-        "IMU2 accelerometer",
-        board.sensors.imu2,
-        accelerometer,
-        1000,
-        9.5..10.5,
-        0.0001..1.0
-    );
-    sensor_test!(
-        "IMU2 gyroscope    ",
-        board.sensors.imu2,
-        gyroscope,
-        1000,
-        0.1..5.0,
-        0.0001..1.0
-    );
-    sensor_test!(
-        "IMU3 accelerometer",
-        board.sensors.imu3,
-        accelerometer,
-        1000,
-        9.5..10.5,
-        0.0001..1.0
-    );
-    sensor_test!(
-        "IMU3 gyroscope    ",
-        board.sensors.imu3,
-        gyroscope,
-        1000,
-        0.1..5.0,
-        0.0001..1.0
-    );
-    sensor_test!(
-        "High-G acc.       ",
-        board.sensors.highg,
-        accelerometer,
-        1000,
-        9.5..10.5,
-        0.0001..0.001
-    );
-    sensor_test!(
-        "Magnetometer      ",
-        board.sensors.mag,
-        magnetometer,
-        1000,
-        1.0..500.0,
-        0.0001..1.0
-    );
-    baro_test!("Baro 1            ", board.sensors.baro1, 1000);
-    baro_test!("Baro 2            ", board.sensors.baro2, 1000);
-    baro_test!("Baro 3            ", board.sensors.baro3, 1000);
-
-    let result = with_timeout(Duration::from_secs(1), stack.wait_config_up()).await;
-    match (result, stack.config_v4()) {
-        (Ok(()), Some(config)) => info!("[SUCCESS] Ethernet ({})", config.address),
-        _ => error!("[FAILED]  Ethernet"),
-    }
-
-    if let Some(s) = run_lora_loopback_test(&mut board.lora1, &mut board.lora2).await {
-        info!(
-            "[SUCCESS] LoRa 1 -> LoRa 2 (RSSI: {}, SNR: {}, loss: {})",
-            s.rssi,
-            s.snr,
-            s.rssi - LORA_TEST_TX_POWER
-        );
-    } else {
-        error!("[FAILED]  LoRa 1 -> LoRa 2: FAILED");
-    }
-
-    Timer::after(Duration::from_millis(200)).await;
-
-    if let Some(s) = run_lora_loopback_test(&mut board.lora2, &mut board.lora1).await {
-        info!(
-            "[SUCCESS] LoRa 2 -> LoRa 1 (RSSI: {}, SNR: {}, loss: {})",
-            s.rssi,
-            s.snr,
-            s.rssi - LORA_TEST_TX_POWER
-        );
-    } else {
-        error!("[FAILED]  LoRa 2 -> LoRa 1");
-    }
-
-    if run_can_loopback_test(&mut board.can1, &mut board.can2).await {
-        info!("[SUCCESS] CAN 1 -> CAN 2 (1Mbps)");
-    } else {
-        error!("[FAILED]  CAN 1 -> CAN 2 (1Mbps)");
-    }
-
-    if run_can_loopback_test(&mut board.can2, &mut board.can1).await {
-        info!("[SUCCESS] CAN 2 -> CAN 1 (1Mbps)");
-    } else {
-        error!("[FAILED]  CAN 2 -> CAN 1 (1Mbps)");
-    }
-
-    info!("===== Flash Test =====");
-
-    info!("===== SELF TEST COMPLETE =====");
+    info!("===== FLASH TEST START =====");
+    let mut read_buffer: [u8; 8] = [0; 8];
+    let bytes_to_write: [u8; 8] = [0x17; 8];
+    board.flash.write(0, &bytes_to_write).await.unwrap();
+    // board.flash.erase_sector(0).await.unwrap();
+    Timer::after(Duration::from_secs(1)).await;
+    board.flash.read(0, &mut read_buffer).await.unwrap();
+    defmt::info!("read buffer: {}", read_buffer);
 
     let mut ticker = Ticker::every(Duration::from_hz(1));
     loop {

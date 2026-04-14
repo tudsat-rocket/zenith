@@ -54,7 +54,9 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          inherit buildInputs;
+          buildInputs = buildInputs ++ [
+            pkgs.just
+          ];
         };
 
         formatter = pkgs.nixfmt-rfc-style;

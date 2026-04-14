@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 default-run = "rocket"
 
+[lib]
+name = "firmware"
+path = "src/lib.rs"
+
 [[bin]]
 name = "rocket"
 path = "src/bin/rocket.rs"
@@ -16,6 +20,10 @@ required-features = ["gcs"]
 [[bin]]
 name = "selftest"
 path = "src/bin/selftest.rs"
+
+[[bin]]
+name = "flashtest"
+path = "src/bin/flashtest.rs"
 
 [features]
 default = []

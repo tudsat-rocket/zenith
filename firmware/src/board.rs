@@ -20,6 +20,8 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 
+#[cfg(not(feature = "gcs"))]
+// use embedded_hal::spi::SpiDevice;
 use lora_phy::LoRa;
 use lora_phy::iv::GenericSx126xInterfaceVariant;
 use lora_phy::sx126x::{self, Sx126x, Sx1262};
@@ -28,6 +30,8 @@ use rand::prelude::*;
 use rand_chacha::ChaCha20Rng;
 use static_cell::StaticCell;
 
+#[cfg(not(feature = "gcs"))]
+use crate::flash::W25Q128;
 use crate::sensors::*;
 use crate::{BoardAdc, BoardOutputs, BoardSensors, Irqs, LoraTransceiver, OurSpiDevice};
 
@@ -45,6 +49,7 @@ pub struct Board {
     pub iwdg: IndependentWatchdog<'static, IWDG1>,
     pub buzzer: (SimplePwm<'static, TIM2>, Channel),
     pub seed: u64,
+    pub flash: W25Q128<OurSpiDevice<'static>>,
 }
 
 static ETHERNET_PACKETS: StaticCell<PacketQueue<4, 4>> = StaticCell::new();
@@ -306,14 +311,17 @@ pub async fn init() -> Board {
     let spi3 = embassy_sync::mutex::Mutex::<CriticalSectionRawMutex, _>::new(spi3);
     let spi3 = SPI3_SHARED.init(spi3);
 
-    //use storage::{Flash, FlashHandle};
+    use crate::flash::W25Q128;
 
-    //let spi3_cs_flash = Output::new(p.PD6, Level::High, Speed::VeryHigh);
-    //#[cfg(not(feature = "gcs"))]
-    //let (flash, flash_handle, settings) = Flash::init(SpiDevice::new(spi3, spi3_cs_flash))
-    //    .await
-    //    .map_err(|_e| ())
-    //    .unwrap();
+    let spi3_cs_flash = Output::new(p.PD6, Level::High, Speed::VeryHigh);
+    #[cfg(not(feature = "gcs"))]
+    let flash = W25Q128::new(SpiDevice::new(spi3, spi3_cs_flash))
+        .await
+        .unwrap();
+    // let (flash, flash_handle, settings) = Flash::init(SpiDevice::new(spi3, spi3_cs_flash))
+    //     .await
+    //     .map_err(|_e| ())
+    //     .unwrap();
 
     // Initialize GPS
     // #[cfg(not(feature = "gcs"))]
@@ -401,7 +409,7 @@ pub async fn init() -> Board {
         lora2,
         can1,
         can2,
-        //flash,
+        flash,
         //flash_handle,
         usb,
         ethernet,

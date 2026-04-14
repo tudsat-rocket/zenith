@@ -16,6 +16,9 @@ flash *args:
 flash-selftest *args:
     cargo run -p firmware --bin selftest --release --target {{target}} {{args}}
 
+flash-flashtest *args:
+    cargo run -p firmware --bin flashtest --release --target {{target}} {{args}}
+
 # Build and flash the GCS firmware via probe-rs
 flash-gcs *args:
     cargo run -p firmware --bin gcs --release --features gcs --target {{target}} {{args}}

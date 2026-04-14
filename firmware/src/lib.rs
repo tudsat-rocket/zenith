@@ -19,6 +19,8 @@ use lora_phy::sx126x::{Sx126x, Sx1262};
 
 use mission::{BaroReading, NoStorage, Outputs, SensorReadings, Sensors};
 
+pub mod flash;
+
 use sensors::*;
 
 pub mod board;
