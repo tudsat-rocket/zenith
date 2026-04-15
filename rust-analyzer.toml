@@ -1,0 +1,11 @@
+# Separate projects so rust-analyzer can run for two different targets
+linkedProjects = [
+    "Cargo.toml",
+    "firmware/Cargo.toml",
+]
+
+[cargo]
+allTargets = true
+
+[check]
+allTargets = true
