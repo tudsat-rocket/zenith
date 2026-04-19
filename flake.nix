@@ -1,5 +1,5 @@
 {
-  description = "fw-draft";
+  description = "zenith - Embedded flight control firmware for high-powered rockets";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
@@ -39,29 +39,30 @@
           ]
           ++ [ rustToolchain ];
 
-        fw-draft = pkgs.rustPlatform.buildRustPackage {
-          pname = "fw-draft";
-          version = "0.1.0";
-          src = ./.;
-
-          cargoLock = {
-            lockFile = ./Cargo.lock;
-            allowBuiltinFetchGit = true;
-          };
-          inherit buildInputs;
-
-        };
+        # zenith = pkgs.rustPlatform.buildRustPackage {
+        #   pname = "zenith";
+        #   version = "0.1.0";
+        #   description = "Embedded flight control firmware for high-powered rockets";
+        #   src = ./.;
+        #
+        #   cargoLock = {
+        #     lockFile = ./Cargo.lock;
+        #     allowBuiltinFetchGit = true;
+        #   };
+        #   inherit buildInputs;
+        #
+        # };
       in
       {
         devShells.default = pkgs.mkShell {
-          inherit buildInputs;
+          buildInputs = buildInputs ++ [ pkgs.just ];
         };
 
         formatter = pkgs.nixfmt-rfc-style;
 
-        packages = {
-          default = fw-draft;
-        };
+        # packages = {
+        #   default = zenith;
+        # };
       }
     );
 }

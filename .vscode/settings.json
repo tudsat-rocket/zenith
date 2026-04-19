@@ -1,0 +1,11 @@
+// .vscode/settings.json
+{
+  "rust-analyzer.linkedProjects": [
+    "Cargo.toml",
+    "firmware/Cargo.toml"
+  ],
+  "rust-analyzer.check.overrideCommand": [
+    "${workspaceFolder}/check-all.sh"
+  ],
+  "rust-analyzer.check.invocationStrategy": "once"  // critical — don't run per-crate
+}
