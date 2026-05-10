@@ -1,9 +1,4 @@
 target := "thumbv7em-none-eabihf"
-chip := "STM32H743VITx"
-
-export CARGO_TARGET_THUMBV7EM_NONE_EABIHF_RUNNER := "probe-rs run --chip " + chip + " --catch-hardfault --always-print-stacktrace --log-format '{L} {m:white} {s}'"
-export CARGO_TARGET_THUMBV7EM_NONE_EABIHF_RUSTFLAGS := "-C linker=flip-link -C link-arg=-Tlink.x -C link-arg=-Tdefmt.x -C link-arg=--nmagic"
-export DEFMT_LOG := "info"
 
 default:
     @just --list
