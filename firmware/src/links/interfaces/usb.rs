@@ -140,14 +140,7 @@ impl TelemetryLink for UsbHandle {
     }
 
     fn try_recv_command(&mut self) -> Option<UplinkCommand> {
-        while let Some(cmd) = self.cmd_rx.try_next_message_pure() {
-            match cmd {
-                UplinkCommand::SetFlightMode(..) => return Some(cmd),
-                _ => {}
-            }
-        }
-
-        None
+        self.cmd_rx.try_next_message_pure()
     }
 }
 
@@ -220,25 +213,7 @@ async fn run_downlink(
         loop {
             let message = subscriber.next_message_pure().await;
 
-            // TODO: this is awful
-            let frame = match message {
-                Rapid::Heartbeat(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::CommandAck(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::AvailableModes(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::CanFrame(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::Attitude(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::LocalPositionNed(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::ScaledImu(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::ScaledImu2(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::ScaledImu3(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::ScaledPressure(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::ScaledPressure2(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::ScaledPressure3(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::BatteryStatus(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::RadioStatus(m) => endpoint.next_frame(&m).unwrap(),
-                Rapid::LinkNodeStatus(m) => endpoint.next_frame(&m).unwrap(),
-                _ => continue,
-            };
+            let frame = endpoint.next_frame(&message).unwrap();
 
             let mut transmit_buffer = [0; 1024];
             let n = frame.serialize(&mut transmit_buffer).unwrap();
