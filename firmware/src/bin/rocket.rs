@@ -42,7 +42,13 @@ async fn main(low_priority_spawner: Spawner) {
     .await;
 
     fw::sensors::power::init(board.adc, low_priority_spawner);
-    let vehicle = Vehicle::new(board.sensors, board.outputs, mission::NoStorage).await;
+    let vehicle = Vehicle::new(
+        board.sensors,
+        board.outputs,
+        mission::NoStorage,
+        mission::NoPropulsion,
+    )
+    .await;
 
     let links = Links::init(
         board.ethernet,

@@ -3,7 +3,7 @@ use core::num::Wrapping;
 use rapid_dialect::FlightMode;
 use state_estimator::{GRAVITY, StateEstimator};
 
-use crate::traits::RecoverySettings;
+use crate::RecoverySettings;
 
 /// Automatic flight mode transitions based on state estimator data.
 ///
@@ -20,19 +20,15 @@ pub struct FlightLogic {
 
 impl Default for FlightLogic {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl FlightLogic {
-    pub fn new() -> Self {
         Self {
             condition_true_since: None,
             mode_time: Wrapping(0),
             takeoff_time: Wrapping(0),
         }
     }
+}
 
+impl FlightLogic {
     /// Evaluate whether a mode transition should happen. Returns the new mode
     /// if a transition is warranted, or None to stay in the current mode.
     pub fn update(
@@ -47,7 +43,7 @@ impl FlightLogic {
 
         match mode {
             // Takeoff detection: sustained high acceleration along body Z axis
-            FlightMode::Armed | FlightMode::ArmedLaunchImminent => {
+            FlightMode::Armed | FlightMode::Ignition => {
                 let accel_z = estimator.acceleration_vehicle().map(|a| a.z).unwrap_or(0.0);
                 // ~3G threshold for 50ms
                 let high_accel = accel_z > 3.0 * GRAVITY;
@@ -59,7 +55,7 @@ impl FlightLogic {
             FlightMode::Burn => {
                 let accel_z = estimator.acceleration_vehicle().map(|a| a.z).unwrap_or(0.0);
                 let burnout = self.true_since(time, accel_z < 0.0, 50);
-                let min_exceeded = t_since_takeoff > 2000; // at least 2s of burn
+                let min_exceeded = t_since_takeoff > 15_000; // safety timeout
                 (burnout || min_exceeded).then_some(FlightMode::Coast)
             }
 
@@ -96,13 +92,19 @@ impl FlightLogic {
                 (t_in_mode > 3000 && landed).then_some(FlightMode::Landed)
             }
 
-            // TODO
-            FlightMode::Idle | FlightMode::HardwareArmed | FlightMode::Landed => None,
+            // No autonomous transition out of these.
+            FlightMode::Idle
+            | FlightMode::HardwareArmed
+            | FlightMode::Landed
+            | FlightMode::Filling
+            | FlightMode::Venting
+            | FlightMode::Pressurizing
+            | FlightMode::Hold => None,
         }
     }
 
     /// Must be called when the mode actually changes, to track mode timing.
-    pub fn on_mode_change(&mut self, time: Wrapping<u32>, new_mode: FlightMode) {
+    pub fn set_mode(&mut self, time: Wrapping<u32>, new_mode: FlightMode) {
         self.mode_time = time;
         self.condition_true_since = None;
         if new_mode == FlightMode::Burn {

@@ -1,5 +1,11 @@
 use nalgebra::Vector3;
-use state_estimator::StateEstimatorSettings;
+
+use rapid_dialect::Rapid;
+
+use links::UplinkCommand;
+use state_estimator::GpsDatum;
+
+use crate::Settings;
 
 #[derive(Clone, Default)]
 pub struct AdcData {
@@ -20,18 +26,32 @@ pub struct BaroReading {
 
 #[derive(Clone, Default)]
 pub struct SensorReadings {
+    /// IMU1 angular rate [deg/s]
     pub imu1_gyro: Option<Vector3<f32>>,
+    /// IMU1 acceleration [m/s^2]
     pub imu1_accel: Option<Vector3<f32>>,
+    /// IMU2 angular rate [deg/s]
     pub imu2_gyro: Option<Vector3<f32>>,
+    /// IMU2 acceleration [m/s^2]
     pub imu2_accel: Option<Vector3<f32>>,
+    /// IMU3 angular rate [deg/s]
     pub imu3_gyro: Option<Vector3<f32>>,
+    /// IMU3 acceleration [m/s^2]
     pub imu3_accel: Option<Vector3<f32>>,
+    /// High-G accel. acceleration [m/s^2]
     pub highg_accel: Option<Vector3<f32>>,
+    /// Magnetometer reading [µT]
     pub mag: Option<Vector3<f32>>,
+    /// Barometer 1 reading
     pub baro1: BaroReading,
+    /// Barometer 2 reading
     pub baro2: BaroReading,
+    /// Barometer 3 reading
     pub baro3: BaroReading,
+    /// ADC / Power data
     pub power: Option<AdcData>,
+    /// GPS reading
+    pub gps: Option<GpsDatum>,
 }
 
 pub trait Sensors {
@@ -44,30 +64,9 @@ pub trait Outputs {
     fn set_main(&mut self, high: bool);
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct Settings {
-    pub state_estimator: StateEstimatorSettings,
-    pub recovery: RecoverySettings,
-}
-
-#[derive(Debug, Clone)]
-pub struct RecoverySettings {
-    /// Altitude AGL (meters) at which to deploy the main parachute
-    pub main_deploy_altitude: f32,
-    /// Minimum time (ms) after launch before allowing drogue deployment
-    pub min_time_to_drogue: u32,
-    /// Minimum time (ms) after drogue before allowing main deployment
-    pub min_time_to_main: u32,
-}
-
-impl Default for RecoverySettings {
-    fn default() -> Self {
-        Self {
-            main_deploy_altitude: 450.0,
-            min_time_to_drogue: 1000,
-            min_time_to_main: 3000,
-        }
-    }
+pub trait TelemetryLink {
+    fn send_message(&mut self, message: Rapid);
+    fn try_recv_command(&mut self) -> Option<UplinkCommand>;
 }
 
 pub trait Storage {
@@ -75,6 +74,8 @@ pub trait Storage {
     async fn write_settings(&mut self, settings: &Settings);
 }
 
+// This is only here because the firmware doesn't have a storage impl yet. once that's in, this
+// moves to SITL.
 #[derive(Default)]
 pub struct NoStorage;
 

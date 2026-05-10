@@ -10,11 +10,9 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::watch::Sender;
 use embassy_time::{Duration, Instant};
 
-use rapid_dialect::rapid::{
-    enums::{MavCmd, MavResult},
-    messages::{AvailableModes, CommandAck},
-};
-use rapid_dialect::{FlightMode, Rapid};
+use rapid_dialect::rapid::enums::{MavCmd, MavResult, ValveId};
+use rapid_dialect::rapid::messages::{AvailableModes, CommandAck};
+use rapid_dialect::{FlightMode, Rapid, ValveCommand};
 
 use crate::protocols::link_quality::LinkQuality;
 use crate::{
@@ -95,6 +93,30 @@ pub async fn run(
                     MavCmd::CanForward => {
                         cmd_tx.publish(UplinkCommand::RequestCanForwarding).await;
                         MavResult::Accepted
+                    }
+                    MavCmd::CommandValve => {
+                        let valve_id = ValveId::try_from(cmd.param1 as u8).ok();
+                        let target_pos = cmd.param2.is_finite().then(|| cmd.param2.clamp(0.0, 1.0));
+                        let duration = (cmd.param3.is_finite() && cmd.param3 > 0.0)
+                            .then(|| core::time::Duration::from_secs_f32(cmd.param3));
+
+                        let valve_cmd = match (target_pos, duration) {
+                            (Some(p), Some(dur)) if p > 0.99 => Some(ValveCommand::PulseOpen(dur)),
+                            (Some(p), None) if p > 0.99 => Some(ValveCommand::Open),
+                            (Some(p), None) if p < 0.01 => Some(ValveCommand::Close),
+                            (Some(p), None) => Some(ValveCommand::Partial(p)),
+                            _ => None,
+                        };
+
+                        if let (Some(vid), Some(vc)) = (valve_id, valve_cmd) {
+                            cmd_tx.publish(UplinkCommand::CommandValve(vid, vc)).await;
+                            // TODO: currently this is lying, because the command may be dropped
+                            // in the vehicle main loop if the current flight mode does not permit
+                            // it. rethink our command result handling.
+                            MavResult::Accepted
+                        } else {
+                            MavResult::Denied
+                        }
                     }
                     _ => MavResult::Unsupported,
                 };

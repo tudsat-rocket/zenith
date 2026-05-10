@@ -118,6 +118,7 @@ impl Sensors for BoardSensors {
                 altitude: self.baro3.altitude(),
             },
             power: self.power.adc(),
+            gps: None,
         }
     }
 }

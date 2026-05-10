@@ -3,6 +3,9 @@ name = "links"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+hybrid = []
+
 [dependencies]
 rapid-dialect = { workspace = true }
 mavio = { version = "0.5.10", features = ["dlct-common"] }

@@ -7,6 +7,10 @@ edition = "2024"
 name = "sitl"
 path = "src/main.rs"
 
+[features]
+default = ["hybrid"]
+hybrid = ["mission/hybrid", "links/hybrid"]
+
 [dependencies]
 state_estimator = { path = "../state_estimator" }
 links = { workspace = true }

@@ -1,8 +1,5 @@
 #![cfg_attr(target_os = "none", no_std)] // this is imported by the firmware, so no standard library
 
-// TODO: until we clean/split this up.
-#![allow(dead_code)]
-
 #[cfg(target_os = "none")]
 use core::num::Wrapping;
 #[cfg(not(target_os = "none"))]
@@ -16,12 +13,14 @@ use rapid_dialect::FlightMode;
 pub const GRAVITY: f32 = 9.80665;
 const GPS_NO_FIX_STD_DEV: f32 = 999_999.0;
 
-// TODO
+#[derive(Debug, Clone, Default)]
 pub struct GpsDatum {
-    latitude: Option<f32>,
-    longitude: Option<f32>,
-    altitude: Option<f32>,
-    hdop: u16,
+    // TODO: include fix enum here?
+    pub latitude: Option<f32>,
+    pub longitude: Option<f32>,
+    pub altitude: Option<f32>,
+    /// Horizontal dilution of precision * 100
+    pub hdop: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -69,8 +68,6 @@ pub struct StateEstimator {
     mode_time: Wrapping<u32>,
     /// time of takeoff (entering Burn)
     takeoff_time: Wrapping<u32>,
-    /// time since which flight mode logic condition has been true TODO: refactor
-    condition_true_since: Option<Wrapping<u32>>,
     /// settings
     settings: StateEstimatorSettings,
     /// orientation
@@ -172,7 +169,6 @@ impl StateEstimator {
             mode: FlightMode::default(),
             mode_time: Wrapping(0),
             takeoff_time: Wrapping(0),
-            condition_true_since: None,
             settings,
             ahrs,
             kalman,
@@ -247,7 +243,6 @@ impl StateEstimator {
 
             self.mode = mode;
             self.mode_time = self.time;
-            self.condition_true_since = None;
 
             // In the free-fall flight modes we ignore the accelerometer data
             // for orientation estimation.
@@ -354,8 +349,12 @@ impl StateEstimator {
         self.altitude_max = match mode {
             FlightMode::Idle
             | FlightMode::HardwareArmed
+            | FlightMode::Filling
+            | FlightMode::Venting
+            | FlightMode::Pressurizing
+            | FlightMode::Hold
             | FlightMode::Armed
-            | FlightMode::ArmedLaunchImminent => self.altitude_asl(),
+            | FlightMode::Ignition => self.altitude_asl(),
             FlightMode::Burn
             | FlightMode::Coast
             | FlightMode::RecoveryDrogue
@@ -474,18 +473,6 @@ impl StateEstimator {
         (self.time - self.mode_time).0
     }
 
-    fn true_since(&mut self, cond: bool, duration: u32) -> bool {
-        self.condition_true_since = match (cond, self.condition_true_since) {
-            (true, None) => Some(self.time),
-            (true, Some(t)) => Some(t),
-            (false, _) => None,
-        };
-
-        self.condition_true_since
-            .map(|t| (self.time - t).0 > duration)
-            .unwrap_or(false)
-    }
-
     #[allow(clippy::unused_self)]
     fn correct_orientation(&self, raw: &Vector3<f32>) -> Vector3<f32> {
         *raw
@@ -497,17 +484,13 @@ impl StateEstimator {
     }
 
     #[allow(clippy::unused_self)]
-    fn gps_reliable(&self, _datum: &GpsDatum) -> bool {
-        // TODO
-        false
-        //self.mode != FlightMode::Burn
-        //    && self.mode != FlightMode::Coast
-        //    && datum.fix != GPSFixType::NoFix
-        //    && datum.num_satellites > 6
-        //    && datum.hdop < 300
-        //    && datum.latitude.is_some()
-        //    && datum.longitude.is_some()
-        //    && datum.altitude.is_some()
+    pub fn gps_reliable(&self, datum: &GpsDatum) -> bool {
+        // TODO: include fix enum here?
+        datum.latitude.is_some()
+            && datum.longitude.is_some()
+            && datum.altitude.is_some()
+            && datum.hdop > 0
+            && datum.hdop < 300
     }
 
     #[allow(clippy::unused_self)]

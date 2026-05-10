@@ -19,6 +19,7 @@ path = "src/bin/selftest.rs"
 
 [features]
 default = []
+hybrid = ["mission/hybrid", "links/hybrid"]
 gcs = []
 
 [dependencies]

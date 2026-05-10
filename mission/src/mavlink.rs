@@ -1,22 +1,28 @@
+#[cfg(target_os = "none")]
+use num_traits::Float as _;
 use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::{
-    MavAutopilot, MavBatteryChargeState, MavBatteryFault, MavBatteryFunction, MavBatteryMode,
-    MavBatteryType, MavModeFlag, MavType,
+    GpsFixType, MavAutopilot, MavBatteryChargeState, MavBatteryFault, MavBatteryFunction,
+    MavBatteryMode, MavBatteryType, MavModeFlag, MavSysStatusSensor, MavSysStatusSensorExtended,
+    MavType, RocketCapability,
 };
 use rapid_dialect::rapid::messages::{
-    Attitude, BatteryStatus, Heartbeat, LocalPositionNed, ScaledImu, ScaledImu2, ScaledImu3,
-    ScaledPressure, ScaledPressure2, ScaledPressure3,
+    Attitude, BatteryStatus, GlobalPositionInt, GpsRawInt, Heartbeat, LocalPositionNed, RocketInfo,
+    ScaledImu, ScaledImu2, ScaledImu3, ScaledPressure, ScaledPressure2, ScaledPressure3, SysStatus,
+    VfrHud,
 };
 
+use crate::propulsion::Propulsion;
 use crate::traits::{Outputs, Sensors, Storage};
 use crate::vehicle::Vehicle;
 
-impl<S: Sensors, O: Outputs, F: Storage> Into<Heartbeat> for &Vehicle<S, O, F> {
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<Heartbeat> for &Vehicle<S, O, F, P> {
     fn into(self) -> Heartbeat {
         Heartbeat {
             type_: MavType::Rocket,
             autopilot: MavAutopilot::Generic,
-            base_mode: if self.mode() >= FlightMode::HardwareArmed {
+            // TODO: rethink how we want to use the "armed" term
+            base_mode: if self.mode() >= FlightMode::Armed {
                 MavModeFlag::CUSTOM_MODE_ENABLED | MavModeFlag::SAFETY_ARMED
             } else {
                 MavModeFlag::CUSTOM_MODE_ENABLED
@@ -28,38 +34,114 @@ impl<S: Sensors, O: Outputs, F: Storage> Into<Heartbeat> for &Vehicle<S, O, F> {
     }
 }
 
-impl<S: Sensors, O: Outputs, F: Storage> Into<Attitude> for &Vehicle<S, O, F> {
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<Attitude> for &Vehicle<S, O, F, P> {
     fn into(self) -> Attitude {
         let q = self.state_estimator.orientation.unwrap_or_default();
-        let (roll, pitch, yaw) = q.euler_angles();
+        let body_z_world = q.transform_vector(&nalgebra::Vector3::new(0.0, 0.0, 1.0));
+        let pitch = body_z_world.z.clamp(-1.0, 1.0).asin();
+        let yaw = (-body_z_world.y).atan2(body_z_world.x);
+        let gyro = self.readings.imu1_gyro.unwrap_or_default();
 
         Attitude {
             time_boot_ms: self.time.0,
-            roll: pitch, // TODO
-            pitch: roll,
+            roll: 0.0,
+            pitch,
             yaw,
-            rollspeed: 0.0,
-            pitchspeed: 0.0,
-            yawspeed: 0.0,
+            rollspeed: gyro.z.to_radians(),
+            pitchspeed: gyro.x.to_radians(),
+            yawspeed: gyro.y.to_radians(),
         }
     }
 }
 
-impl<S: Sensors, O: Outputs, F: Storage> Into<LocalPositionNed> for &Vehicle<S, O, F> {
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<LocalPositionNed>
+    for &Vehicle<S, O, F, P>
+{
     fn into(self) -> LocalPositionNed {
+        let pos = self.state_estimator.position_local();
+        let vel = self.state_estimator.velocity();
+
         LocalPositionNed {
             time_boot_ms: self.time.0,
-            x: self.state_estimator.position_local().x,
-            y: self.state_estimator.position_local().y,
-            z: -self.state_estimator.position_local().z,
-            vx: self.state_estimator.velocity().x,
-            vy: self.state_estimator.velocity().y,
-            vz: -self.state_estimator.velocity().z,
+            x: pos.y,
+            y: pos.x,
+            z: -pos.z,
+            vx: vel.y,
+            vy: vel.x,
+            vz: -vel.z,
         }
     }
 }
 
-impl<S: Sensors, O: Outputs, F: Storage> Into<ScaledImu> for &Vehicle<S, O, F> {
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<GlobalPositionInt>
+    for &Vehicle<S, O, F, P>
+{
+    fn into(self) -> GlobalPositionInt {
+        let vel = self.state_estimator.velocity();
+
+        let q = self.state_estimator.orientation.unwrap_or_default();
+        let (_roll, _pitch, yaw) = q.euler_angles();
+
+        GlobalPositionInt {
+            time_boot_ms: self.time.0,
+            lat: (f64::from(self.state_estimator.latitude().unwrap_or(0.0)) * 1e7) as i32,
+            lon: (f64::from(self.state_estimator.longitude().unwrap_or(0.0)) * 1e7) as i32,
+            alt: (self.state_estimator.altitude_asl() * 1000.0) as i32,
+            relative_alt: (self.state_estimator.altitude_agl() * 1000.0) as i32,
+            vx: (vel.y * 100.0) as i16,
+            vy: (vel.x * 100.0) as i16,
+            vz: (-vel.z * 100.0) as i16,
+            hdg: ({
+                let d = yaw.to_degrees();
+                (d - (d / 360.0).floor() * 360.0) * 100.0
+            }) as u16,
+        }
+    }
+}
+
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<GpsRawInt> for &Vehicle<S, O, F, P> {
+    fn into(self) -> GpsRawInt {
+        let gps = self.readings.gps.as_ref();
+
+        let fix_type = match gps {
+            Some(g) if g.latitude.is_some() && g.longitude.is_some() && g.altitude.is_some() => {
+                GpsFixType::_3dFix
+            }
+            Some(_) => GpsFixType::NoFix,
+            None => GpsFixType::NoGps,
+        };
+
+        GpsRawInt {
+            time_usec: u64::from(self.time.0) * 1000,
+            fix_type,
+            lat: gps
+                .and_then(|g| g.latitude)
+                .map(|v| (f64::from(v) * 1e7) as i32)
+                .unwrap_or(0),
+            lon: gps
+                .and_then(|g| g.longitude)
+                .map(|v| (f64::from(v) * 1e7) as i32)
+                .unwrap_or(0),
+            alt: gps
+                .and_then(|g| g.altitude)
+                .map(|v| (v * 1000.0) as i32)
+                .unwrap_or(0),
+            eph: gps.map(|g| g.hdop).unwrap_or(u16::MAX),
+            epv: u16::MAX,
+            vel: u16::MAX,
+            cog: u16::MAX,
+            satellites_visible: u8::MAX,
+            alt_ellipsoid: 0,
+            h_acc: 0,
+            v_acc: 0,
+            vel_acc: 0,
+            hdg_acc: 0,
+            yaw: 0,
+        }
+    }
+}
+
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<ScaledImu> for &Vehicle<S, O, F, P> {
     fn into(self) -> ScaledImu {
         let acc1 = self.readings.imu1_accel;
         let gyro1 = self.readings.imu1_gyro;
@@ -81,7 +163,7 @@ impl<S: Sensors, O: Outputs, F: Storage> Into<ScaledImu> for &Vehicle<S, O, F> {
     }
 }
 
-impl<S: Sensors, O: Outputs, F: Storage> Into<ScaledImu2> for &Vehicle<S, O, F> {
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<ScaledImu2> for &Vehicle<S, O, F, P> {
     fn into(self) -> ScaledImu2 {
         let acc2 = self.readings.imu2_accel;
         let gyro2 = self.readings.imu2_gyro;
@@ -99,7 +181,7 @@ impl<S: Sensors, O: Outputs, F: Storage> Into<ScaledImu2> for &Vehicle<S, O, F> 
     }
 }
 
-impl<S: Sensors, O: Outputs, F: Storage> Into<ScaledImu3> for &Vehicle<S, O, F> {
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<ScaledImu3> for &Vehicle<S, O, F, P> {
     fn into(self) -> ScaledImu3 {
         let acc3 = self.readings.imu3_accel;
         let gyro3 = self.readings.imu3_gyro;
@@ -117,7 +199,9 @@ impl<S: Sensors, O: Outputs, F: Storage> Into<ScaledImu3> for &Vehicle<S, O, F> 
     }
 }
 
-impl<S: Sensors, O: Outputs, F: Storage> Into<ScaledPressure> for &Vehicle<S, O, F> {
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<ScaledPressure>
+    for &Vehicle<S, O, F, P>
+{
     fn into(self) -> ScaledPressure {
         ScaledPressure {
             time_boot_ms: self.time.0,
@@ -129,7 +213,9 @@ impl<S: Sensors, O: Outputs, F: Storage> Into<ScaledPressure> for &Vehicle<S, O,
     }
 }
 
-impl<S: Sensors, O: Outputs, F: Storage> Into<ScaledPressure2> for &Vehicle<S, O, F> {
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<ScaledPressure2>
+    for &Vehicle<S, O, F, P>
+{
     fn into(self) -> ScaledPressure2 {
         ScaledPressure2 {
             time_boot_ms: self.time.0,
@@ -141,7 +227,9 @@ impl<S: Sensors, O: Outputs, F: Storage> Into<ScaledPressure2> for &Vehicle<S, O
     }
 }
 
-impl<S: Sensors, O: Outputs, F: Storage> Into<ScaledPressure3> for &Vehicle<S, O, F> {
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<ScaledPressure3>
+    for &Vehicle<S, O, F, P>
+{
     fn into(self) -> ScaledPressure3 {
         ScaledPressure3 {
             time_boot_ms: self.time.0,
@@ -153,12 +241,171 @@ impl<S: Sensors, O: Outputs, F: Storage> Into<ScaledPressure3> for &Vehicle<S, O
     }
 }
 
-impl<S: Sensors, O: Outputs, F: Storage> Into<BatteryStatus> for &Vehicle<S, O, F> {
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<VfrHud> for &Vehicle<S, O, F, P> {
+    fn into(self) -> VfrHud {
+        let q = self.state_estimator.orientation.unwrap_or_default();
+        let (_roll, _pitch, yaw) = q.euler_angles();
+        let vel = self.state_estimator.velocity();
+
+        VfrHud {
+            airspeed: 0.0,
+            groundspeed: vel.xy().magnitude(),
+            heading: ({
+                let d = yaw.to_degrees();
+                d - (d / 360.0).floor() * 360.0
+            }) as i16,
+            throttle: if self.mode() == FlightMode::Burn {
+                100
+            } else {
+                0
+            },
+            alt: self.state_estimator.altitude_asl(),
+            climb: vel.z,
+        }
+    }
+}
+
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<SysStatus> for &Vehicle<S, O, F, P> {
+    fn into(self) -> SysStatus {
+        let r = &self.readings;
+
+        let hw_armed = self.mode() >= FlightMode::HardwareArmed;
+        let armed = self.mode() >= FlightMode::Armed;
+
+        // All sensors/subsystems physically present on the board.
+        let present = MavSysStatusSensor::_3D_GYRO
+            | MavSysStatusSensor::_3D_ACCEL
+            | MavSysStatusSensor::_3D_MAG
+            | MavSysStatusSensor::ABSOLUTE_PRESSURE
+            | MavSysStatusSensor::GPS
+            | MavSysStatusSensor::MAV_SYS_STATUS_AHRS
+            | MavSysStatusSensor::BATTERY
+            | MavSysStatusSensor::MOTOR_OUTPUTS
+            | MavSysStatusSensor::MAV_SYS_STATUS_LOGGING
+            | MavSysStatusSensor::MAV_SYS_STATUS_PREARM_CHECK
+            | MavSysStatusSensor::PROPULSION
+            | MavSysStatusSensor::MAV_SYS_STATUS_EXTENSION_USED;
+
+        let mut enabled = present;
+        if !armed {
+            enabled -= MavSysStatusSensor::MAV_SYS_STATUS_LOGGING;
+        }
+        if !hw_armed {
+            enabled -= MavSysStatusSensor::MOTOR_OUTPUTS;
+        }
+        if self.mode() != FlightMode::Burn && self.mode() != FlightMode::Ignition {
+            enabled -= MavSysStatusSensor::PROPULSION;
+        }
+
+        let mut health = MavSysStatusSensor::empty();
+        if r.imu1_gyro.is_some() && r.imu2_gyro.is_some() && r.imu3_gyro.is_some() {
+            health |= MavSysStatusSensor::_3D_GYRO;
+        }
+        if r.imu1_accel.is_some() && r.imu2_accel.is_some() && r.imu3_accel.is_some() {
+            health |= MavSysStatusSensor::_3D_ACCEL;
+        }
+        if r.mag.is_some() {
+            health |= MavSysStatusSensor::_3D_MAG;
+        }
+        if r.baro1.pressure.is_some() {
+            health |= MavSysStatusSensor::ABSOLUTE_PRESSURE;
+        }
+        if r.gps.is_some() {
+            health |= MavSysStatusSensor::GPS;
+        }
+        if self.state_estimator.orientation.is_some() {
+            health |= MavSysStatusSensor::MAV_SYS_STATUS_AHRS;
+        }
+        if r.power.is_some() {
+            health |= MavSysStatusSensor::BATTERY;
+        }
+        if armed {
+            health |= MavSysStatusSensor::MAV_SYS_STATUS_LOGGING;
+        }
+        if self.mode() >= FlightMode::HardwareArmed {
+            health |= MavSysStatusSensor::MOTOR_OUTPUTS;
+        }
+        if self.mode() >= FlightMode::HardwareArmed
+            && let Some(g) = &r.gps
+            && self.state_estimator.gps_reliable(g)
+        {
+            health |= MavSysStatusSensor::MAV_SYS_STATUS_PREARM_CHECK;
+        }
+        health |= MavSysStatusSensor::MAV_SYS_STATUS_EXTENSION_USED;
+
+        let recovery_present = MavSysStatusSensorExtended::MAV_SYS_STATUS_RECOVERY_SYSTEM;
+        let recovery_enabled = if armed {
+            recovery_present
+        } else {
+            MavSysStatusSensorExtended::empty()
+        };
+        let recovery_health = if armed {
+            recovery_present
+        } else {
+            MavSysStatusSensorExtended::empty()
+        };
+
+        SysStatus {
+            onboard_control_sensors_present: present,
+            onboard_control_sensors_enabled: enabled,
+            onboard_control_sensors_health: health,
+            load: 0,
+            voltage_battery: r
+                .power
+                .as_ref()
+                .map(|d| d.bus_main_voltage)
+                .unwrap_or(u16::MAX),
+            current_battery: r
+                .power
+                .as_ref()
+                .map(|d| (d.fc_current / 10).clamp(i16::MIN as i32, i16::MAX as i32) as i16)
+                .unwrap_or(-1),
+            battery_remaining: -1,
+            drop_rate_comm: 0,
+            errors_comm: 0,
+            errors_count1: 0,
+            errors_count2: 0,
+            errors_count3: 0,
+            errors_count4: 0,
+            onboard_control_sensors_present_extended: recovery_present,
+            onboard_control_sensors_enabled_extended: recovery_enabled,
+            onboard_control_sensors_health_extended: recovery_health,
+        }
+    }
+}
+
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<RocketInfo> for &Vehicle<S, O, F, P> {
+    fn into(self) -> RocketInfo {
+        RocketInfo {
+            propulsion_type: P::PROPULSION_TYPE,
+            capability_flags: RocketCapability::default(),
+        }
+    }
+}
+
+impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Into<BatteryStatus>
+    for &Vehicle<S, O, F, P>
+{
     fn into(self) -> BatteryStatus {
-        let adc = &self.readings.power;
+        const CELLS: usize = 3;
+
+        let adc = self.readings.power.as_ref();
 
         let mut voltages: [u16; 10] = [u16::MAX; 10];
-        voltages[0] = adc.as_ref().map(|d| d.bus_main_voltage).unwrap_or(u16::MAX);
+        if let Some(pack_mv) = adc.map(|d| d.bus_main_voltage) {
+            voltages[0] = pack_mv;
+        }
+
+        let current_battery = adc
+            .map(|d| (d.fc_current / 10).clamp(i16::MIN as i32, i16::MAX as i32) as i16)
+            .unwrap_or(-1);
+
+        let battery_remaining = adc
+            .map(|d| {
+                let cell_mv = i32::from(d.bus_main_voltage) / CELLS as i32;
+                (((cell_mv - 3300) * 100) / (4200 - 3300)).clamp(0, 100) as i8
+            })
+            .unwrap_or(-1);
 
         BatteryStatus {
             id: 0x01,
@@ -166,10 +413,10 @@ impl<S: Sensors, O: Outputs, F: Storage> Into<BatteryStatus> for &Vehicle<S, O, 
             battery_function: MavBatteryFunction::Avionics,
             temperature: i16::MAX,
             voltages,
-            current_battery: (adc.as_ref().map(|d| d.fc_current).unwrap_or(0)) as i16,
-            current_consumed: (adc.as_ref().map(|d| d.recovery_current).unwrap_or(0)),
-            energy_consumed: (adc.as_ref().map(|d| d.recovery_voltage).unwrap_or(0)) as i32,
-            battery_remaining: -1,
+            current_battery,
+            current_consumed: -1,
+            energy_consumed: -1,
+            battery_remaining,
             time_remaining: 0,
             charge_state: MavBatteryChargeState::Undefined,
             voltages_ext: [u16::MAX; 4],

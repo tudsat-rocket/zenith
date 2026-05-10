@@ -8,8 +8,12 @@ state_estimator = { workspace = true }
 links = { workspace = true }
 rapid-dialect = { workspace = true }
 nalgebra = { workspace = true }
+num-traits = { version = "0.2", default-features = false, features = ["libm"] }
 mavio = { version = "0.5.10", features = ["dlct-common"] }
 log = { workspace = true }
+
+[features]
+hybrid = []
 
 [lints]
 workspace = true

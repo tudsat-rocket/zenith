@@ -1,16 +1,24 @@
 //! Shared test harness for sitl integration tests.
-//!
-//! Drives a real `Vehicle` + `FlightSimulation` in a tight loop without any
-//! real-time waits. Each `Harness` owns its own `RecoveryFlags`, so multiple
-//! tests may run in parallel.
 
 #![allow(dead_code)]
 
+use std::sync::{Arc, Mutex};
+
 use mission::{Settings, Storage, Vehicle as MissionVehicle};
 use rapid_dialect::FlightMode;
-use sitl::{FlightSimulation, RecoveryFlags, StdOutputs, StdSensors};
+use sitl::{RecoveryFlags, SharedSimulation, Simulation, StdOutputs, StdSensors};
 
-pub type Vehicle = MissionVehicle<StdSensors, StdOutputs, MemoryStorage>;
+#[cfg(not(feature = "hybrid"))]
+use mission::NoPropulsion;
+
+#[cfg(feature = "hybrid")]
+use sitl::simulation::hybrid::SitlPropulsion;
+
+#[cfg(not(feature = "hybrid"))]
+pub type Vehicle = MissionVehicle<StdSensors, StdOutputs, MemoryStorage, NoPropulsion>;
+
+#[cfg(feature = "hybrid")]
+pub type Vehicle = MissionVehicle<StdSensors, StdOutputs, MemoryStorage, SitlPropulsion>;
 
 /// Test `Storage` double that hands out a fixed `Settings` (or None).
 pub struct MemoryStorage {
@@ -35,67 +43,85 @@ impl Storage for MemoryStorage {
 
 pub struct Harness {
     pub vehicle: Vehicle,
-    pub flags: RecoveryFlags,
+    pub sim: SharedSimulation,
 }
 
 impl Harness {
-    /// Construct a harness. If `settings` is Some, the vehicle reads it from
-    /// storage on construction (exercising the real `Vehicle::new` code
-    /// path). If None, storage returns None and `Settings::default()` is
-    /// used.
     pub async fn new(settings: Option<Settings>) -> Self {
         let flags = RecoveryFlags::default();
-        let sensors = StdSensors::new(flags.clone());
-        let outputs = StdOutputs::new(flags.clone());
+        let sim: SharedSimulation = Arc::new(Mutex::new(Simulation::new(flags.clone())));
+        let sensors = StdSensors::new(sim.clone());
+        let outputs = StdOutputs::new(flags);
         let storage = MemoryStorage::new(settings);
-        let vehicle = MissionVehicle::new(sensors, outputs, storage).await;
-        Self { vehicle, flags }
+
+        #[cfg(not(feature = "hybrid"))]
+        let vehicle = MissionVehicle::new(sensors, outputs, storage, NoPropulsion).await;
+
+        #[cfg(feature = "hybrid")]
+        let vehicle = {
+            let propulsion = SitlPropulsion::new(sim.clone());
+            MissionVehicle::new(sensors, outputs, storage, propulsion).await
+        };
+
+        Self { vehicle, sim }
     }
 
     pub fn arm(&mut self) {
         self.vehicle.set_mode(FlightMode::Armed);
         // Notify sim directly so the 5s ignition timer starts even though
         // run_until/run_ticks hasn't seen the mode change yet.
-        self.vehicle.sensors.set_flight_mode(FlightMode::Armed);
+        self.sim.lock().unwrap().set_flight_mode(FlightMode::Armed);
     }
 
     pub fn mode(&self) -> FlightMode {
         self.vehicle.mode()
     }
 
-    pub fn sim(&self) -> &FlightSimulation {
-        self.vehicle.sensors.sim()
-    }
-
     pub fn altitude_agl(&self) -> f32 {
-        self.sim().altitude_agl()
+        self.sim.lock().unwrap().physics.altitude_agl()
     }
 
     pub fn drogue_active(&self) -> bool {
-        self.flags.drogue.load(std::sync::atomic::Ordering::Relaxed)
+        self.sim
+            .lock()
+            .unwrap()
+            .physics
+            .flags
+            .drogue
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn main_active(&self) -> bool {
-        self.flags.main.load(std::sync::atomic::Ordering::Relaxed)
+        self.sim
+            .lock()
+            .unwrap()
+            .physics
+            .flags
+            .main
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Drive `vehicle.tick()` N times. Mirrors sitl::main_loop's
-    /// mode-change-> sim notification so arming transitions into launch.
+    /// Fast-forward through the boot-time pressurant fill. The hybrid sim
+    /// fills pressurant from ambient to nominal over 30s while in `Idle`;
+    /// most tests want pressurant ready before exercising propellant ops.
+    #[cfg(feature = "hybrid")]
+    pub async fn fill_pressurant(&mut self) {
+        self.run_ticks(31_000).await;
+    }
+
+    fn tick_sim(&mut self) {
+        let mut s = self.sim.lock().unwrap();
+        s.set_flight_mode(self.vehicle.mode());
+        s.tick();
+    }
+
     pub async fn run_ticks(&mut self, n: u32) {
-        let mut last_mode = self.vehicle.mode();
         for _ in 0..n {
+            self.tick_sim();
             self.vehicle.tick().await;
-            let mode = self.vehicle.mode();
-            if mode != last_mode {
-                self.vehicle.sensors.set_flight_mode(mode);
-                last_mode = mode;
-            }
         }
     }
 
-    /// Tick until `pred(&harness)` returns true, or `max_ticks` elapses.
-    /// Returns the tick count at which it held, or Err on timeout.
-    /// The predicate is also called once before the first tick.
     pub async fn run_until(
         &mut self,
         max_ticks: u32,
@@ -104,23 +130,19 @@ impl Harness {
         if pred(self) {
             return Ok(0);
         }
-        let mut last_mode = self.vehicle.mode();
+
         for i in 1..=max_ticks {
+            self.tick_sim();
             self.vehicle.tick().await;
-            let mode = self.vehicle.mode();
-            if mode != last_mode {
-                self.vehicle.sensors.set_flight_mode(mode);
-                last_mode = mode;
-            }
             if pred(self) {
                 return Ok(i);
             }
         }
+
         Err("run_until: max_ticks exceeded")
     }
 }
 
-/// Convenience: run an async block on the current thread to completion.
 pub fn block_on<F: core::future::Future>(f: F) -> F::Output {
     embassy_futures::block_on(f)
 }

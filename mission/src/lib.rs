@@ -3,10 +3,15 @@
 
 pub mod flight_logic;
 mod mavlink;
-mod telemetry;
+pub mod propulsion;
+mod settings;
 mod traits;
 mod vehicle;
 
-pub use telemetry::TelemetryLink;
+pub use settings::*;
 pub use traits::*;
 pub use vehicle::Vehicle;
+
+pub use propulsion::{
+    NoPropulsion, Propulsion, PropulsionError, TankId, TankReading, ValveCommand, ValveReading,
+};

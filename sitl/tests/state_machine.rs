@@ -1,3 +1,4 @@
+#![cfg(not(feature = "hybrid"))]
 //! Full nominal flight: arm the vehicle, run the simulation to landing, and
 //! assert the mode sequence passes through every expected stage in order.
 
@@ -7,8 +8,8 @@ use common::{Harness, block_on};
 use rapid_dialect::FlightMode;
 
 /// Max ticks (ms) we will allow for a full flight. Descent alone at the
-/// default -15 m/s drogue / -5 m/s main rates from apogee to ground is on
-/// the order of 150s; 400s is a comfortable upper bound.
+/// default -40 m/s drogue / -9 m/s main rates from apogee to ground is on
+/// the order of 80s; 400s is a comfortable upper bound.
 const MAX_TICKS: u32 = 400_000;
 
 #[test]

@@ -6,15 +6,17 @@ use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber};
 use mavio::Frame;
 use mavio::prelude::V2;
 
-use rapid_dialect::{FlightMode, Rapid};
+use rapid_dialect::rapid::enums::ValveId;
+use rapid_dialect::{FlightMode, Rapid, ValveCommand};
 
 pub mod protocols;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UplinkCommand {
     SetFlightMode(FlightMode),
     RequestAvailableModes(usize),
     RequestCanForwarding,
+    CommandValve(ValveId, ValveCommand),
 }
 
 pub const DOWNLINK_N: usize = 32;

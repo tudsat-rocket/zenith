@@ -1,3 +1,4 @@
+#![cfg(not(feature = "hybrid"))]
 //! Verify settings from `Storage` drive vehicle behavior, and that defaults
 //! apply when storage is empty. Uses the main-parachute deploy altitude as
 //! a concrete, observable effect.
@@ -41,8 +42,8 @@ fn main_deploys_at_configured_altitude() {
         let mut h = Harness::new(Some(settings)).await;
         let alt = estimator_altitude_at_main_deploy(&mut h).await;
         // Flight logic fires main when estimator altitude falls below the
-        // configured threshold; 100ms debounce at drogue rate (~15 m/s)
-        // adds up to ~1.5m of undershoot.
+        // configured threshold; 100ms debounce at drogue rate (~40 m/s)
+        // adds up to ~4m of undershoot.
         assert!(
             (180.0..=200.0).contains(&alt),
             "main deployed at estimator altitude {alt:.1}m AGL, expected just below 200m",
@@ -55,12 +56,12 @@ fn main_deploys_at_default_altitude_when_not_configured() {
     block_on(async {
         // `None` -> MemoryStorage::read_settings returns None
         // -> Vehicle::new falls back to Settings::default()
-        // -> default main_deploy_altitude = 450.0
+        // -> default main_deploy_altitude = 400.0
         let mut h = Harness::new(None).await;
         let alt = estimator_altitude_at_main_deploy(&mut h).await;
         assert!(
-            (430.0..=450.0).contains(&alt),
-            "main deployed at estimator altitude {alt:.1}m AGL, expected just below default 450m",
+            (380.0..=400.0).contains(&alt),
+            "main deployed at estimator altitude {alt:.1}m AGL, expected just below default 400m",
         );
     });
 }

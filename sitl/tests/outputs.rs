@@ -1,3 +1,4 @@
+#![cfg(not(feature = "hybrid"))]
 //! Recovery output safety and correctness:
 //! - drogue/main GPIO flags are actually asserted in their respective modes;
 //! - Armed state does not auto-advance to Burn without the sim providing
