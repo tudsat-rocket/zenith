@@ -12,6 +12,45 @@ use rapid_dialect::{FlightMode, Rapid};
 
 use crate::{InterfaceCommandSubscriber, InterfaceTxPublisher, UplinkCommand};
 
+fn mode_properties(mode: FlightMode) -> MavModeProperty {
+    let mut props = MavModeProperty::default();
+
+    let hidden = match mode {
+        #[cfg(feature = "hybrid")]
+        FlightMode::Armed => true,
+        #[cfg(not(feature = "hybrid"))]
+        FlightMode::Filling
+        | FlightMode::Venting
+        | FlightMode::Pressurizing
+        | FlightMode::Hold
+        | FlightMode::Ignition => true,
+        _ => false,
+    };
+
+    if hidden {
+        props |= MavModeProperty::NOT_USER_SELECTABLE;
+    }
+
+    if !matches!(
+        mode,
+        FlightMode::Idle | FlightMode::HardwareArmed | FlightMode::Landed
+    ) {
+        props |= MavModeProperty::ADVANCED;
+    }
+
+    if matches!(
+        mode,
+        FlightMode::Burn
+            | FlightMode::Coast
+            | FlightMode::RecoveryDrogue
+            | FlightMode::RecoveryMain
+    ) {
+        props |= MavModeProperty::AUTO_MODE;
+    }
+
+    props
+}
+
 pub async fn run(tx: InterfaceTxPublisher, mut rx: InterfaceCommandSubscriber) {
     log::info!("modes: task started");
     loop {
@@ -27,7 +66,7 @@ pub async fn run(tx: InterfaceTxPublisher, mut rx: InterfaceCommandSubscriber) {
                             mode_index: (i + 1) as u8,
                             standard_mode: MavStandardMode::NonStandard,
                             custom_mode: mode as u32,
-                            properties: MavModeProperty::default(),
+                            properties: mode_properties(mode),
                             mode_name: mode.mavlink_name(),
                         });
                         tx.publish(msg).await;
@@ -40,7 +79,7 @@ pub async fn run(tx: InterfaceTxPublisher, mut rx: InterfaceCommandSubscriber) {
                         mode_index: index as u8,
                         standard_mode: MavStandardMode::NonStandard,
                         custom_mode: mode as u32,
-                        properties: MavModeProperty::default(),
+                        properties: mode_properties(mode),
                         mode_name: mode.mavlink_name(),
                     });
                     tx.publish(msg).await;
