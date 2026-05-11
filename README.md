@@ -15,7 +15,7 @@ Embedded flight control firmware for high-powered rockets, using embassy on STM3
 Run the code (or as much as possible of it) on a regular (Linux for now) system:
 
 ```
-just sitl
+just sitl-hybrid
 ```
 
 This will attempt to run `sitl/tap.sh` which uses sudo, so it may prompt for your password. This is required for an initial setup of a `tuntap` virtual network interface for the simulated firmware to use.
@@ -33,6 +33,6 @@ In addition to the other requirements, you need:
 
 To build and flash the firmware, run:
 
-- `just flash` for the FC firmware
+- `just flash-hybrid` for the FC firmware
 - `just flash-gcs` for the GCS firmware
 - `just flash-selftest` for a hardware self-test firmware
