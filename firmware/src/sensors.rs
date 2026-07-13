@@ -23,7 +23,7 @@ pub mod lis3;
 pub use lis3::*;
 
 // Misc.
-//pub mod gps;
+pub mod gps;
 pub mod power;
-//pub use gps::*;
+pub use gps::*;
 pub use power::PowerMonitor;

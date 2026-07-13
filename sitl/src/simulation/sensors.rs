@@ -220,6 +220,7 @@ impl SensorModel {
             longitude: Some(lon),
             altitude: Some(alt),
             hdop,
+            num_satellites: 5,
         })
     }
 }

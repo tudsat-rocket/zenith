@@ -21,6 +21,7 @@ pub struct GpsDatum {
     pub altitude: Option<f32>,
     /// Horizontal dilution of precision * 100
     pub hdop: u16,
+    pub num_satellites: u8,
 }
 
 #[derive(Debug, Clone)]

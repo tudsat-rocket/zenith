@@ -35,6 +35,8 @@ pub struct Board {
     pub sensors: BoardSensors,
     pub outputs: BoardOutputs,
     pub adc: BoardAdc,
+    #[cfg(not(feature = "gcs"))]
+    pub gps: GPS,
     pub can1: embassy_stm32::can::Can<'static>,
     pub can2: embassy_stm32::can::Can<'static>,
     pub lora1: LoRa<LoraTransceiver, embassy_time::Delay>,
@@ -316,8 +318,8 @@ pub async fn init() -> Board {
     //    .unwrap();
 
     // Initialize GPS
-    // #[cfg(not(feature = "gcs"))]
-    // let (gps, gps_handle) = GPS::init(p.USART2, p.PE1, p.PE0, p.DMA1_CH6, p.DMA1_CH5);
+    #[cfg(not(feature = "gcs"))]
+    let (gps, gps_handle) = GPS::init(p.UART8, p.PE1, p.PE0, p.DMA1_CH6, p.DMA1_CH5);
 
     //#[cfg(not(feature = "gcs"))]
     //let adc = Adc::new(p.ADC1, &mut Delay);
@@ -377,6 +379,8 @@ pub async fn init() -> Board {
             baro2,
             baro3,
             power: PowerMonitor::default(),
+            #[cfg(not(feature = "gcs"))]
+            gps: gps_handle,
         },
         outputs: BoardOutputs {
             leds,
@@ -397,6 +401,8 @@ pub async fn init() -> Board {
             recovery_current: adc_recovery_current,
             continuity_check: adc_continuity_check,
         },
+        #[cfg(not(feature = "gcs"))]
+        gps,
         lora1,
         lora2,
         can1,

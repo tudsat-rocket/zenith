@@ -41,7 +41,9 @@ async fn main(low_priority_spawner: Spawner) {
     )
     .await;
 
-    fw::sensors::power::init(board.adc, low_priority_spawner);
+    fw::sensors::power::spawn(board.adc, low_priority_spawner);
+    fw::sensors::gps::spawn(board.gps, low_priority_spawner);
+
     let vehicle = Vehicle::new(
         board.sensors,
         board.outputs,

@@ -52,6 +52,8 @@ pub struct BoardSensors {
     pub baro2: LPS22<OurSpiDevice<'static>>,
     pub baro3: BMP580<OurSpiDevice<'static>>,
     pub power: PowerMonitor,
+    #[cfg(not(feature = "gcs"))]
+    pub gps: GPSHandle,
 }
 
 pub struct BoardOutputs {
@@ -118,6 +120,9 @@ impl Sensors for BoardSensors {
                 altitude: self.baro3.altitude(),
             },
             power: self.power.adc(),
+            #[cfg(not(feature = "gcs"))]
+            gps: self.gps.datum(),
+            #[cfg(feature = "gcs")]
             gps: None,
         }
     }

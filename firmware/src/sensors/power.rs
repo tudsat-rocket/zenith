@@ -19,7 +19,7 @@ pub struct PowerMonitor {
     filtered: AdcData,
 }
 
-pub fn init(adc: BoardAdc, spawner: Spawner) -> PowerMonitor {
+pub fn spawn(adc: BoardAdc, spawner: Spawner) -> PowerMonitor {
     spawner.spawn(run(adc)).unwrap();
 
     PowerMonitor::default()

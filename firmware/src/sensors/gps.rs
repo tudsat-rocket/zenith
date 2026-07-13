@@ -1,23 +1,24 @@
+use embassy_executor::Spawner;
 use embassy_stm32::mode::Async;
 use heapless::{String, Vec};
 
 use embassy_embedded_hal::SetConfig;
+use embassy_stm32::Peri;
 use embassy_stm32::bind_interrupts;
 use embassy_stm32::peripherals::*;
 use embassy_stm32::usart::{Error, Uart};
-use embassy_stm32::Peri;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Receiver, Sender};
 use embassy_time::{Duration, Instant, Timer};
 
+use rapid_dialect::rapid::enums::GpsFixType;
+use state_estimator::GpsDatum;
 use static_cell::StaticCell;
 
 use defmt::*;
 
-use shared_types::*;
-
 bind_interrupts!(struct Irqs {
-    USART2 => embassy_stm32::usart::InterruptHandler<embassy_stm32::peripherals::USART2>;
+    UART8 => embassy_stm32::usart::InterruptHandler<embassy_stm32::peripherals::UART8>;
 });
 
 const DESIRED_BAUD_RATE: u32 = 115_200;
@@ -26,17 +27,21 @@ const BAUD_RATE_OPTIONS: [u32; 2] = [115_200, 9600];
 // hardcoded to avoid needing alloc::format
 const DESIRED_BAUD_RATE_MESSAGE: &'static str = "$PUBX,41,1,0007,0003,115200,0*18\r\n";
 
-static CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, GPSDatum, 5>> = StaticCell::new();
+static CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, GpsDatum, 5>> = StaticCell::new();
 
 pub struct GPS {
     uart: Uart<'static, Async>,
-    sender: Sender<'static, CriticalSectionRawMutex, GPSDatum, 5>,
+    sender: Sender<'static, CriticalSectionRawMutex, GpsDatum, 5>,
 }
 
 pub struct GPSHandle {
-    receiver: Receiver<'static, CriticalSectionRawMutex, GPSDatum, 5>,
-    last_datum: Option<(GPSDatum, Instant)>,
+    receiver: Receiver<'static, CriticalSectionRawMutex, GpsDatum, 5>,
+    last_datum: Option<(GpsDatum, Instant)>,
     new_datum: bool,
+}
+
+pub fn spawn(gps: GPS, spawner: Spawner) {
+    spawner.spawn(run(gps)).unwrap();
 }
 
 #[embassy_executor::task]
@@ -50,12 +55,10 @@ pub async fn run(mut gps: GPS) -> ! {
 }
 
 impl<'d> GPS {
-    // TODO: dma channels
-    // pub fn init(p: USART2, tx: PA3, rx: PA2, tx_dma: DMA1_CH6, rx_dma: DMA1_CH5) -> (GPS, GPSHandle) {
     pub fn init(
-        p: Peri<'static, USART2>,
-        tx: Peri<'static, PA3>,
-        rx: Peri<'static, PA2>,
+        p: Peri<'static, UART8>,
+        tx: Peri<'static, PE1>,
+        rx: Peri<'static, PE0>,
         tx_dma: Peri<'static, DMA1_CH6>,
         rx_dma: Peri<'static, DMA1_CH5>,
     ) -> (GPS, GPSHandle) {
@@ -64,7 +67,7 @@ impl<'d> GPS {
         let mut uart_config = embassy_stm32::usart::Config::default();
         uart_config.baudrate = BAUD_RATE_OPTIONS[0];
 
-        let uart = Uart::new(p, tx, rx, Irqs, tx_dma, rx_dma, uart_config).unwrap();
+        let uart = Uart::new(p, rx, tx, Irqs, tx_dma, rx_dma, uart_config).unwrap();
 
         let gps = GPS {
             uart,
@@ -115,7 +118,9 @@ impl<'d> GPS {
         // Sending this NMEA message won't actually change the baud rate
         // for some reason, but it will allow us to send the UBX message,
         // which will.
-        self.uart.write(DESIRED_BAUD_RATE_MESSAGE.as_bytes()).await?;
+        self.uart
+            .write(DESIRED_BAUD_RATE_MESSAGE.as_bytes())
+            .await?;
         // Message hardcoded to avoid alloc::format, use code below to generate
         //let payload = format!("PUBX,41,1,0007,0003,{},0", DESIRED_BAUD_RATE);
         //let checksum = payload.chars().fold(0, |a, b| (a as u8) ^ (b as u8));
@@ -124,8 +129,8 @@ impl<'d> GPS {
         // Now that the RX is listening for UBX, set the baud rate.
         // Message generated using the ublox crate for baud rate 115200, hardcoded to avoid the dependency
         let baud_rate_msg = [
-            0xb5, 0x62, 0x06, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0xc0, 0x08, 0x00, 0x00, 0x00, 0xc2, 0x01, 0x00,
-            0x07, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0xb0, 0x7e,
+            0xb5, 0x62, 0x06, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0xc0, 0x08, 0x00, 0x00,
+            0x00, 0xc2, 0x01, 0x00, 0x07, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0xb0, 0x7e,
         ];
         //let baud_rate_msg = ublox::CfgPrtUartBuilder {
         //        portid: ublox::UartPortId::Uart1,
@@ -175,16 +180,14 @@ impl<'d> GPS {
             .map(|(d, m)| (d + m / 60.0) * if segments[5] == "E" { 1.0 } else { -1.0 });
         let altitude = segments[9].parse::<f32>().ok();
 
-        let fix = segments[6].try_into().unwrap_or(GPSFixType::NoFix);
+        //let fix = segments[6].try_into().unwrap_or(GpsFixType::NoFix);
         let num_satellites = segments[7].parse().unwrap_or(0);
         let hdop = (segments[8].parse::<f32>().unwrap_or(99.99) * 100.0) as u16;
 
-        let datum: GPSDatum = GPSDatum {
-            utc_time: None,
+        let datum: GpsDatum = GpsDatum {
             latitude,
             longitude,
             altitude,
-            fix,
             hdop,
             num_satellites,
         };
@@ -233,21 +236,24 @@ impl GPSHandle {
         }
 
         // we discard our last value after 1200ms to avoid reporting stale values
-        let value_expired =
-            self.last_datum.as_ref().map(|(_d, t)| t.elapsed() > Duration::from_millis(1200)).unwrap_or(false);
+        let value_expired = self
+            .last_datum
+            .as_ref()
+            .map(|(_d, t)| t.elapsed() > Duration::from_millis(1200))
+            .unwrap_or(false);
         if value_expired {
             self.last_datum = None;
         }
     }
 
-    pub fn datum(&mut self) -> Option<GPSDatum> {
+    pub fn datum(&mut self) -> Option<GpsDatum> {
         self.check_for_new_values();
         self.last_datum.as_ref().map(|(datum, _t)| datum.clone())
     }
 
     // Return the current datum only if it has been received since this was
     // called last.
-    pub fn new_datum(&mut self) -> Option<GPSDatum> {
+    pub fn new_datum(&mut self) -> Option<GpsDatum> {
         let d = self.new_datum.then_some(self.datum()).flatten();
         self.new_datum = false;
         d
@@ -268,10 +274,10 @@ impl GPSHandle {
         self.last_datum.as_ref().map(|(d, _)| d.altitude).flatten()
     }
 
-    pub fn fix(&mut self) -> Option<GPSFixType> {
-        self.check_for_new_values();
-        self.last_datum.as_ref().map(|(d, _)| d.fix)
-    }
+    // pub fn fix(&mut self) -> Option<GpsFixType> {
+    //     self.check_for_new_values();
+    //     self.last_datum.as_ref().map(|(d, _)| d.fix)
+    // }
 
     pub fn hdop(&mut self) -> Option<u16> {
         self.check_for_new_values();
