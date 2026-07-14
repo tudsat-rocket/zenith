@@ -3,9 +3,7 @@
 use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::{PropulsionType, ValveId};
 
-use mission::propulsion::{
-    Propulsion, PropulsionError, TankId, TankReading, ValveCommand, ValveReading,
-};
+use mission::propulsion::{PropulsionError, TankId, TankReading, ValveCommand};
 
 use crate::simulation::hybrid::fluid::{
     AMBIENT_PRESSURE, AMBIENT_TEMP, n2o_liquid_density, n2o_saturation_pressure,

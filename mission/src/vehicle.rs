@@ -10,13 +10,14 @@ use rapid_dialect::{FlightMode, Rapid};
 
 use state_estimator::StateEstimator;
 
-use crate::TelemetryLink;
 use crate::flight_logic::FlightLogic;
+use crate::foreign_io::{ForeignInputImage, ForeignIo, ForeignOutputImage, ValveState};
 use crate::propulsion::{
-    ALL_TANKS, ALL_VALVES, NoPropulsion, Propulsion, PropulsionError, TankId, ValveCommand,
+    ALL_TANKS, ALL_VALVES, BinaryOutputId, PropulsionError, TankId, ValveCommand, tank_reading,
 };
 use crate::settings::{RecoverySettings, Settings};
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
+use crate::{TelemetryLink, propulsion};
 
 pub const HEARTBEAT_INTERVAL_MS: u32 = 500;
 pub const SENSOR_INTERVAL_MS: u32 = 100;
@@ -25,7 +26,7 @@ pub const GPS_INTERVAL_MS: u32 = 500;
 pub const VEHICLE_INFO_INTERVAL_MS: u32 = 1000;
 pub const PROPULSION_INTERVAL_MS: u32 = 200;
 
-pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, P: Propulsion = NoPropulsion> {
+pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, E: ForeignIo> {
     pub time: Wrapping<u32>,
     mode: FlightMode,
     flight_logic: FlightLogic,
@@ -35,17 +36,29 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, P: Propulsion = NoPropuls
     pub storage: F,
     pub readings: SensorReadings,
     pub state_estimator: StateEstimator,
-    pub propulsion: P,
+    pub foreign_io: E,
+    pub input_image: ForeignInputImage,
+    pub output_image: ForeignOutputImage,
 }
 
-impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Vehicle<S, O, F, P> {
-    pub async fn new(sensors: S, outputs: O, mut storage: F, propulsion: P) -> Self {
+pub struct VehicleSnapshot<'a> {
+    pub time: Wrapping<u32>,
+    pub mode: FlightMode,
+    pub recovery_settings: &'a RecoverySettings,
+    pub readings: &'a SensorReadings,
+    pub state_estimator: &'a StateEstimator,
+    pub input_image: &'a ForeignInputImage,
+    pub output_image: &'a ForeignOutputImage,
+}
+
+impl<S: Sensors, O: Outputs, F: Storage, E: ForeignIo> Vehicle<S, O, F, E> {
+    pub async fn new(sensors: S, outputs: O, mut storage: F, foreign_io: E) -> Self {
         let settings = storage.read_settings().await.unwrap_or_else(|| {
             log::info!("No settings stored in flash, reverting to defaults.");
             Settings::default()
         });
 
-        Self::new_with_settings(sensors, outputs, storage, settings, propulsion)
+        Self::new_with_settings(sensors, outputs, storage, settings, foreign_io)
     }
 
     pub fn new_with_settings(
@@ -53,7 +66,7 @@ impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Vehicle<S, O, F, P> {
         outputs: O,
         storage: F,
         settings: Settings,
-        propulsion: P,
+        foreign_io: E,
     ) -> Self {
         Self {
             time: Wrapping(0),
@@ -65,12 +78,27 @@ impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Vehicle<S, O, F, P> {
             storage,
             readings: SensorReadings::default(),
             state_estimator: StateEstimator::new(1000.0, settings.state_estimator),
-            propulsion,
+            foreign_io,
+            input_image: ForeignInputImage::default(),
+            output_image: ForeignOutputImage::default(),
+        }
+    }
+    pub fn into_snapshot(&self) -> VehicleSnapshot<'_> {
+        VehicleSnapshot {
+            time: self.time,
+            mode: self.mode,
+            recovery_settings: &self.recovery_settings,
+            readings: &self.readings,
+            input_image: &self.input_image,
+            state_estimator: &self.state_estimator,
+            output_image: &self.output_image,
         }
     }
 
     pub async fn tick(&mut self) {
         self.readings = self.sensors.tick().await;
+
+        self.input_image = self.foreign_io.get_input_image();
 
         self.state_estimator.update(
             self.time,
@@ -98,6 +126,9 @@ impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Vehicle<S, O, F, P> {
             .set_drogue(self.mode == FlightMode::RecoveryDrogue);
         self.outputs.set_main(self.mode == FlightMode::RecoveryMain);
 
+        self.foreign_io.set_output_image(self.output_image);
+        self.foreign_io.tick();
+
         self.time += 1;
     }
 
@@ -105,6 +136,7 @@ impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Vehicle<S, O, F, P> {
         self.mode
     }
 
+    // TODO: document
     pub fn set_mode(&mut self, mode: FlightMode) {
         if mode == self.mode {
             return;
@@ -116,7 +148,7 @@ impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Vehicle<S, O, F, P> {
 
         for valve in ALL_VALVES {
             if let Some(cmd) = Self::default_valve_policy(mode, valve) {
-                let _ = self.propulsion.command_valve(valve, cmd);
+                self.output_image.set_valve(valve, cmd);
             }
         }
 
@@ -124,7 +156,12 @@ impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Vehicle<S, O, F, P> {
             // Igniter inhibit lives next to the call site: this is the one
             // place fire_igniter() is invoked. NoPropulsion returns Err and
             // the call is harmlessly ignored.
-            let _ = self.propulsion.fire_igniter();
+            // FIXME: turn off igniter at some point
+
+            self.output_image
+                .set_binary_output(BinaryOutputId::Igniter1, true);
+            self.output_image
+                .set_binary_output(BinaryOutputId::Igniter2, true);
         }
     }
 
@@ -139,15 +176,27 @@ impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Vehicle<S, O, F, P> {
         if !Self::manual_valve_allowed(self.mode, valve) {
             return Err(crate::propulsion::PropulsionError::NotPermittedInMode);
         }
-
-        self.propulsion.command_valve(valve, cmd)
+        let state = match cmd {
+            // TODO: implement pulseOpen
+            ValveCommand::Open => ValveState::fully_open(),
+            ValveCommand::Close => ValveState::fully_closed(),
+            // FIXME: document partial ValveCommand
+            ValveCommand::Partial(p) => ValveState::from_promille_clamped((p * 1000.0) as u16),
+            // TODO: implement pulse open
+            ValveCommand::PulseOpen(_) => ValveState::fully_open(),
+        };
+        self.output_image.set_valve(valve, state);
+        Ok(())
     }
 
-    fn send_msg<M: mavio::Message + Into<Rapid>>(&self, link: &mut impl TelemetryLink)
-    where
-        for<'a> &'a Self: Into<M>,
+    // NOTE: this wrapper is probably not required
+    fn send_msg<M: mavio::Message + Into<Rapid>>(
+        snaphot: &VehicleSnapshot,
+        link: &mut impl TelemetryLink,
+    ) where
+        for<'a> &'a VehicleSnapshot<'a>: Into<M>,
     {
-        let m: M = self.into();
+        let m: M = snaphot.into();
         link.send_message(m.into());
     }
 
@@ -155,53 +204,62 @@ impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Vehicle<S, O, F, P> {
     /// non-RF telemetry paths (primarily ethernet)
     pub fn send_telemetry(&self, link: &mut impl TelemetryLink) {
         if self.time.0 % HEARTBEAT_INTERVAL_MS == 0 {
-            self.send_msg::<Heartbeat>(link);
+            let snap = self.into_snapshot();
+            link.send_message(Heartbeat::from(&snap).into());
+            Self::send_msg::<Heartbeat>(&snap, link);
         }
 
         if self.time.0 % HEARTBEAT_INTERVAL_MS == HEARTBEAT_INTERVAL_MS / 2 {
-            self.send_msg::<SysStatus>(link);
+            let snap = self.into_snapshot();
+            Self::send_msg::<SysStatus>(&snap, link);
         }
 
         if self.time.0 % SENSOR_INTERVAL_MS == 0 {
-            self.send_msg::<Attitude>(link);
-            self.send_msg::<LocalPositionNed>(link);
-            self.send_msg::<VfrHud>(link);
-            self.send_msg::<ScaledImu>(link);
-            self.send_msg::<ScaledImu2>(link);
-            self.send_msg::<ScaledImu3>(link);
+            let snap = self.into_snapshot();
+
+            Self::send_msg::<Attitude>(&snap, link);
+            Self::send_msg::<LocalPositionNed>(&snap, link);
+            Self::send_msg::<VfrHud>(&snap, link);
+            Self::send_msg::<ScaledImu>(&snap, link);
+            Self::send_msg::<ScaledImu2>(&snap, link);
+            Self::send_msg::<ScaledImu3>(&snap, link);
         }
 
         if self.time.0 % GPS_INTERVAL_MS == 0 {
-            self.send_msg::<GlobalPositionInt>(link);
-            self.send_msg::<GpsRawInt>(link);
+            let snap = self.into_snapshot();
+            Self::send_msg::<GlobalPositionInt>(&snap, link);
+            Self::send_msg::<GpsRawInt>(&snap, link);
         }
 
         if self.time.0 % SENSOR_INTERVAL_MS == SENSOR_INTERVAL_MS / 2 {
-            self.send_msg::<ScaledPressure>(link);
-            self.send_msg::<ScaledPressure2>(link);
-            self.send_msg::<ScaledPressure3>(link);
+            let snap = self.into_snapshot();
+            Self::send_msg::<ScaledPressure>(&snap, link);
+            Self::send_msg::<ScaledPressure2>(&snap, link);
+            Self::send_msg::<ScaledPressure3>(&snap, link);
         }
 
         if self.time.0 % BATTERY_INTERVAL_MS == 0 {
-            self.send_msg::<BatteryStatus>(link);
+            let snap = self.into_snapshot();
+            Self::send_msg::<BatteryStatus>(&snap, link);
         }
 
         if self.time.0 % VEHICLE_INFO_INTERVAL_MS == 0 {
-            self.send_msg::<RocketInfo>(link);
+            let snap = self.into_snapshot();
+            Self::send_msg::<RocketInfo>(&snap, link);
         }
 
         // these are instance messages, so the generic send_msg is not enough here
         if self.time.0 % PROPULSION_INTERVAL_MS == 0 {
+            let snap = self.into_snapshot();
             self.send_pressure_vessels(link);
             self.send_valve_states(link);
         }
     }
 
     fn send_pressure_vessels(&self, link: &mut impl TelemetryLink) {
+        let snapshot = self.into_snapshot();
         for tank in ALL_TANKS {
-            let Some(reading) = self.propulsion.tank_state(tank) else {
-                continue;
-            };
+            let reading = tank_reading(tank, &snapshot);
 
             let (fluid, rated) = match tank {
                 TankId::Pressurant => (FluidType::Nitrogen, 30_000u16),
@@ -251,14 +309,19 @@ impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Vehicle<S, O, F, P> {
 
     fn send_valve_states(&self, link: &mut impl TelemetryLink) {
         for valve in ALL_VALVES {
-            let Some(reading) = self.propulsion.valve_state(valve) else {
-                continue;
-            };
-
+            // TODO: send only fresh data?
+            // FIXME: document what f32 means in terms of valve state
+            // 0 = closed, 1 = open ??
+            let state = self
+                .input_image
+                .valve_state(valve)
+                .map(|state| f32::from(state.data.promille()) / 1000.0)
+                .unwrap_or(f32::NAN);
+            let commanded = f32::from(self.output_image.get_valve(valve).promille()) / 1000.0;
             let msg = Valve {
                 id: valve,
-                state: reading.measured_state.unwrap_or(f32::NAN),
-                commanded: reading.commanded_state.unwrap_or(f32::NAN),
+                state,
+                commanded,
             };
             link.send_message(msg.into());
         }
@@ -280,23 +343,26 @@ impl<S: Sensors, O: Outputs, F: Storage, P: Propulsion> Vehicle<S, O, F, P> {
         }
     }
 
-    fn default_valve_policy(mode: FlightMode, valve: ValveId) -> Option<ValveCommand> {
-        use ValveCommand::{Close, Open};
+    // TODO: implement procedures
+    fn default_valve_policy(mode: FlightMode, valve: ValveId) -> Option<ValveState> {
+        use ValveState as V;
 
         match (mode, valve) {
             (FlightMode::Hold, _) => None,
-            (FlightMode::Filling, ValveId::OxidizerFill) => Some(Open),
-            (FlightMode::Pressurizing, ValveId::Pressurization) => Some(Open),
-            (FlightMode::Venting, ValveId::PressurantVent | ValveId::OxidizerVent) => Some(Open),
+            (FlightMode::Filling, ValveId::OxidizerFill) => Some(V::fully_open()),
+            (FlightMode::Pressurizing, ValveId::Pressurization) => Some(V::fully_open()),
+            (FlightMode::Venting, ValveId::PressurantVent | ValveId::OxidizerVent) => {
+                Some(V::fully_open())
+            }
             (
                 FlightMode::Coast | FlightMode::Ignition | FlightMode::Burn,
                 ValveId::Main | ValveId::Pressurization,
-            ) => Some(Open),
+            ) => Some(V::fully_open()),
             (
                 FlightMode::RecoveryDrogue | FlightMode::RecoveryMain,
                 ValveId::PressurantVent | ValveId::OxidizerVent,
-            ) => Some(Open),
-            _ => Some(Close),
+            ) => Some(V::fully_open()),
+            _ => Some(V::fully_closed()),
         }
     }
 }

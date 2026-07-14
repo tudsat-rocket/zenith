@@ -16,7 +16,7 @@ use mavio::Frame;
 use mavio::error::FrameError;
 use mavio::prelude::V2;
 
-use crate::can::{CanRxSubscriber, CanTxPublisher};
+use crate::can::{CanRxPublisher, CanRxSubscriber, CanTxPublisher, CanTxSubscriber};
 use crate::links::interfaces::{
     InterfaceCommandPublisher, InterfaceCommandSubscriber, InterfaceCommands, InterfaceRx,
     InterfaceRxPublisher, InterfaceRxSubscriber, InterfaceTx, InterfaceTxPublisher,

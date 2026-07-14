@@ -17,12 +17,16 @@ use embassy_futures::join::{join3, join5};
 use lora_phy::iv::GenericSx126xInterfaceVariant;
 use lora_phy::sx126x::{Sx126x, Sx1262};
 
+use mission::foreign_io::ForeignIo;
 use mission::{BaroReading, NoStorage, Outputs, SensorReadings, Sensors};
 
 use sensors::*;
 
+use crate::foreign::FIoHandler;
+
 pub mod board;
 pub mod can;
+pub mod foreign;
 pub mod links;
 pub mod sensors;
 
@@ -40,7 +44,7 @@ pub type OurSpiDevice<'a> = SpiDevice<'a, CriticalSectionRawMutex, Spi<'static, 
 pub type LoraVariant = GenericSx126xInterfaceVariant<Output<'static>, ExtiInput<'static>>;
 pub type LoraTransceiver = Sx126x<OurSpiDevice<'static>, LoraVariant, Sx1262>;
 
-pub type Vehicle = mission::Vehicle<BoardSensors, BoardOutputs, NoStorage>;
+pub type Vehicle = mission::Vehicle<BoardSensors, BoardOutputs, NoStorage, FIoHandler>;
 
 pub struct BoardSensors {
     pub imu1: LSM6<OurSpiDevice<'static>>,

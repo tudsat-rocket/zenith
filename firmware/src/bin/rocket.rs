@@ -10,6 +10,8 @@ use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{Duration, Ticker};
 
 use firmware::Vehicle;
+use firmware::can::{CanRxPublisher, CanRxSubscriber, CanTxPublisher, CanTxSubscriber};
+use firmware::foreign::FIoHandler;
 use firmware::links::{Links, UplinkCommand};
 
 use {defmt_rtt as _, panic_probe as _};
@@ -42,13 +44,22 @@ async fn main(low_priority_spawner: Spawner) {
     .await;
 
     fw::sensors::power::spawn(board.adc, low_priority_spawner);
+
+    #[cfg(not(feature = "gcs"))]
     fw::sensors::gps::spawn(board.gps, low_priority_spawner);
 
+    let foreign_io_handler = {
+        let can_tx_pub: CanTxPublisher = can1_tx.publisher().unwrap();
+        let can_rx_sub: CanRxSubscriber = can1_rx.subscriber().unwrap();
+        FIoHandler::new(can_tx_pub, can_rx_sub)
+    };
+
+    //fw::sensors::power::init(board.adc, low_priority_spawner);
     let vehicle = Vehicle::new(
         board.sensors,
         board.outputs,
         mission::NoStorage,
-        mission::NoPropulsion,
+        foreign_io_handler,
     )
     .await;
 
@@ -88,6 +99,9 @@ pub async fn main_loop(
             match cmd {
                 UplinkCommand::SetFlightMode(fm) => {
                     vehicle.set_mode(fm);
+                }
+                UplinkCommand::CommandValve(valve_id, valve_cmd) => {
+                    vehicle.try_command_valve(valve_id, valve_cmd);
                 }
                 _ => {}
             }

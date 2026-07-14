@@ -71,6 +71,7 @@ siphasher = { version = "0.3", default-features = false }
 rand = { version = "0.8", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
 bitflags = "2.9.1"
+zencan-common = { version = "0.0.4", default-features = false, features = [ "defmt" ] }
 
 rapid-dialect = { workspace = true }
 
