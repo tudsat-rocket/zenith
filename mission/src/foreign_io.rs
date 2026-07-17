@@ -10,6 +10,7 @@ pub struct ForeignInputImage {
     pub press_sens: [Option<DataWithTime<f32>>; ALL_PRESS_SENS.len()],
     pub valve_state: [Option<DataWithTime<ValveState>>; ALL_VALVES.len()],
     pub binary_outputs: [Option<DataWithTime<bool>>; ALL_BINARY_OUTPUTS.len()],
+    pub ox_tank_level: Option<DataWithTime<f32>>,
 }
 impl ForeignInputImage {
     pub const fn default() -> Self {
@@ -18,6 +19,7 @@ impl ForeignInputImage {
             press_sens: [None; ALL_PRESS_SENS.len()],
             valve_state: [None; ALL_VALVES.len()],
             binary_outputs: [None; ALL_BINARY_OUTPUTS.len()],
+            ox_tank_level: None,
         }
     }
     /// getter
@@ -50,9 +52,9 @@ impl<T: Copy> DataWithTime<T> {
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct ForeignOutputImage {
-    dirty: bool,
-    valve: [ValveState; ALL_VALVES.len()],
-    binary_output: [bool; ALL_BINARY_OUTPUTS.len()],
+    pub dirty: bool,
+    pub valve: [ValveState; ALL_VALVES.len()],
+    pub binary_output: [bool; ALL_BINARY_OUTPUTS.len()],
 }
 impl ForeignOutputImage {
     // NOTE: adjust defaults

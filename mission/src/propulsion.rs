@@ -112,7 +112,7 @@ pub fn tank_reading(tank: TankId, snapshot: &VehicleSnapshot) -> TankReading {
             pressure2: readings.press_sens[P::OxTankLower as usize].map(|d| d.data),
             temperature1: readings.temp_sens[T::OxTankUpper as usize].map(|d| d.data),
             temperature2: readings.temp_sens[T::OxTankLower as usize].map(|d| d.data),
-            level: None,
+            level: readings.ox_tank_level.map(|d| d.data),
         },
         TankId::Pressurant => TankReading {
             pressure1: readings.press_sens[P::PressurantTank as usize].map(|d| d.data),
@@ -130,33 +130,3 @@ pub fn tank_reading(tank: TankId, snapshot: &VehicleSnapshot) -> TankReading {
         },
     }
 }
-
-// pub trait Propulsion {
-//     const PROPULSION_TYPE: PropulsionType = PropulsionType::Solid;
-//
-//     fn tank_state(&self, id: TankId) -> Option<TankReading>;
-//     fn valve_state(&self, id: ValveId) -> Option<ValveReading>;
-//     fn command_valve(&mut self, id: ValveId, cmd: ValveCommand) -> Result<(), PropulsionError>;
-//     fn fire_igniter(&mut self) -> Result<(), PropulsionError>;
-// }
-//
-// #[derive(Default, Copy, Clone, Debug)]
-// pub struct NoPropulsion;
-//
-// impl Propulsion for NoPropulsion {
-//     fn tank_state(&self, _id: TankId) -> Option<TankReading> {
-//         None
-//     }
-//
-//     fn valve_state(&self, _id: ValveId) -> Option<ValveReading> {
-//         None
-//     }
-//
-//     fn command_valve(&mut self, _id: ValveId, _cmd: ValveCommand) -> Result<(), PropulsionError> {
-//         Err(PropulsionError::Inhibited)
-//     }
-//
-//     fn fire_igniter(&mut self) -> Result<(), PropulsionError> {
-//         Err(PropulsionError::Inhibited)
-//     }
-// }

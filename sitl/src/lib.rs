@@ -14,4 +14,4 @@ pub type Vehicle<F = mission::NoStorage> =
 
 #[cfg(feature = "hybrid")]
 pub type Vehicle<F = mission::NoStorage> =
-    mission::Vehicle<StdSensors, StdOutputs, F, simulation::hybrid::SitlPropulsion>;
+    mission::Vehicle<StdSensors, StdOutputs, F, simulation::hybrid::SitlPeriphery>;
