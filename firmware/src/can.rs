@@ -45,7 +45,11 @@ async fn run_can_rx(can_rx: &'static mut CanRx<'static>, publisher: CanRxPublish
             Ok(envelope) => {
                 debug!("can_rx: received can envelope");
                 let frame = envelope.frame;
-                publisher.publish_immediate(frame);
+
+                if publisher.try_publish(frame.clone()).is_err() {
+                    warn!("CAN RX queue full, overwriting oldest frame");
+                    publisher.publish_immediate(frame);
+                }
             }
             Err(e) => {
                 error!(
@@ -59,7 +63,6 @@ async fn run_can_rx(can_rx: &'static mut CanRx<'static>, publisher: CanRxPublish
 
 async fn run_can_tx(can_tx: &'static mut CanTx<'static>, mut subscriber: CanTxSubscriber) -> ! {
     loop {
-        defmt::info!("run_can_tx_loop");
         let message = subscriber.next_message_pure().await;
         debug!("publishing can message: {}", defmt::Debug2Format(&message));
         can_tx.write(&message).await;

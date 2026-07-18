@@ -38,10 +38,10 @@ pub static COMMANDS: StaticCell<InterfaceCommands> = StaticCell::new();
 
 static LINK_QUALITY: Watch<CriticalSectionRawMutex, LinkQuality, 3> = Watch::new();
 
-static RX_META: StaticCell<[PacketMetadata; 8]> = StaticCell::new();
-static RX_BUFFER: StaticCell<[u8; 1024]> = StaticCell::new();
-static TX_META: StaticCell<[PacketMetadata; 8]> = StaticCell::new();
-static TX_BUFFER: StaticCell<[u8; 1024]> = StaticCell::new();
+static RX_META: StaticCell<[PacketMetadata; 16]> = StaticCell::new();
+static RX_BUFFER: StaticCell<[u8; 2048]> = StaticCell::new();
+static TX_META: StaticCell<[PacketMetadata; 16]> = StaticCell::new();
+static TX_BUFFER: StaticCell<[u8; 2048]> = StaticCell::new();
 
 pub struct EthernetHandle {
     tx: InterfaceTxPublisher,
@@ -75,10 +75,10 @@ impl EthernetHandle {
 
         let socket = UdpSocket::new(
             stack,
-            RX_META.init([PacketMetadata::EMPTY; 8]),
-            RX_BUFFER.init([0; 1024]),
-            TX_META.init([PacketMetadata::EMPTY; 8]),
-            TX_BUFFER.init([0; 1024]),
+            RX_META.init([PacketMetadata::EMPTY; 16]),
+            RX_BUFFER.init([0; 2048]),
+            TX_META.init([PacketMetadata::EMPTY; 16]),
+            TX_BUFFER.init([0; 2048]),
         );
 
         spawner
@@ -139,7 +139,9 @@ impl EthernetHandle {
 
 impl TelemetryLink for EthernetHandle {
     fn send_message(&mut self, message: Rapid) {
-        self.tx.publish_immediate(message);
+        if self.tx.try_publish(message).is_err() {
+            defmt::warn!("downlink queue full, dropping telemetry message");
+        }
     }
 
     fn try_recv_command(&mut self) -> Option<UplinkCommand> {
@@ -212,7 +214,9 @@ async fn run_socket(
                 let n = frame.serialize(&mut transmit_buffer).unwrap();
                 let serialized = &transmit_buffer[..n];
 
-                socket.send_to(serialized, remote_endpoint).await.unwrap();
+                if let Err(e) = socket.send_to(serialized, remote_endpoint).await {
+                    defmt::error!("UDP send failed: {}", defmt::Debug2Format(&e));
+                }
             }
             Either::Second(res) => {
                 let Ok((len, _peer)) = res else {

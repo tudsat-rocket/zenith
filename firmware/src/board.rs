@@ -49,7 +49,7 @@ pub struct Board {
     pub seed: u64,
 }
 
-static ETHERNET_PACKETS: StaticCell<PacketQueue<4, 4>> = StaticCell::new();
+static ETHERNET_PACKETS: StaticCell<PacketQueue<4, 16>> = StaticCell::new();
 static USB_EP_OUT_BUFFER: StaticCell<[u8; 256]> = StaticCell::new();
 
 static SPI1_SHARED: StaticCell<embassy_sync::mutex::Mutex<CriticalSectionRawMutex, Spi<Async>>> =
@@ -250,7 +250,7 @@ pub async fn init() -> Board {
     mac_addr[0] = 0x02;
 
     let ethernet = Ethernet::new(
-        ETHERNET_PACKETS.init(PacketQueue::<4, 4>::new()),
+        ETHERNET_PACKETS.init(PacketQueue::<4, 16>::new()),
         p.ETH,
         Irqs,
         p.PA1,  // ref_clk

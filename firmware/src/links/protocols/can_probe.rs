@@ -17,6 +17,7 @@ use embassy_futures::select::{Either3, select3};
 use embassy_stm32::can::Frame;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Receiver, Sender};
+use embassy_sync::pubsub::WaitResult;
 use embassy_sync::signal::Signal;
 
 use mavio::dialects::Common;
@@ -45,7 +46,7 @@ pub async fn run(
         match select3(
             eth_rx.next_message_pure(),
             cmd_rx.next_message_pure(),
-            can_rx.next_message_pure(),
+            can_rx.next_message(),
         )
         .await
         {
@@ -58,8 +59,6 @@ pub async fn run(
                 let Rapid::CanFrame(can_frame) = msg else {
                     continue;
                 };
-
-                defmt::info!("can frame: {}", defmt::Debug2Format(&can_frame));
 
                 if can_frame.id > StandardId::MAX.as_raw() as u32 {
                     defmt::warn!("refusing to publish non-standard frame");
@@ -85,8 +84,11 @@ pub async fn run(
                 defmt::info!("Enabling CAN forwarding.");
                 can_forwarding_enabled = true;
             }
+            Either3::Third(WaitResult::Lagged(n)) => {
+                defmt::warn!("CAN forwarding lagged, {} frames dropped", n);
+            }
             // Received a CAN frame while forwarding is enabled. Publish it as MAVLink.
-            Either3::Third(frame) if can_forwarding_enabled => {
+            Either3::Third(WaitResult::Message(frame)) if can_forwarding_enabled => {
                 let id = match frame.id() {
                     Id::Standard(sid) => sid.as_raw() as u32,
                     Id::Extended(eid) => eid.as_raw(),
