@@ -73,7 +73,7 @@ async fn main_loop(mut vehicle: Vehicle, mut links: Links, sim: SharedSimulation
                 }
                 #[cfg(feature = "hybrid")]
                 UplinkCommand::CommandValve(valve, valve_cmd) => {
-                    if let Err(e) = vehicle.try_command_valve(valve, valve_cmd) {
+                    if let Err(_e) = vehicle.try_command_valve(valve, valve_cmd) {
                         log::warn!("CommandValve {:?} {:?} rejected.", valve, valve_cmd);
                     }
                 }

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use rapid_dialect::{Rapid, rapid::enums::valve_id};
+use rapid_dialect::Rapid;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 

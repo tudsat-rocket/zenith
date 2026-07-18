@@ -44,15 +44,6 @@ impl FIoHandler {
 
 pub const VERY_FRESH_DURATION: Duration = Duration::from_millis(50);
 
-fn very_fresh<T: Copy>(value: Option<DataWithTime<T>>) -> Option<T> {
-    let value = value?;
-    let stale = Instant::from_millis(value.time.0.into()).elapsed() < VERY_FRESH_DURATION;
-    if stale {
-        return None;
-    }
-    Some(value.data)
-}
-
 fn try_injest_can_msg(image: &mut ForeignInputImage, frame: Frame, time: Wrapping<u32>) {
     let Id::Standard(cob_id) = frame.header().id() else {
         return;

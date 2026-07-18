@@ -1,6 +1,5 @@
 use crate::propulsion::{
-    ALL_BINARY_OUTPUTS, ALL_PRESS_SENS, ALL_TEMP_SENS, ALL_VALVES, BinaryOutputId, PressSensId,
-    TempSensId, ValveId,
+    ALL_BINARY_OUTPUTS, ALL_PRESS_SENS, ALL_TEMP_SENS, ALL_VALVES, BinaryOutputId, ValveId,
 };
 use core::num::Wrapping;
 

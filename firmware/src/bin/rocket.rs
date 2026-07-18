@@ -10,7 +10,7 @@ use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{Duration, Ticker};
 
 use firmware::Vehicle;
-use firmware::can::{CanRxPublisher, CanRxSubscriber, CanTxPublisher, CanTxSubscriber};
+use firmware::can::{CanRxSubscriber, CanTxPublisher};
 use firmware::foreign::FIoHandler;
 use firmware::links::{Links, UplinkCommand};
 
@@ -99,7 +99,7 @@ pub async fn main_loop(
                     vehicle.set_mode(fm);
                 }
                 UplinkCommand::CommandValve(valve_id, valve_cmd) => {
-                    vehicle.try_command_valve(valve_id, valve_cmd);
+                    let _ = vehicle.try_command_valve(valve_id, valve_cmd);
                 }
                 _ => {}
             }

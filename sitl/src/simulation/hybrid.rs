@@ -6,12 +6,9 @@ use mission::foreign_io::{
     DataWithTime, ForeignInputImage, ForeignIo, ForeignOutputImage, ValveState,
 };
 use rapid_dialect::FlightMode;
-use rapid_dialect::rapid::enums::{PropulsionType, ValveId};
+use rapid_dialect::rapid::enums::ValveId;
 
-use mission::propulsion::{
-    ALL_BINARY_OUTPUTS, ALL_PRESS_SENS, ALL_TEMP_SENS, ALL_VALVES, BinaryOutputId, PropulsionError,
-    TankId, TankReading, ValveCommand,
-};
+use mission::propulsion::{ALL_BINARY_OUTPUTS, ALL_VALVES, BinaryOutputId, TankId, ValveCommand};
 
 use crate::simulation::hybrid::fluid::{
     AMBIENT_PRESSURE, AMBIENT_TEMP, n2o_liquid_density, n2o_saturation_pressure,
@@ -332,7 +329,7 @@ impl ForeignIo for SitlPeriphery {
             } else if valve_state.promille() == 1000 {
                 ValveCommand::Open
             } else {
-                let f = ((valve_state.promille() as f32) / 1000.0);
+                let f = (valve_state.promille() as f32) / 1000.0;
                 ValveCommand::Partial(f)
             };
 

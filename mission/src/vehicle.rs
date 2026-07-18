@@ -10,6 +10,7 @@ use rapid_dialect::{FlightMode, Rapid};
 
 use state_estimator::StateEstimator;
 
+use crate::TelemetryLink;
 use crate::flight_logic::FlightLogic;
 use crate::foreign_io::{ForeignInputImage, ForeignIo, ForeignOutputImage, ValveState};
 use crate::propulsion::{
@@ -17,7 +18,6 @@ use crate::propulsion::{
 };
 use crate::settings::{RecoverySettings, Settings};
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
-use crate::{TelemetryLink, propulsion};
 
 pub const HEARTBEAT_INTERVAL_MS: u32 = 500;
 pub const SENSOR_INTERVAL_MS: u32 = 100;
@@ -250,7 +250,6 @@ impl<S: Sensors, O: Outputs, F: Storage, E: ForeignIo> Vehicle<S, O, F, E> {
 
         // these are instance messages, so the generic send_msg is not enough here
         if self.time.0 % PROPULSION_INTERVAL_MS == 0 {
-            let snap = self.into_snapshot();
             self.send_pressure_vessels(link);
             self.send_valve_states(link);
         }

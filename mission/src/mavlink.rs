@@ -1,5 +1,6 @@
 #[cfg(target_os = "none")]
 use num_traits::Float as _;
+
 use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::{
     GpsFixType, MavAutopilot, MavBatteryChargeState, MavBatteryFault, MavBatteryFunction,

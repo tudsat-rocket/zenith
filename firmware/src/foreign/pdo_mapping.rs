@@ -124,29 +124,6 @@ fn bo_id_for(node_id: u16, subindex: usize) -> Option<BinaryOutputId> {
     })
 }
 
-pub fn sensor_msg_to_temp(node_id: u16, data: &[u8]) -> heapless::Vec<(TempSensId, f32), 4> {
-    // FIXME:
-    //
-    // if let Some(temp_id) = temp_id {
-    //     // temperature is in centi celcius
-    //     arr[i] = Some((temp_id, f32::from(data_part) / 100.0));
-    // }
-    todo!()
-}
-fn temp_sensor_id_for(node_id: u16, subindex: usize) -> Option<TempSensId> {
-    // FIXME:
-    todo!()
-}
-
-pub fn node_sensor_to_pressure(node_id: u16, data: &[u8]) -> heapless::Vec<(PressSensId, f32), 4> {
-    // FIXME:
-    todo!()
-}
-fn pressure_sensor_id_for(node_id: u16, subindex: usize) -> Option<PressSensId> {
-    // FIXME:
-    todo!()
-}
-
 fn decode_le_u16x4(data: &[u8]) -> Option<[u16; 4]> {
     let data: &[u8; 8] = data.try_into().ok()?;
     Some(core::array::from_fn(|i| {

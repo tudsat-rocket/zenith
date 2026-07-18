@@ -1,9 +1,8 @@
-use core::{cmp::*, num::Wrapping, usize};
+use core::{cmp::*, usize};
 pub use rapid_dialect::ValveCommand;
-use rapid_dialect::rapid::enums::FluidType;
 pub use rapid_dialect::rapid::enums::ValveId;
 
-use crate::{foreign_io::DataWithTime, vehicle::VehicleSnapshot};
+use crate::vehicle::VehicleSnapshot;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
