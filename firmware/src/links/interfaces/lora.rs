@@ -1,3 +1,13 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "boot-time radio setup; panic-on-failure is the embedded model"
+)]
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "bounded radio timing/counter math"
+)]
+#![allow(clippy::unreachable, reason = "exhaustive radio-state match")]
+
 use embassy_sync::watch::Watch;
 use static_cell::StaticCell;
 

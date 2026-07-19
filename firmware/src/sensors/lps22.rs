@@ -1,3 +1,7 @@
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "datasheet fixed-point sensor conversion math"
+)]
 // https://www.lcsc.com/datasheet/lcsc_datasheet_2209222100_STMicroelectronics-LPS22HHTR_C2827824.pdf
 
 use embassy_time::{Duration, Timer};

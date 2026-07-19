@@ -1,3 +1,14 @@
+// Host-side network device / UDP socket setup for the simulator; a setup failure
+// aborts the sim, not a rocket, and buffer slices are fixed-size.
+#![allow(
+    clippy::unwrap_used,
+    reason = "host TUN/UDP socket setup; failure just aborts the sim"
+)]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "fixed-size network packet buffer slicing"
+)]
+
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
 use embassy_net::StackResources;

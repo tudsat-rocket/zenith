@@ -223,6 +223,10 @@ impl DownlinkTelemetryMessage for HeartbeatMessage {
     type Output = (Heartbeat, LocalPositionNed, Attitude, Altitude, VfrHud);
 
     fn pack((heartbeat, local_position, attitude): Self::Input) -> Self {
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "u8::max(_, 1) is >= 1, so -1 cannot underflow"
+        )]
         let mav_state = u8::max(heartbeat.system_status as u8, 1) - 1;
         let profile = 0x01; // TODO
         let armed = heartbeat.base_mode.contains(MavModeFlag::SAFETY_ARMED) as u8;
@@ -283,6 +287,10 @@ impl DownlinkTelemetryMessage for HeartbeatMessage {
         };
 
         // TODO
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "u32 time widened to u64 before *1000, cannot overflow"
+        )]
         let altitude = Altitude {
             time_usec: (context.time as u64) * 1000,
             altitude_monotonic: 0.0,
@@ -338,7 +346,8 @@ impl DownlinkTelemetryMessage for StatusMessage {
 
     fn unpack(self, context: &mut ConnectionContext) -> Self::Output {
         let sys_status = SysStatus {
-            load: (self.load * 10) as u16,
+            // widen before scaling: u8 * 10 overflows in u8 for load > 25
+            load: u16::from(self.load).saturating_mul(10),
             ..Default::default()
         };
 

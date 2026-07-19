@@ -28,13 +28,17 @@ async fn main(spawner: Spawner) {
     {
         log::info!("Starting rocket-std (solid build)");
         let vehicle = Vehicle::new(
-            StdSensors::new(sim.clone()),
+            StdSensors::new(Arc::clone(&sim)),
             StdOutputs::new(flags),
             mission::NoStorage,
             mission::bus::NoBus,
         )
         .await;
         let links = Links::init(spawner);
+        #[allow(
+            clippy::unwrap_used,
+            reason = "task spawn at sim startup; failure just aborts the sim"
+        )]
         spawner.spawn(main_loop(vehicle, links, sim)).unwrap();
     }
 
@@ -42,13 +46,17 @@ async fn main(spawner: Spawner) {
     {
         log::info!("Starting rocket-std (hybrid build)");
         let vehicle = Vehicle::new(
-            StdSensors::new(sim.clone()),
+            StdSensors::new(Arc::clone(&sim)),
             StdOutputs::new(flags),
             mission::NoStorage,
-            SitlBus::new(sim.clone()),
+            SitlBus::new(Arc::clone(&sim)),
         )
         .await;
         let links = Links::init(spawner);
+        #[allow(
+            clippy::unwrap_used,
+            reason = "task spawn at sim startup; failure just aborts the sim"
+        )]
         spawner.spawn(main_loop(vehicle, links, sim)).unwrap();
     }
 }
@@ -59,6 +67,10 @@ async fn main_loop(mut vehicle: Vehicle, mut links: Links, sim: SharedSimulation
 
     loop {
         {
+            #[allow(
+                clippy::unwrap_used,
+                reason = "sim mutex; a poisoned lock means the sim already panicked"
+            )]
             let mut s = sim.lock().unwrap();
             s.set_flight_mode(vehicle.mode());
             s.tick();
@@ -67,6 +79,9 @@ async fn main_loop(mut vehicle: Vehicle, mut links: Links, sim: SharedSimulation
         vehicle.tick().await;
 
         if let Some(cmd) = links.try_recv_command() {
+            // Collapses to a single arm without the `hybrid` feature; kept as a match since
+            // CommandValve is a real arm with it.
+            #[cfg_attr(not(feature = "hybrid"), allow(clippy::collapsible_match))]
             match cmd {
                 UplinkCommand::SetFlightMode(fm) => {
                     vehicle.set_mode(fm);

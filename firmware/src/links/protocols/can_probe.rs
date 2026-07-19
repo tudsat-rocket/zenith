@@ -8,6 +8,10 @@
 //! - No CAN-FD
 //!
 //! Executed only for Ethernet at this time.
+#![allow(
+    clippy::indexing_slicing,
+    reason = "indexing into fixed-size CAN frame buffers"
+)]
 
 use embedded_can::{Id, StandardId};
 use static_cell::StaticCell;

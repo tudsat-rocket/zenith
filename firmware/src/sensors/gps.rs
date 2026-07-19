@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "boot-time GPS/UART setup; panic-on-failure is the embedded model"
+)]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "fixed-size NMEA/UBX frame buffer parsing"
+)]
+
 use embassy_executor::Spawner;
 use embassy_stm32::mode::Async;
 use heapless::{String, Vec};
@@ -25,7 +34,7 @@ const DESIRED_BAUD_RATE: u32 = 115_200;
 const BAUD_RATE_OPTIONS: [u32; 2] = [115_200, 9600];
 
 // hardcoded to avoid needing alloc::format
-const DESIRED_BAUD_RATE_MESSAGE: &'static str = "$PUBX,41,1,0007,0003,115200,0*18\r\n";
+const DESIRED_BAUD_RATE_MESSAGE: &str = "$PUBX,41,1,0007,0003,115200,0*18\r\n";
 
 static CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, GpsDatum, 5>> = StaticCell::new();
 
@@ -54,7 +63,7 @@ pub async fn run(mut gps: GPS) -> ! {
     }
 }
 
-impl<'d> GPS {
+impl GPS {
     pub fn init(
         p: Peri<'static, UART8>,
         tx: Peri<'static, PE1>,
@@ -170,13 +179,11 @@ impl<'d> GPS {
         // Lat: DDMM.MM... Lng: DDDMM.MM...
         let latitude = (segments[2].len() > 2)
             .then(|| segments[2].split_at(2))
-            .map(|(d, m)| d.parse::<f32>().ok().zip(m.parse::<f32>().ok()))
-            .flatten()
+            .and_then(|(d, m)| d.parse::<f32>().ok().zip(m.parse::<f32>().ok()))
             .map(|(d, m)| (d + m / 60.0) * if segments[3] == "N" { 1.0 } else { -1.0 });
         let longitude = (segments[4].len() > 3)
             .then(|| segments[4].split_at(3))
-            .map(|(d, m)| d.parse::<f32>().ok().zip(m.parse::<f32>().ok()))
-            .flatten()
+            .and_then(|(d, m)| d.parse::<f32>().ok().zip(m.parse::<f32>().ok()))
             .map(|(d, m)| (d + m / 60.0) * if segments[5] == "E" { 1.0 } else { -1.0 });
         let altitude = segments[9].parse::<f32>().ok();
 
@@ -218,7 +225,7 @@ impl<'d> GPS {
 
         loop {
             if let Ok(str) = self.read_gps_packet().await {
-                for line in str.split("\r\n").filter(|str| str.len() > 0) {
+                for line in str.split("\r\n").filter(|str| !str.is_empty()) {
                     self.process_nmea_line(line).await;
                 }
             } else {
@@ -261,17 +268,17 @@ impl GPSHandle {
 
     pub fn latitude(&mut self) -> Option<f32> {
         self.check_for_new_values();
-        self.last_datum.as_ref().map(|(d, _)| d.latitude).flatten()
+        self.last_datum.as_ref().and_then(|(d, _)| d.latitude)
     }
 
     pub fn longitude(&mut self) -> Option<f32> {
         self.check_for_new_values();
-        self.last_datum.as_ref().map(|(d, _)| d.longitude).flatten()
+        self.last_datum.as_ref().and_then(|(d, _)| d.longitude)
     }
 
     pub fn altitude(&mut self) -> Option<f32> {
         self.check_for_new_values();
-        self.last_datum.as_ref().map(|(d, _)| d.altitude).flatten()
+        self.last_datum.as_ref().and_then(|(d, _)| d.altitude)
     }
 
     // pub fn fix(&mut self) -> Option<GpsFixType> {

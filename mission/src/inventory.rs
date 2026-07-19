@@ -129,6 +129,10 @@ impl InventoryId<5> for ValveId {
     ];
 
     // the MAVLink-generated ValveId is 1-indexed
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "ValveId discriminants are 1..=9, so this never underflows"
+    )]
     fn idx(self) -> usize {
         self as usize - 1
     }
@@ -240,12 +244,20 @@ impl<I: InventoryId<N>, T: Copy, const N: usize> InventoryMap<I, T, N> {
 impl<I: InventoryId<N>, T, const N: usize> Index<I> for InventoryMap<I, T, N> {
     type Output = T;
 
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "idx() is a dense 0..N index by the InventoryId<N> contract"
+    )]
     fn index(&self, id: I) -> &T {
         &self.values[id.idx()]
     }
 }
 
 impl<I: InventoryId<N>, T, const N: usize> IndexMut<I> for InventoryMap<I, T, N> {
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "idx() is a dense 0..N index by the InventoryId<N> contract"
+    )]
     fn index_mut(&mut self, id: I) -> &mut T {
         &mut self.values[id.idx()]
     }

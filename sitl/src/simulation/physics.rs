@@ -1,3 +1,8 @@
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "simulator physics/integration math"
+)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 

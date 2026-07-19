@@ -90,6 +90,10 @@ impl<RK: RadioKind, M: TelemetryMessage, S: AnySender<M::Output>> HoppingReceive
     ) -> Result<Option<(u16, M, PacketStatus)>, ReceiveError> {
         const N: u8 = DOWNLINK_PACKET_SIZE as u8; // TODO
 
+        #[allow(
+            clippy::unwrap_used,
+            reason = "LoRa params built from fixed protocol constants, infallible"
+        )]
         let (mod_params, pkt_params) = self.create_parameters(frequency, N).unwrap();
 
         loop {
@@ -189,6 +193,10 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
     const SWEEP_DURATION_PER_FREQUENCY_MS: u64 =
         (SEQUENCE_LENGTH as u64) * (DOWNLINK_MESSAGE_INTERVAL_MS as u64);
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "bounded modular frequency-hop timing math"
+    )]
     pub async fn run_downlink<CONN: AnySender<Option<(Instant, u16)>>>(
         mut self,
         mut connection_sender: CONN,
@@ -243,6 +251,10 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
     /// After we receive our first valid packet during our sweeps, this is responsible for keeping that
     /// connnection alive, following the hopping sequence of our vehicle. Once we stop receiving
     /// packets from the vehicle for a certain timeout, we return to our frequency sweep.
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "bounded modular frequency-hop timing math"
+    )]
     async fn handle_connection<CONN: AnySender<Option<(Instant, u16)>>>(
         &mut self,
         mut time: u16,
@@ -321,6 +333,10 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
 }
 
 impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessage, S> {
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "bounded packet-loss counting and hop-timing math"
+    )]
     pub async fn run_uplink<STATS: AnySender<(i8, i8, f32)>>(
         mut self,
         mut stat_sender: STATS,
@@ -400,7 +416,10 @@ impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessa
                     continue;
                 }
                 UplinkMessage::SetFlightMode(inner) => {
-                    let mode = inner.mode.try_into().unwrap(); // TODO
+                    let Ok(mode) = inner.mode.try_into() else {
+                        defmt::warn!("Discarding uplink command with invalid flight mode.");
+                        continue;
+                    };
                     UplinkCommand::SetFlightMode(mode)
                 }
             };

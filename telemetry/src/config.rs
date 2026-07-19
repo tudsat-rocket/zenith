@@ -70,6 +70,10 @@ pub struct LinkConfig<'a> {
 }
 
 impl LinkConfig<'_> {
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "writes bounded by SEQUENCE_LENGTH / NUM_FREQUENCIES"
+    )]
     pub fn sequence(&self) -> [usize; SEQUENCE_LENGTH] {
         let mut siphasher = SipHasher::new_with_key(&[0x00; 16]);
         siphasher.write(self.binding_phrase.as_bytes());
@@ -94,6 +98,14 @@ impl LinkConfig<'_> {
         sequence
     }
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "modular hop index, divisor is a nonzero const"
+    )]
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "index is % SEQUENCE_LENGTH; freq_i from the fixed table"
+    )]
     pub fn frequency(&self, t: u16) -> u32 {
         let i = (t as usize / self.hopping_interval as usize) % SEQUENCE_LENGTH;
         let freq_i = self.sequence()[i]; // TODO

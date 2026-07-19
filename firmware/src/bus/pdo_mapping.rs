@@ -1,3 +1,12 @@
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "CANopen PDO bit/byte offset math, bounded by frame layout"
+)]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "indexing into fixed-size CAN frame buffers"
+)]
+
 use mission::{
     bus::ValveState,
     inventory::{BinaryOutputId, ValveId},

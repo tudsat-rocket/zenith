@@ -1,3 +1,7 @@
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "datasheet fixed-point sensor conversion math"
+)]
 // https://invensense.tdk.com/wp-content/uploads/2021/07/DS-000451-ICM-42670-P-v1.0.pdf
 
 use embassy_time::{Duration, Timer};

@@ -3,6 +3,15 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 #![allow(unused_mut)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "boot-time peripheral/task init; panic-on-failure is the embedded model"
+)]
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "bounded sensor self-test math"
+)]
+#![allow(clippy::indexing_slicing, reason = "fixed-size self-test buffers")]
 
 use core::net::Ipv4Addr;
 use core::net::SocketAddr;

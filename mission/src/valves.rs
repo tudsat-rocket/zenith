@@ -289,6 +289,8 @@ impl From<ValveCommand> for ValveState {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, reason = "unwrap is idiomatic in test assertions")]
+
     use super::*;
     use core::time::Duration;
 

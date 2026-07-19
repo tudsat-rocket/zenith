@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "boot-time bus init; panic-on-failure is the embedded model"
+)]
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "bounded bus counter/timing math"
+)]
+
 use core::{cmp::*, num::Wrapping};
 
 use embassy_stm32::can::Frame;
@@ -136,6 +145,9 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
 
     let node_id = pd_id.node_id;
 
+    // The empty arms below are kept separate: each is an independent unimplemented
+    // message kind, not actually duplicate logic.
+    #[allow(clippy::match_same_arms)]
     match pd_id.kind {
         PdMessageKind::Valves => {
             for (id, state) in valve_msg_to_valve(node_id as u16, data) {

@@ -113,6 +113,10 @@ impl Into<GlobalPositionInt> for &VehicleSnapshot<'_> {
 }
 
 impl Into<GpsRawInt> for &VehicleSnapshot<'_> {
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "time.0 is u32 widened to u64 before *1000, cannot overflow u64"
+    )]
     fn into(self) -> GpsRawInt {
         let gps = self.readings.gps.as_ref();
 
@@ -273,6 +277,10 @@ impl Into<VfrHud> for &VehicleSnapshot<'_> {
 }
 
 impl Into<SysStatus> for &VehicleSnapshot<'_> {
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "`enabled -= FLAG` is MavSysStatusSensor bitflag set-difference, not integer arithmetic"
+    )]
     fn into(self) -> SysStatus {
         let r = &self.readings;
 
@@ -393,6 +401,10 @@ impl Into<RocketInfo> for &VehicleSnapshot<'_> {
 }
 
 impl Into<BatteryStatus> for &VehicleSnapshot<'_> {
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "bounded i32 sensor math with nonzero constant divisors, cannot over/underflow or divide by zero"
+    )]
     fn into(self) -> BatteryStatus {
         const CELLS: usize = 3;
 

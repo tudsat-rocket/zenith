@@ -1,3 +1,7 @@
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "datasheet fixed-point sensor conversion math"
+)]
 // https://www.lcsc.com/datasheet/lcsc_datasheet_2407240928_Bosch-Sensortec-BMP580_C22391138.pdf
 
 use embassy_time::{Duration, Timer};

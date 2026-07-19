@@ -1,3 +1,8 @@
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "datasheet fixed-point sensor conversion math"
+)]
+
 use embassy_time::{Duration, Timer};
 use embedded_hal_async::spi::SpiDevice;
 

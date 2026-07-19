@@ -98,6 +98,10 @@ impl StateEstimator {
         Self::new_with_quat(main_loop_freq_hertz, settings, UnitQuaternion::default())
     }
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "operator-overloaded nalgebra matrix math, not primitive overflow"
+    )]
     pub fn new_with_quat(
         main_loop_freq_hertz: f32,
         settings: StateEstimatorSettings,
@@ -185,6 +189,10 @@ impl StateEstimator {
         }
     }
 
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "fixed-dimension nalgebra covariance-matrix indexing"
+    )]
     fn apply_measurements(
         &mut self,
         altitude_baro: f32,
@@ -224,6 +232,14 @@ impl StateEstimator {
         }
     }
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "operator-overloaded nalgebra vector math, not primitive overflow"
+    )]
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "fixed-dimension nalgebra covariance-matrix indexing"
+    )]
     pub fn update(
         &mut self,
         time: Wrapping<u32>,
@@ -374,6 +390,10 @@ impl StateEstimator {
         self.acceleration_world.as_ref()
     }
 
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "fixed-dimension nalgebra state-vector indexing"
+    )]
     pub fn position_local(&self) -> Vector3<f32> {
         Vector3::new(self.kalman.x[0], self.kalman.x[1], self.kalman.x[2])
     }
@@ -396,10 +416,18 @@ impl StateEstimator {
         }
     }
 
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "fixed-dimension nalgebra state-vector indexing"
+    )]
     pub fn velocity(&self) -> Vector3<f32> {
         Vector3::new(self.kalman.x[3], self.kalman.x[4], self.kalman.x[5])
     }
 
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "fixed-dimension nalgebra state-vector indexing"
+    )]
     pub fn acceleration_world(&self) -> Vector3<f32> {
         Vector3::new(self.kalman.x[6], self.kalman.x[7], self.kalman.x[8])
     }
@@ -500,6 +528,10 @@ impl StateEstimator {
             .unwrap_or(GPS_NO_FIX_STD_DEV)
     }
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "operator-overloaded nalgebra vector math, not primitive overflow"
+    )]
     fn global_to_local(&self, global: Vector3<f32>) -> Vector3<f32> {
         let offset = global - self.gps_origin.unwrap_or_default();
         let (lat, lng) = (offset.x, offset.y);
@@ -510,6 +542,10 @@ impl StateEstimator {
         )
     }
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "operator-overloaded nalgebra vector math, not primitive overflow"
+    )]
     fn local_to_global(&self, local: Vector3<f32>) -> Vector3<f32> {
         let offset = Vector3::new(
             local.y / 111_111.0,

@@ -20,6 +20,16 @@ use crate::{
 };
 
 #[allow(clippy::too_many_lines, reason = "TODO")]
+// Packet-loss tracking below reorders sequence numbers with a bounded lookback:
+// `previous_i` stays < len, and `wrapping_sub(last) - 1` is guarded by `last != seq`.
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "bounded sequence-number reorder/loss math, wrapping or length-guarded"
+)]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "reorder index bounded by received_sorted.len()"
+)]
 pub async fn run(
     system_id: u8,
     component_id: u8,

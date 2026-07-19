@@ -98,6 +98,10 @@ impl BusOutputImage {
 
 impl ValveState {
     /// 0 = fully closed, 100 = fully open
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "value is clamped to <= 100, so value * 10 <= 1000 fits u16"
+    )]
     pub const fn from_percent_open(value: u16) -> Self {
         // clamp ist not const yet
         let value = { if value > 100 { 100 } else { value } };

@@ -1,4 +1,12 @@
 //! Basic 3S1P LiIon battery simulation
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "simulator battery-model math"
+)]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "indexing into fixed discharge-curve tables"
+)]
 
 use rapid_dialect::FlightMode;
 

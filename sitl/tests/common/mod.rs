@@ -50,7 +50,7 @@ impl Harness {
     pub async fn new(settings: Option<Settings>) -> Self {
         let flags = RecoveryFlags::default();
         let sim: SharedSimulation = Arc::new(Mutex::new(Simulation::new(flags.clone())));
-        let sensors = StdSensors::new(sim.clone());
+        let sensors = StdSensors::new(Arc::clone(&sim));
         let outputs = StdOutputs::new(flags);
         let storage = MemoryStorage::new(settings);
 
@@ -59,7 +59,7 @@ impl Harness {
 
         #[cfg(feature = "hybrid")]
         let vehicle = {
-            let bus = SitlBus::new(sim.clone());
+            let bus = SitlBus::new(Arc::clone(&sim));
             MissionVehicle::new(sensors, outputs, storage, bus).await
         };
 

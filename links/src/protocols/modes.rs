@@ -51,6 +51,16 @@ fn mode_properties(mode: FlightMode) -> MavModeProperty {
     props
 }
 
+// Mode enumeration below: `index` is >= 1 in the else branch and `index - 1` is
+// bounded by the explicit `< FlightMode::ALL.len()` check; `i` iterates ALL.
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "mode-index math guarded by length checks"
+)]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "FlightMode::ALL index guarded by length check"
+)]
 pub async fn run(tx: InterfaceTxPublisher, mut rx: InterfaceCommandSubscriber) {
     log::info!("modes: task started");
     loop {

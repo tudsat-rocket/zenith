@@ -1,4 +1,12 @@
 //! Generates noisy sensor readings from physical state
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "simulator sensor-model math"
+)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "simulator sensor generation; failure just aborts the sim"
+)]
 
 use nalgebra::Vector3;
 use rand::Rng;
@@ -85,7 +93,7 @@ impl SensorModel {
 
         let baro = BaroReading {
             pressure: Some(self.pressure(physics)),
-            temperature: Some(self.temperature(physics)),
+            temperature: Some(Self::temperature(physics)),
             altitude: Some(self.baro_altitude(physics)),
         };
 
@@ -169,7 +177,7 @@ impl SensorModel {
     }
 
     /// Temperature at altitude [C]
-    fn temperature(&self, physics: &FlightPhysics) -> f32 {
+    fn temperature(physics: &FlightPhysics) -> f32 {
         let t_kelvin = T0 - L * physics.position.z;
         t_kelvin - 273.15
     }

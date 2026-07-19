@@ -1,4 +1,8 @@
 //! Hybrid-rocket propulsion simulation for the SITL
+#![allow(
+    clippy::unwrap_used,
+    reason = "simulator propulsion model; failure just aborts the sim"
+)]
 
 use std::num::Wrapping;
 

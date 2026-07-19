@@ -77,6 +77,10 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, DownlinkMessage)>>
 
         loop {
             let (time, msg) = self.receiver.anyreceive().await;
+            #[allow(
+                clippy::unwrap_used,
+                reason = "message encodes into a buffer sized for the fixed packet layout, infallible"
+            )]
             let bytes = msg.encode(time, &self.config.hmac_key).unwrap();
 
             let frequency = self.config.frequency(time);
@@ -100,6 +104,10 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, DownlinkMessage)>>
 }
 
 impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage)>> HoppingTransmitter<RK, UplinkMessage, R> {
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "bounded modular frequency-hop timing math"
+    )]
     pub async fn run_uplink<CONN: AnyReceiver<Option<(Instant, u16)>>>(
         mut self,
         mut connection_receiver: CONN,
@@ -124,6 +132,10 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage)>> HoppingTransmitter<RK,
                 3
             };
 
+            #[allow(
+                clippy::unwrap_used,
+                reason = "message encodes into a buffer sized for the fixed packet layout, infallible"
+            )]
             let bytes = message.encode(seq, &self.config.hmac_key).unwrap();
 
             if let Some((last_instant, last_t)) = connection {

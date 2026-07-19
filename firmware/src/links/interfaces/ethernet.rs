@@ -1,3 +1,9 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "boot-time socket/task setup; panic-on-failure is the embedded model"
+)]
+#![allow(clippy::indexing_slicing, reason = "fixed-size network packet buffers")]
+
 use embassy_sync::watch::Watch;
 use rapid_dialect::Rapid;
 use static_cell::StaticCell;

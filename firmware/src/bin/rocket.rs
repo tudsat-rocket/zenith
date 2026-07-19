@@ -1,5 +1,9 @@
 #![no_std]
 #![no_main]
+#![allow(
+    clippy::unwrap_used,
+    reason = "boot-time peripheral/task init; panic-on-failure is the embedded model"
+)]
 
 use embassy_executor::{InterruptExecutor, Spawner};
 use embassy_stm32::interrupt;

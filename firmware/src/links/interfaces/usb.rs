@@ -1,3 +1,9 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "boot-time USB setup; panic-on-failure is the embedded model"
+)]
+#![allow(clippy::indexing_slicing, reason = "fixed-size USB packet buffers")]
+
 use embassy_sync::watch::Watch;
 use heapless::Vec;
 use rapid_dialect::Rapid;

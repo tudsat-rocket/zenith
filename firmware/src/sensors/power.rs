@@ -1,3 +1,13 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "boot-time ADC setup; panic-on-failure is the embedded model"
+)]
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "fixed-point ADC-to-engineering-unit conversion math"
+)]
+#![allow(clippy::indexing_slicing, reason = "fixed ADC channel arrays")]
+
 use embassy_executor::Spawner;
 use embassy_stm32::adc::{Adc, AdcChannel, Instance, SampleTime, Temperature, VrefInt};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};

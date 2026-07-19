@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "boot-time CAN init; panic-on-failure is the embedded model"
+)]
+
 use defmt::*;
 use embassy_executor::SendSpawner;
 use embassy_stm32::can::{Can, CanRx, CanTx, Frame};

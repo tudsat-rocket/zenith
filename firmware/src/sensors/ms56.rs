@@ -1,3 +1,16 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "boot-time baro setup / non-empty sample buffers"
+)]
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "datasheet fixed-point pressure/temperature compensation math"
+)]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "fixed-size PROM/sample buffer access"
+)]
+
 use heapless::{Deque, Vec};
 
 use embassy_time::{Duration, Timer};

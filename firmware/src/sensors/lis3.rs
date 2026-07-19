@@ -1,3 +1,8 @@
+#![allow(
+    clippy::arithmetic_side_effects,
+    reason = "datasheet fixed-point sensor conversion math"
+)]
+
 use embedded_hal_async::spi::SpiDevice;
 
 use nalgebra::Vector3;

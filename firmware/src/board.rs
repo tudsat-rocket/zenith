@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "boot-time peripheral init; panic-on-failure is the embedded model"
+)]
+
 use embassy_stm32::adc::Adc;
 use embassy_stm32::adc::AdcChannel;
 use embassy_stm32::adc::AnyAdcChannel;
