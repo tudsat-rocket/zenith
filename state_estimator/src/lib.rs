@@ -365,8 +365,8 @@ impl StateEstimator {
         // Only track maximum height during flight
         self.altitude_max = match mode {
             FlightMode::Idle
-            | FlightMode::HardwareArmed
-            | FlightMode::Filling
+            | FlightMode::FillPressurant
+            | FlightMode::FillOxidizer
             | FlightMode::Venting
             | FlightMode::Pressurizing
             | FlightMode::Hold

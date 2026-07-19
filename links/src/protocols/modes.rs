@@ -19,7 +19,8 @@ fn mode_properties(mode: FlightMode) -> MavModeProperty {
         #[cfg(feature = "hybrid")]
         FlightMode::Armed => true,
         #[cfg(not(feature = "hybrid"))]
-        FlightMode::Filling
+        FlightMode::FillPressurant
+        | FlightMode::FillOxidizer
         | FlightMode::Venting
         | FlightMode::Pressurizing
         | FlightMode::Hold
@@ -31,10 +32,7 @@ fn mode_properties(mode: FlightMode) -> MavModeProperty {
         props |= MavModeProperty::NOT_USER_SELECTABLE;
     }
 
-    if !matches!(
-        mode,
-        FlightMode::Idle | FlightMode::HardwareArmed | FlightMode::Landed
-    ) {
+    if !matches!(mode, FlightMode::Idle | FlightMode::Landed) {
         props |= MavModeProperty::ADVANCED;
     }
 

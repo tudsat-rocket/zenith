@@ -50,11 +50,11 @@ impl Battery {
     pub fn tick(&mut self, dt: f32, mode: FlightMode) {
         self.current = match mode {
             FlightMode::Idle => -0.2,
-            FlightMode::Filling
+            FlightMode::FillPressurant
+            | FlightMode::FillOxidizer
             | FlightMode::Pressurizing
             | FlightMode::Hold
             | FlightMode::Venting
-            | FlightMode::HardwareArmed
             | FlightMode::Armed => 0.3,
             FlightMode::Ignition => 4.8,
             FlightMode::Burn

@@ -15,13 +15,42 @@ use rapid_dialect::rapid::messages::{
 
 use crate::vehicle::VehicleSnapshot;
 
+impl VehicleSnapshot<'_> {
+    /// Whether the vehicle is *physically* armed, i.e. the arming pins/switches are thrown. This is
+    /// orthogonal to the flight mode and is what MAVLink SAFETY_ARMED reflects.
+    fn is_physically_armed(&self) -> bool {
+        const RECOVERY_ARMED_THRESHOLD_MV: u16 = 6000;
+        #[cfg(feature = "hybrid")]
+        const IO_ARMED_THRESHOLD_MV: u16 = 6000;
+
+        let recovery_hot = self
+            .readings
+            .power
+            .as_ref()
+            .map(|p| p.recovery_voltage > RECOVERY_ARMED_THRESHOLD_MV)
+            .unwrap_or(false);
+
+        // TODO: replace with a real IO-board armed flag once available on the bus.
+        #[cfg(feature = "hybrid")]
+        let io_armed = self
+            .readings
+            .power
+            .as_ref()
+            .map(|p| p.bus_supply_voltage > IO_ARMED_THRESHOLD_MV)
+            .unwrap_or(false);
+        #[cfg(not(feature = "hybrid"))]
+        let io_armed = false;
+
+        recovery_hot || io_armed
+    }
+}
+
 impl From<&VehicleSnapshot<'_>> for Heartbeat {
     fn from(snap: &VehicleSnapshot<'_>) -> Self {
         Heartbeat {
             type_: MavType::Rocket,
             autopilot: MavAutopilot::Generic,
-            // TODO: rethink how we want to use the "armed" term
-            base_mode: if snap.mode >= FlightMode::Armed {
+            base_mode: if snap.is_physically_armed() {
                 MavModeFlag::CUSTOM_MODE_ENABLED | MavModeFlag::SAFETY_ARMED
             } else {
                 MavModeFlag::CUSTOM_MODE_ENABLED
@@ -32,24 +61,6 @@ impl From<&VehicleSnapshot<'_>> for Heartbeat {
         }
     }
 }
-
-// impl Into<Heartbeat> for &VehicleSnapshot<'_> {
-//     fn into(self) -> Heartbeat {
-//         Heartbeat {
-//             type_: MavType::Rocket,
-//             autopilot: MavAutopilot::Generic,
-//             // TODO: rethink how we want to use the "armed" term
-//             base_mode: if self.mode >= FlightMode::Armed {
-//                 MavModeFlag::CUSTOM_MODE_ENABLED | MavModeFlag::SAFETY_ARMED
-//             } else {
-//                 MavModeFlag::CUSTOM_MODE_ENABLED
-//             },
-//             custom_mode: self.mode as u32,
-//             system_status: self.mode.into(),
-//             mavlink_version: 2,
-//         }
-//     }
-// }
 
 impl Into<Attitude> for &VehicleSnapshot<'_> {
     fn into(self) -> Attitude {
@@ -284,7 +295,7 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
     fn into(self) -> SysStatus {
         let r = &self.readings;
 
-        let hw_armed = self.mode >= FlightMode::HardwareArmed;
+        let hw_armed = self.is_physically_armed();
         let armed = self.mode >= FlightMode::Armed;
 
         // All sensors/subsystems physically present on the board.
@@ -337,10 +348,10 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
         if armed {
             health |= MavSysStatusSensor::MAV_SYS_STATUS_LOGGING;
         }
-        if self.mode >= FlightMode::HardwareArmed {
+        if hw_armed {
             health |= MavSysStatusSensor::MOTOR_OUTPUTS;
         }
-        if self.mode >= FlightMode::HardwareArmed
+        if hw_armed
             && let Some(g) = &r.gps
             && self.state_estimator.gps_reliable(g)
         {

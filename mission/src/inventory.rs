@@ -15,6 +15,9 @@ pub enum TankId {
     Pressurant,
     Oxidizer,
     CombustionChamber,
+    RegulatedPressurant,
+    ExternalPressurant,
+    ExternalOxidizer,
 }
 
 /// Every temperature sensor on the IO boards.
@@ -55,11 +58,11 @@ pub struct InventoryMap<I, T, const N: usize> {
     _ids: PhantomData<I>,
 }
 
-pub type ValveMap<T> = InventoryMap<ValveId, T, 5>;
+pub type ValveMap<T> = InventoryMap<ValveId, T, 9>;
 pub type TemperatureSensorMap<T> = InventoryMap<TempSensId, T, 2>;
 pub type PressureSensorMap<T> = InventoryMap<PressSensId, T, 9>;
 pub type BinaryOutputMap<T> = InventoryMap<BinaryOutputId, T, 4>;
-pub type TankMap<T> = InventoryMap<TankId, T, 3>;
+pub type TankMap<T> = InventoryMap<TankId, T, 6>;
 
 /// An id enum that can key an [`InventoryMap`]: N variants, each mapping to a unique dense index
 /// in 0..N.
@@ -73,21 +76,32 @@ pub trait InventoryId<const N: usize>: Copy {
 
 impl TankId {
     pub fn flags(&self) -> PressureVesselFlag {
-        PressureVesselFlag::empty()
+        match self {
+            TankId::ExternalPressurant | TankId::ExternalOxidizer => PressureVesselFlag::EXTERNAL,
+            TankId::Pressurant
+            | TankId::Oxidizer
+            | TankId::CombustionChamber
+            | TankId::RegulatedPressurant => PressureVesselFlag::empty(),
+        }
     }
 
     pub fn volume_l(&self) -> f32 {
+        // TODO
         match self {
             TankId::Pressurant => 2.0,
             TankId::Oxidizer => 8.0,
-            TankId::CombustionChamber => 0.0,
+            TankId::CombustionChamber | TankId::RegulatedPressurant => 0.0,
+            TankId::ExternalPressurant => 50.0,
+            TankId::ExternalOxidizer => 40.0,
         }
     }
 
     pub fn fluid(&self) -> FluidType {
         match self {
-            TankId::Pressurant => FluidType::Nitrogen,
-            TankId::Oxidizer => FluidType::NitrousOxide,
+            TankId::Pressurant | TankId::RegulatedPressurant | TankId::ExternalPressurant => {
+                FluidType::Nitrogen
+            }
+            TankId::Oxidizer | TankId::ExternalOxidizer => FluidType::NitrousOxide,
             TankId::CombustionChamber => FluidType::Combustion,
         }
     }
@@ -95,8 +109,9 @@ impl TankId {
     pub fn pressure_rating_bar(&self) -> f32 {
         // TODO
         match self {
-            TankId::Pressurant => 300.0,
-            TankId::Oxidizer | TankId::CombustionChamber => 55.0,
+            TankId::Pressurant | TankId::ExternalPressurant => 300.0,
+            TankId::RegulatedPressurant => 60.0,
+            TankId::Oxidizer | TankId::CombustionChamber | TankId::ExternalOxidizer => 55.0,
         }
     }
 
@@ -108,33 +123,40 @@ impl TankId {
                 Some(PressSensId::OxTankLower),
             ],
             TankId::CombustionChamber => [Some(PressSensId::CombustionChamber), None],
+            TankId::RegulatedPressurant => [Some(PressSensId::PReg1), Some(PressSensId::PReg2)],
+            TankId::ExternalPressurant => [Some(PressSensId::ExternalPressurant), None],
+            TankId::ExternalOxidizer => [Some(PressSensId::ExternalOxidizer), None],
         }
     }
 
     pub fn temperature_sensors(&self) -> [Option<TempSensId>; 2] {
         match self {
             TankId::Oxidizer => [Some(TempSensId::OxTankUpper), Some(TempSensId::OxTankLower)],
-            TankId::Pressurant | TankId::CombustionChamber => [None, None],
+            TankId::Pressurant
+            | TankId::CombustionChamber
+            | TankId::RegulatedPressurant
+            | TankId::ExternalPressurant
+            | TankId::ExternalOxidizer => [None, None],
         }
     }
 }
 
-impl InventoryId<5> for ValveId {
-    const ALL: [Self; 5] = [
+impl InventoryId<9> for ValveId {
+    // The MavLink type has enum values Extra{1..10} with higher values, we simply ignore those
+    const ALL: [Self; 9] = [
         Self::PressurantVent,
         Self::Pressurization,
         Self::OxidizerVent,
         Self::OxidizerFill,
         Self::Main,
+        Self::ExternalPressurantFill,
+        Self::ExternalOxidizerFill,
+        Self::ExternalPressurantVent,
+        Self::ExternalOxidizerVent,
     ];
 
-    // the MAVLink-generated ValveId is 1-indexed
-    #[allow(
-        clippy::arithmetic_side_effects,
-        reason = "ValveId discriminants are 1..=9, so this never underflows"
-    )]
     fn idx(self) -> usize {
-        self as usize - 1
+        self as usize
     }
 }
 
@@ -172,8 +194,15 @@ impl InventoryId<4> for BinaryOutputId {
     }
 }
 
-impl InventoryId<3> for TankId {
-    const ALL: [Self; 3] = [Self::Pressurant, Self::Oxidizer, Self::CombustionChamber];
+impl InventoryId<6> for TankId {
+    const ALL: [Self; 6] = [
+        Self::Pressurant,
+        Self::Oxidizer,
+        Self::CombustionChamber,
+        Self::RegulatedPressurant,
+        Self::ExternalPressurant,
+        Self::ExternalOxidizer,
+    ];
 
     fn idx(self) -> usize {
         self as usize
@@ -275,10 +304,10 @@ mod tests {
                 assert_eq!(id.idx(), i);
             }
         }
-        check::<ValveId, 5>();
+        check::<ValveId, 9>();
         check::<TempSensId, 2>();
         check::<PressSensId, 9>();
         check::<BinaryOutputId, 4>();
-        check::<TankId, 3>();
+        check::<TankId, 6>();
     }
 }

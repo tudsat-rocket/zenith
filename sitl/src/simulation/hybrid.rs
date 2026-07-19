@@ -43,8 +43,14 @@ pub struct HybridSimulation {
     ox_vent_valve: Valve,
     /// Main valve, connecting oxidizer tank to combustion chamber
     main_valve: Valve,
+    /// External-tank fill/vent valves. Not physically modelled yet; state is tracked so the
+    /// reported valve positions and fill modes are coherent in the SITL.
+    ext_press_fill_valve: Valve,
+    ext_ox_fill_valve: Valve,
+    ext_press_vent_valve: Valve,
+    ext_ox_vent_valve: Valve,
     /// Remaining liquid N2O in the external GSE supply cylinder [kg].
-    /// Filling debits this; once empty, fill flow stops regardless of dp.
+    /// FillOxidizer debits this; once empty, fill flow stops regardless of dp.
     pub supply_n2o_mass: f32,
     /// Combustion chamber pressure [bar]
     pub chamber_pressure: f32,
@@ -69,6 +75,10 @@ impl Default for HybridSimulation {
             ox_fill_valve: Valve::new(0.05, 0.2),
             ox_vent_valve: Valve::new(0.03, 0.2),
             main_valve: Valve::new(0.027, 0.5),
+            ext_press_fill_valve: Valve::new(0.05, 0.2),
+            ext_ox_fill_valve: Valve::new(0.05, 0.2),
+            ext_press_vent_valve: Valve::new(0.03, 0.2),
+            ext_ox_vent_valve: Valve::new(0.03, 0.2),
             supply_n2o_mass: 30.0,
             chamber_pressure: 0.0,
             fuel_mass: 1.5,
@@ -108,12 +118,16 @@ impl HybridSimulation {
         self.ox_fill_valve.tick(dt);
         self.ox_vent_valve.tick(dt);
         self.main_valve.tick(dt);
+        self.ext_press_fill_valve.tick(dt);
+        self.ext_ox_fill_valve.tick(dt);
+        self.ext_press_vent_valve.tick(dt);
+        self.ext_ox_vent_valve.tick(dt);
 
         let pressurant_pressure = self.pressurant.pressure();
         let ullage_pressure = self.oxidizer.ullage_pressure();
 
-        // In Idle we simulate someone manually filling N2.
-        if self.flight_mode == FlightMode::Idle {
+        // In FillPressurant we simulate the pressurant being transferred from the external tank.
+        if self.flight_mode == FlightMode::FillPressurant {
             let pressure_diff = (GSE_SUPPLY_PRESSURE - pressurant_pressure).max(0.0);
             let delta_moles = CONDUCTANCE_PRESSURANT_FILL * pressure_diff * dt;
             self.pressurant.add_gas(delta_moles, AMBIENT_TEMP);
@@ -191,6 +205,10 @@ impl HybridSimulation {
             TankId::Pressurant => self.pressurant.pressure(),
             TankId::Oxidizer => self.oxidizer.ullage_pressure(),
             TankId::CombustionChamber => self.chamber_pressure,
+            // Post-regulator line, clamped to the regulator setpoint.
+            TankId::RegulatedPressurant => self.pressurant.pressure().min(55.0),
+            TankId::ExternalPressurant => 300.0,
+            TankId::ExternalOxidizer => 50.0,
         }
     }
 
@@ -202,12 +220,15 @@ impl HybridSimulation {
         }
     }
 
-    /// Tank temperature [C], or None for the combustion chamber
+    /// Tank temperature [C], or None where not modelled
     pub fn tank_temperature(&self, id: TankId) -> Option<f32> {
         match id {
             TankId::Pressurant => Some(self.pressurant.temp - 273.15),
             TankId::Oxidizer => Some(self.oxidizer.temperature() - 273.15),
-            TankId::CombustionChamber => None,
+            TankId::CombustionChamber
+            | TankId::RegulatedPressurant
+            | TankId::ExternalPressurant
+            | TankId::ExternalOxidizer => None,
         }
     }
 
@@ -216,32 +237,44 @@ impl HybridSimulation {
         self.supply_n2o_mass = mass.max(0.0);
     }
 
-    fn valve(&self, id: ValveId) -> &Valve {
+    fn valve(&self, id: ValveId) -> Option<&Valve> {
         match id {
-            ValveId::PressurantVent => &self.press_vent_valve,
-            ValveId::Pressurization => &self.press_valve,
-            ValveId::OxidizerVent => &self.ox_vent_valve,
-            ValveId::OxidizerFill => &self.ox_fill_valve,
-            ValveId::Main => &self.main_valve,
+            ValveId::PressurantVent => Some(&self.press_vent_valve),
+            ValveId::Pressurization => Some(&self.press_valve),
+            ValveId::OxidizerVent => Some(&self.ox_vent_valve),
+            ValveId::OxidizerFill => Some(&self.ox_fill_valve),
+            ValveId::Main => Some(&self.main_valve),
+            ValveId::ExternalPressurantFill => Some(&self.ext_press_fill_valve),
+            ValveId::ExternalOxidizerFill => Some(&self.ext_ox_fill_valve),
+            ValveId::ExternalPressurantVent => Some(&self.ext_press_vent_valve),
+            ValveId::ExternalOxidizerVent => Some(&self.ext_ox_vent_valve),
+            _ => None,
         }
     }
 
-    fn valve_mut(&mut self, id: ValveId) -> &mut Valve {
+    fn valve_mut(&mut self, id: ValveId) -> Option<&mut Valve> {
         match id {
-            ValveId::PressurantVent => &mut self.press_vent_valve,
-            ValveId::Pressurization => &mut self.press_valve,
-            ValveId::OxidizerVent => &mut self.ox_vent_valve,
-            ValveId::OxidizerFill => &mut self.ox_fill_valve,
-            ValveId::Main => &mut self.main_valve,
+            ValveId::PressurantVent => Some(&mut self.press_vent_valve),
+            ValveId::Pressurization => Some(&mut self.press_valve),
+            ValveId::OxidizerVent => Some(&mut self.ox_vent_valve),
+            ValveId::OxidizerFill => Some(&mut self.ox_fill_valve),
+            ValveId::Main => Some(&mut self.main_valve),
+            ValveId::ExternalPressurantFill => Some(&mut self.ext_press_fill_valve),
+            ValveId::ExternalOxidizerFill => Some(&mut self.ext_ox_fill_valve),
+            ValveId::ExternalPressurantVent => Some(&mut self.ext_press_vent_valve),
+            ValveId::ExternalOxidizerVent => Some(&mut self.ext_ox_vent_valve),
+            _ => None,
         }
     }
 
     pub fn command_valve(&mut self, id: ValveId, cmd: ValveCommand) {
-        self.valve_mut(id).command(cmd);
+        if let Some(v) = self.valve_mut(id) {
+            v.command(cmd);
+        }
     }
 
     pub fn valve_state(&self, id: ValveId) -> f32 {
-        self.valve(id).state()
+        self.valve(id).map(valves::Valve::state).unwrap_or(0.0)
     }
 
     pub fn fire_igniter(&mut self) {
@@ -271,15 +304,24 @@ impl Bus for SitlBus {
                 .map(|v| DataWithTime::new(v, Wrapping(t)))
         });
 
+        // The external tanks are ground equipment read over the umbilical, which is severed at
+        // liftoff. Once we reach Burn their sensors go silent.
+        let umbilical_connected = sim.hybrid.flight_mode < FlightMode::Burn;
+
         let press_sens = PressureSensorMap::from_fn(|id| {
             use PressSensId as P;
             let pressure = match id {
                 P::PressurantTank => sim.hybrid.tank_pressure(TankId::Pressurant),
                 P::OxTankUpper | P::OxTankLower => sim.hybrid.tank_pressure(TankId::Oxidizer),
                 P::CombustionChamber => sim.hybrid.tank_pressure(TankId::CombustionChamber),
-                P::ExternalPressurant => 300.0,
-                P::ExternalOxidizer => 50.0,
-                P::Nosecone | P::PReg1 | P::PReg2 => return None,
+                P::ExternalPressurant if umbilical_connected => {
+                    sim.hybrid.tank_pressure(TankId::ExternalPressurant)
+                }
+                P::ExternalOxidizer if umbilical_connected => {
+                    sim.hybrid.tank_pressure(TankId::ExternalOxidizer)
+                }
+                P::PReg1 | P::PReg2 => sim.hybrid.tank_pressure(TankId::RegulatedPressurant),
+                P::Nosecone | P::ExternalPressurant | P::ExternalOxidizer => return None,
             };
             Some(DataWithTime::new(pressure, Wrapping(t)))
         });

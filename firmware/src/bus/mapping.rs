@@ -7,11 +7,15 @@ pub const HC_OUTPUT_IDX: u16 = 0x2006;
 
 // TODO
 pub const VALVE_ID_MAP: ValveMap<IoAddr> = ValveMap::new([
-    IoAddr::new(5, VALVE_IDX, 3), // ValveId::PressurantVent
-    IoAddr::new(5, VALVE_IDX, 3), // ValveId::Pressurization
-    IoAddr::new(4, VALVE_IDX, 1), // ValveId::OxidizerVent
-    IoAddr::new(6, VALVE_IDX, 3), // ValveId::OxidizerFill
-    IoAddr::new(6, VALVE_IDX, 1), // ValveId::Main
+    IoAddr::new(5, VALVE_IDX, 3),       // ValveId::PressurantVent
+    IoAddr::new(5, VALVE_IDX, 3),       // ValveId::Pressurization
+    IoAddr::new(4, VALVE_IDX, 1),       // ValveId::OxidizerVent
+    IoAddr::new(6, VALVE_IDX, 3),       // ValveId::OxidizerFill
+    IoAddr::new(6, VALVE_IDX, 1),       // ValveId::Main
+    IoAddr::new(0xff, VALVE_IDX, 0xff), // ValveId::ExternalPressurantFill
+    IoAddr::new(0xff, VALVE_IDX, 0xff), // ValveId::ExternalOxidizerFill
+    IoAddr::new(0xff, VALVE_IDX, 0xff), // ValveId::ExternalPressurantVent
+    IoAddr::new(0xff, VALVE_IDX, 0xff), // ValveId::ExternalOxidizerVent
 ]);
 
 // TODO

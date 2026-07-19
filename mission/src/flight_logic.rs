@@ -94,9 +94,9 @@ impl FlightLogic {
 
             // No autonomous transition out of these.
             FlightMode::Idle
-            | FlightMode::HardwareArmed
             | FlightMode::Landed
-            | FlightMode::Filling
+            | FlightMode::FillPressurant
+            | FlightMode::FillOxidizer
             | FlightMode::Venting
             | FlightMode::Pressurizing
             | FlightMode::Hold => None,

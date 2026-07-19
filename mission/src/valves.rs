@@ -105,14 +105,18 @@ impl ValveController {
             // Hold: every valve commandable
             M::Hold => true,
 
-            // Vent valves pulsable for relief during fill / pressurize
-            M::Filling | M::Pressurizing => {
+            // Both vent valves manually openable during either fill for relief.
+            M::FillPressurant | M::FillOxidizer => {
+                matches!(valve, V::PressurantVent | V::OxidizerVent)
+            }
+
+            // Vent valves pulsable for relief during pressurize, plus the ox fill for dump.
+            M::Pressurizing => {
                 matches!(valve, V::PressurantVent | V::OxidizerVent | V::OxidizerFill)
             }
 
             // No manual overrides anywhere else
             M::Idle
-            | M::HardwareArmed
             | M::Venting
             | M::Armed
             | M::Ignition
@@ -192,35 +196,39 @@ impl ValveController {
 
         // TODO
         let state = match self.mode {
-            // Hold asserts nothing; the arbiter substitutes the setpoints frozen when Hold was
+            // Hold asserts nothing; the controller substitutes the setpoints frozen when Hold was
             // entered.
             M::Hold => return None,
 
             // Inert ground modes: everything closed.
-            M::Idle | M::HardwareArmed | M::Armed => closed,
+            M::Idle | M::Armed => closed,
 
             // On-pad modes
-            M::Filling => match valve {
-                V::OxidizerFill => open,
-                V::PressurantVent | V::Pressurization | V::OxidizerVent | V::Main => closed,
+            M::FillPressurant => match valve {
+                V::ExternalPressurantFill => open,
+                _ => closed,
+            },
+            M::FillOxidizer => match valve {
+                V::OxidizerFill | V::ExternalOxidizerFill => open,
+                _ => closed,
             },
             M::Pressurizing => match valve {
                 V::Pressurization => open,
-                V::PressurantVent | V::OxidizerVent | V::OxidizerFill | V::Main => closed,
+                _ => closed,
             },
             M::Venting => match valve {
                 V::PressurantVent | V::OxidizerVent => open,
-                V::Pressurization | V::OxidizerFill | V::Main => closed,
+                _ => closed,
             },
 
             // In-flight modes
             M::Ignition | M::Burn | M::Coast => match valve {
                 V::Main | V::Pressurization => open,
-                V::PressurantVent | V::OxidizerVent | V::OxidizerFill => closed,
+                _ => closed,
             },
             M::RecoveryDrogue | M::RecoveryMain | M::Landed => match valve {
                 V::PressurantVent | V::OxidizerVent => open,
-                V::Pressurization | V::OxidizerFill | V::Main => closed,
+                _ => closed,
             },
         };
 
