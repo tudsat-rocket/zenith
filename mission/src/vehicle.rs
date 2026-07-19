@@ -1,6 +1,7 @@
+use core::f32;
 use core::num::Wrapping;
 
-use rapid_dialect::rapid::enums::{FluidType, PressureVesselFlag, ValveId};
+use rapid_dialect::rapid::enums::ValveId;
 use rapid_dialect::rapid::messages::{
     Attitude, BatteryStatus, GlobalPositionInt, GpsRawInt, Heartbeat, LocalPositionNed,
     PressureVessel, RocketInfo, ScaledImu, ScaledImu2, ScaledImu3, ScaledPressure, ScaledPressure2,
@@ -11,13 +12,12 @@ use rapid_dialect::{FlightMode, Rapid};
 use state_estimator::StateEstimator;
 
 use crate::TelemetryLink;
+use crate::bus::{Bus, BusInputImage, BusOutputImage};
 use crate::flight_logic::FlightLogic;
-use crate::foreign_io::{ForeignInputImage, ForeignIo, ForeignOutputImage, ValveState};
-use crate::propulsion::{
-    ALL_TANKS, ALL_VALVES, BinaryOutputId, PropulsionError, TankId, ValveCommand, tank_reading,
-};
+use crate::inventory::{BinaryOutputId, InventoryId, TankId};
 use crate::settings::{RecoverySettings, Settings};
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
+use crate::valves::{ValveCommand, ValveController, ValveError};
 
 pub const HEARTBEAT_INTERVAL_MS: u32 = 500;
 pub const SENSOR_INTERVAL_MS: u32 = 100;
@@ -26,19 +26,24 @@ pub const GPS_INTERVAL_MS: u32 = 500;
 pub const VEHICLE_INFO_INTERVAL_MS: u32 = 1000;
 pub const PROPULSION_INTERVAL_MS: u32 = 200;
 
-pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, E: ForeignIo> {
+pub const IGNITER_ON_DURATION_MS: u32 = 3000;
+
+pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     pub time: Wrapping<u32>,
     mode: FlightMode,
+    /// Vehicle time at which the current mode was entered.
+    mode_entered_at: Wrapping<u32>,
     flight_logic: FlightLogic,
     recovery_settings: RecoverySettings,
     pub sensors: S,
     pub outputs: O,
     pub storage: F,
+    pub bus: B,
     pub readings: SensorReadings,
     pub state_estimator: StateEstimator,
-    pub foreign_io: E,
-    pub input_image: ForeignInputImage,
-    pub output_image: ForeignOutputImage,
+    pub bus_inputs: BusInputImage,
+    pub bus_outputs: BusOutputImage,
+    pub valves: ValveController,
 }
 
 pub struct VehicleSnapshot<'a> {
@@ -47,18 +52,18 @@ pub struct VehicleSnapshot<'a> {
     pub recovery_settings: &'a RecoverySettings,
     pub readings: &'a SensorReadings,
     pub state_estimator: &'a StateEstimator,
-    pub input_image: &'a ForeignInputImage,
-    pub output_image: &'a ForeignOutputImage,
+    pub input_image: &'a BusInputImage,
+    pub output_image: &'a BusOutputImage,
 }
 
-impl<S: Sensors, O: Outputs, F: Storage, E: ForeignIo> Vehicle<S, O, F, E> {
-    pub async fn new(sensors: S, outputs: O, mut storage: F, foreign_io: E) -> Self {
+impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
+    pub async fn new(sensors: S, outputs: O, mut storage: F, bus: B) -> Self {
         let settings = storage.read_settings().await.unwrap_or_else(|| {
             log::info!("No settings stored in flash, reverting to defaults.");
             Settings::default()
         });
 
-        Self::new_with_settings(sensors, outputs, storage, settings, foreign_io)
+        Self::new_with_settings(sensors, outputs, storage, settings, bus)
     }
 
     pub fn new_with_settings(
@@ -66,40 +71,34 @@ impl<S: Sensors, O: Outputs, F: Storage, E: ForeignIo> Vehicle<S, O, F, E> {
         outputs: O,
         storage: F,
         settings: Settings,
-        foreign_io: E,
+        bus: B,
     ) -> Self {
         Self {
             time: Wrapping(0),
             mode: FlightMode::default(),
+            mode_entered_at: Wrapping(0),
             flight_logic: FlightLogic::default(),
             recovery_settings: settings.recovery,
             sensors,
             outputs,
             storage,
+            bus,
             readings: SensorReadings::default(),
             state_estimator: StateEstimator::new(1000.0, settings.state_estimator),
-            foreign_io,
-            input_image: ForeignInputImage::default(),
-            output_image: ForeignOutputImage::default(),
-        }
-    }
-    pub fn into_snapshot(&self) -> VehicleSnapshot<'_> {
-        VehicleSnapshot {
-            time: self.time,
-            mode: self.mode,
-            recovery_settings: &self.recovery_settings,
-            readings: &self.readings,
-            input_image: &self.input_image,
-            state_estimator: &self.state_estimator,
-            output_image: &self.output_image,
+            bus_inputs: BusInputImage::default(),
+            bus_outputs: BusOutputImage::default(),
+            valves: ValveController::new(),
         }
     }
 
     pub async fn tick(&mut self) {
+        use FlightMode as FM;
+
+        // Read our on-board sensors and the vehicle bus inputs first, so
+        // everything below acts on this tick's data.
+        // TODO: incorporate all IMUs, baros into the state estimator.
         self.readings = self.sensors.tick().await;
-
-        self.input_image = self.foreign_io.get_input_image();
-
+        self.bus_inputs = self.bus.get_input_image();
         self.state_estimator.update(
             self.time,
             self.mode,
@@ -111,6 +110,7 @@ impl<S: Sensors, O: Outputs, F: Storage, E: ForeignIo> Vehicle<S, O, F, E> {
             self.readings.gps.clone(),
         );
 
+        // Check if we need to auto-transition to a new flight mode based on the new state.
         if let Some(new_mode) = self.flight_logic.update(
             self.time,
             self.mode,
@@ -120,14 +120,20 @@ impl<S: Sensors, O: Outputs, F: Storage, E: ForeignIo> Vehicle<S, O, F, E> {
             self.set_mode(new_mode);
         }
 
-        let recovery_armed = self.mode >= FlightMode::Armed;
-        self.outputs.set_recovery_armed(recovery_armed);
-        self.outputs
-            .set_drogue(self.mode == FlightMode::RecoveryDrogue);
-        self.outputs.set_main(self.mode == FlightMode::RecoveryMain);
+        // Set our on-board recovery outputs based on flight mode.
+        self.outputs.set_recovery_armed(self.mode >= FM::Armed);
+        self.outputs.set_drogue(self.mode == FM::RecoveryDrogue);
+        self.outputs.set_main(self.mode == FM::RecoveryMain);
 
-        self.foreign_io.set_output_image(self.output_image);
-        self.foreign_io.tick();
+        // The igniters are energized for the first IGNITER_ON_DURATION_MS of Ignition.
+        let igniting = self.mode == FM::Ignition
+            && (self.time - self.mode_entered_at).0 < IGNITER_ON_DURATION_MS;
+        self.bus_outputs.binary_output[BinaryOutputId::Igniter1] = igniting;
+        self.bus_outputs.binary_output[BinaryOutputId::Igniter2] = igniting;
+
+        // Determine the intended state of all valves and push it out on the vehicle bus.
+        self.bus_outputs.valve = self.valves.resolve(self.time);
+        self.bus.set_output_image(self.bus_outputs);
 
         self.time += 1;
     }
@@ -143,50 +149,38 @@ impl<S: Sensors, O: Outputs, F: Storage, E: ForeignIo> Vehicle<S, O, F, E> {
         }
 
         log::info!("Mode change: {:?} -> {:?}", self.mode, mode);
-        self.flight_logic.set_mode(self.time, mode);
         self.mode = mode;
+        self.mode_entered_at = self.time;
 
-        for valve in ALL_VALVES {
-            if let Some(cmd) = Self::default_valve_policy(mode, valve) {
-                self.output_image.set_valve(valve, cmd);
-            }
-        }
+        self.flight_logic.set_mode(self.time, mode);
+        self.valves.set_mode(mode);
 
-        if mode == FlightMode::Ignition {
-            // Igniter inhibit lives next to the call site: this is the one
-            // place fire_igniter() is invoked. NoPropulsion returns Err and
-            // the call is harmlessly ignored.
-            // FIXME: turn off igniter at some point
-
-            self.output_image
-                .set_binary_output(BinaryOutputId::Igniter1, true);
-            self.output_image
-                .set_binary_output(BinaryOutputId::Igniter2, true);
+        // Camera outputs are turned on automatically, but are not automatically turned
+        // back off.
+        if mode >= FlightMode::Armed {
+            self.bus_outputs.binary_output[BinaryOutputId::Camera1] = true;
+            self.bus_outputs.binary_output[BinaryOutputId::Camera2] = true;
         }
     }
 
-    /// Try to manually drive a valve from an uplink command. Returns
-    /// `NotPermittedInMode` if the current mode doesn't grant operator
-    /// authority over that valve.
     pub fn try_command_valve(
         &mut self,
         valve: ValveId,
         cmd: ValveCommand,
-    ) -> Result<(), PropulsionError> {
-        if !Self::manual_valve_allowed(self.mode, valve) {
-            return Err(crate::propulsion::PropulsionError::NotPermittedInMode);
+    ) -> Result<(), ValveError> {
+        self.valves.try_command(valve, cmd, self.time)
+    }
+
+    pub fn into_snapshot(&self) -> VehicleSnapshot<'_> {
+        VehicleSnapshot {
+            time: self.time,
+            mode: self.mode,
+            recovery_settings: &self.recovery_settings,
+            readings: &self.readings,
+            input_image: &self.bus_inputs,
+            state_estimator: &self.state_estimator,
+            output_image: &self.bus_outputs,
         }
-        let state = match cmd {
-            // TODO: implement pulseOpen
-            ValveCommand::Open => ValveState::fully_open(),
-            ValveCommand::Close => ValveState::fully_closed(),
-            // FIXME: document partial ValveCommand
-            ValveCommand::Partial(p) => ValveState::from_promille_clamped((p * 1000.0) as u16),
-            // TODO: implement pulse open
-            ValveCommand::PulseOpen(_) => ValveState::fully_open(),
-        };
-        self.output_image.set_valve(valve, state);
-        Ok(())
     }
 
     // NOTE: this wrapper is probably not required
@@ -206,7 +200,6 @@ impl<S: Sensors, O: Outputs, F: Storage, E: ForeignIo> Vehicle<S, O, F, E> {
         if self.time.0 % HEARTBEAT_INTERVAL_MS == 0 {
             let snap = self.into_snapshot();
             link.send_message(Heartbeat::from(&snap).into());
-            Self::send_msg::<Heartbeat>(&snap, link);
         }
 
         if self.time.0 % HEARTBEAT_INTERVAL_MS == HEARTBEAT_INTERVAL_MS / 2 {
@@ -216,7 +209,6 @@ impl<S: Sensors, O: Outputs, F: Storage, E: ForeignIo> Vehicle<S, O, F, E> {
 
         if self.time.0 % SENSOR_INTERVAL_MS == 0 {
             let snap = self.into_snapshot();
-
             Self::send_msg::<Attitude>(&snap, link);
             Self::send_msg::<LocalPositionNed>(&snap, link);
             Self::send_msg::<VfrHud>(&snap, link);
@@ -256,112 +248,75 @@ impl<S: Sensors, O: Outputs, F: Storage, E: ForeignIo> Vehicle<S, O, F, E> {
     }
 
     fn send_pressure_vessels(&self, link: &mut impl TelemetryLink) {
-        let snapshot = self.into_snapshot();
-        for tank in ALL_TANKS {
-            let reading = tank_reading(tank, &snapshot);
+        for tank in TankId::ALL {
+            let p_ids = tank.pressure_sensors();
+            let t_ids = tank.temperature_sensors();
 
-            let (fluid, rated) = match tank {
-                TankId::Pressurant => (FluidType::Nitrogen, 30_000u16),
-                TankId::Oxidizer => (FluidType::NitrousOxide, 7_000u16),
-                TankId::CombustionChamber => (FluidType::Combustion, 7_000u16),
-            };
+            let pressure1 = p_ids[0]
+                .map(|id| self.bus_inputs.press_sens[id])
+                .and_then(|o| o.map(|d| d.data))
+                .map(|bar| (bar * 100.0).clamp(0.0, f32::from(u16::MAX)) as u16)
+                .unwrap_or(u16::MAX);
 
-            let pressure1_kpa = reading
-                .pressure1
-                .map(|p| (p * 100.0).clamp(0.0, f32::from(u16::MAX)) as u16)
-                .unwrap_or(0);
-            let pressure2_kpa = reading
-                .pressure2
-                .map(|p| (p * 100.0).clamp(0.0, f32::from(u16::MAX)) as u16)
-                .unwrap_or(0);
-            let temp1_cdegc = reading
-                .temperature1
-                .map(|t| (t * 100.0).clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16)
-                .unwrap_or(i16::MAX);
-            let temp2_cdegc = reading
-                .temperature2
-                .map(|t| (t * 100.0).clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16)
+            let pressure2 = p_ids[1]
+                .map(|id| self.bus_inputs.press_sens[id])
+                .and_then(|o| o.map(|d| d.data))
+                .map(|bar| (bar * 100.0).clamp(0.0, f32::from(u16::MAX)) as u16)
+                .unwrap_or(u16::MAX);
+
+            let temperature1 = t_ids[0]
+                .map(|id| self.bus_inputs.temp_sens[id])
+                .and_then(|o| o.map(|d| d.data))
+                .map(|celsius| {
+                    (celsius * 100.0).clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
+                })
                 .unwrap_or(i16::MAX);
 
-            let flags = PressureVesselFlag::empty();
+            let temperature2 = t_ids[1]
+                .map(|id| self.bus_inputs.temp_sens[id])
+                .and_then(|o| o.map(|d| d.data))
+                .map(|celsius| {
+                    (celsius * 100.0).clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
+                })
+                .unwrap_or(i16::MAX);
 
-            let level_c_percent = reading
-                .level
+            let level = (tank == TankId::Oxidizer)
+                .then_some(self.bus_inputs.ox_tank_level.map(|d| d.data))
+                .flatten()
                 .map(|l| (l * 10000.0).clamp(0.0, f32::from(u16::MAX)) as u16)
-                .unwrap_or(0);
+                .unwrap_or(u16::MAX);
 
             let msg = PressureVessel {
                 id: tank as u8,
-                flags,
-                fluid,
-                pressure1: pressure1_kpa,
-                pressure2: pressure2_kpa,
-                rated_pressure: rated,
-                temperature1: temp1_cdegc,
-                temperature2: temp2_cdegc,
-                volume: 0,
-                level: level_c_percent,
+                flags: tank.flags(),
+                fluid: tank.fluid(),
+                pressure1,
+                pressure2,
+                rated_pressure: (tank.pressure_rating_bar() * 100.0) as u16,
+                temperature1,
+                temperature2,
+                volume: (tank.volume_l() * 1000.0) as u16,
+                level,
             };
             link.send_message(msg.into());
         }
     }
 
     fn send_valve_states(&self, link: &mut impl TelemetryLink) {
-        for valve in ALL_VALVES {
-            // TODO: send only fresh data?
-            // FIXME: document what f32 means in terms of valve state
-            // 0 = closed, 1 = open ??
-            let state = self
-                .input_image
-                .valve_state(valve)
+        for valve in ValveId::ALL {
+            // Both fields use 0.0 = fully closed, 1.0 = fully open; NAN = unknown.
+            let state = self.bus_inputs.valve_state[valve]
                 .map(|state| f32::from(state.data.promille()) / 1000.0)
                 .unwrap_or(f32::NAN);
-            let commanded = f32::from(self.output_image.get_valve(valve).promille()) / 1000.0;
+            let commanded = f32::from(self.bus_outputs.valve[valve].promille()) / 1000.0;
+
             let msg = Valve {
                 id: valve,
                 state,
                 commanded,
             };
+
             link.send_message(msg.into());
-        }
-    }
-
-    fn manual_valve_allowed(mode: FlightMode, valve: ValveId) -> bool {
-        match mode {
-            // Hold: every valve commandable
-            FlightMode::Hold => true,
-            // Vent valves pulsable for relief during fill / pressurize
-            FlightMode::Filling | FlightMode::Pressurizing => {
-                matches!(
-                    valve,
-                    ValveId::PressurantVent | ValveId::OxidizerVent | ValveId::OxidizerFill
-                )
-            }
-            // No manual overrides anywhere else
-            _ => false,
-        }
-    }
-
-    // TODO: implement procedures
-    fn default_valve_policy(mode: FlightMode, valve: ValveId) -> Option<ValveState> {
-        use ValveState as V;
-
-        match (mode, valve) {
-            (FlightMode::Hold, _) => None,
-            (FlightMode::Filling, ValveId::OxidizerFill) => Some(V::fully_open()),
-            (FlightMode::Pressurizing, ValveId::Pressurization) => Some(V::fully_open()),
-            (FlightMode::Venting, ValveId::PressurantVent | ValveId::OxidizerVent) => {
-                Some(V::fully_open())
-            }
-            (
-                FlightMode::Coast | FlightMode::Ignition | FlightMode::Burn,
-                ValveId::Main | ValveId::Pressurization,
-            ) => Some(V::fully_open()),
-            (
-                FlightMode::RecoveryDrogue | FlightMode::RecoveryMain,
-                ValveId::PressurantVent | ValveId::OxidizerVent,
-            ) => Some(V::fully_open()),
-            _ => Some(V::fully_closed()),
         }
     }
 }

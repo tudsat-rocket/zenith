@@ -46,7 +46,7 @@ async fn run_can_rx(can_rx: &'static mut CanRx<'static>, publisher: CanRxPublish
                 debug!("can_rx: received can envelope");
                 let frame = envelope.frame;
 
-                if publisher.try_publish(frame.clone()).is_err() {
+                if publisher.try_publish(frame).is_err() {
                     warn!("CAN RX queue full, overwriting oldest frame");
                     publisher.publish_immediate(frame);
                 }

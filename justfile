@@ -25,37 +25,33 @@ flash-gcs *args:
 # Run the SITL on the host (solid-rocket build)
 sitl-solid *args:
     ./sitl/tap.sh
-    cargo run -p sitl --bin sitl --release {{args}}
+    cargo run -p sitl --bin sitl --release --no-default-features {{args}}
 
 # Run the SITL on the host (hybrid-rocket build)
 sitl-hybrid *args:
     ./sitl/tap.sh
     cargo run -p sitl --bin sitl --release --features hybrid {{args}}
 
-# cargo check across the workspace, with the right target per crate
+cargo-everywhere *args:
+    cargo {{args}} -p firmware --bin rocket --target {{target}}
+    cargo {{args}} -p firmware --bin rocket --features hybrid --target {{target}}
+    cargo {{args}} -p firmware --bin selftest --target {{target}}
+    cargo {{args}} -p firmware --bin gcs --features gcs --target {{target}}
+    cargo {{args}} -p sitl --no-default-features
+    cargo {{args}} -p sitl --features hybrid
+    cargo {{args}} -p state_estimator -p telemetry -p utils -p links -p mission --all-features
+
 check:
-    cargo check -p firmware --bin rocket --target {{target}}
-    cargo check -p firmware --bin rocket --features hybrid --target {{target}}
-    cargo check -p firmware --bin selftest --target {{target}}
-    cargo check -p firmware --bin gcs --features gcs --target {{target}}
-    cargo check -p sitl
-    cargo check -p sitl --features hybrid
-    cargo check -p state_estimator -p telemetry -p utils -p links -p mission --all-features
+    @just cargo-everywhere check
+
+clippy:
+    @just cargo-everywhere clippy
 
 # cargo test, but with release due to all the state estimator sitl number crunching
 test:
     cargo test --release
+    cargo test -p sitl --no-default-features --release
     cargo test -p sitl --features hybrid --release
-
-# cargo clippy across the workspace, with the right target per crate
-clippy:
-    cargo clippy -p firmware --bin rocket --target {{target}}
-    cargo clippy -p firmware --bin rocket --features hybrid --target {{target}}
-    cargo clippy -p firmware --bin selftest --target {{target}}
-    cargo clippy -p firmware --bin gcs --features gcs --target {{target}}
-    cargo clippy -p sitl
-    cargo clippy -p sitl --features hybrid
-    cargo clippy -p state_estimator -p telemetry -p utils -p links -p mission --all-features
 
 fmt:
     cargo fmt --all

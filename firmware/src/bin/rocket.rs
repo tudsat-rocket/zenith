@@ -10,8 +10,8 @@ use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{Duration, Ticker};
 
 use firmware::Vehicle;
+use firmware::bus::BusHandler;
 use firmware::can::{CanRxSubscriber, CanTxPublisher};
-use firmware::foreign::FIoHandler;
 use firmware::links::{Links, UplinkCommand};
 
 use {defmt_rtt as _, panic_probe as _};
@@ -35,6 +35,7 @@ async fn main(low_priority_spawner: Spawner) {
 
     let can1_rx = fw::can::CAN1_RX_CH.init(PubSubChannel::new());
     let can1_tx = fw::can::CAN1_TX_CH.init(PubSubChannel::new());
+
     fw::can::spawn_can1(
         board.can1,
         medium_priority_spawner,
@@ -48,18 +49,17 @@ async fn main(low_priority_spawner: Spawner) {
     #[cfg(not(feature = "gcs"))]
     fw::sensors::gps::spawn(board.gps, low_priority_spawner);
 
-    let foreign_io_handler = {
+    let bus_handler = {
         let can_tx_pub: CanTxPublisher = can1_tx.publisher().unwrap();
         let can_rx_sub: CanRxSubscriber = can1_rx.subscriber().unwrap();
-        FIoHandler::new(can_tx_pub, can_rx_sub)
+        BusHandler::new(can_tx_pub, can_rx_sub)
     };
 
-    //fw::sensors::power::init(board.adc, low_priority_spawner);
     let vehicle = Vehicle::new(
         board.sensors,
         board.outputs,
         mission::NoStorage,
-        foreign_io_handler,
+        bus_handler,
     )
     .await;
 
@@ -99,7 +99,13 @@ pub async fn main_loop(
                     vehicle.set_mode(fm);
                 }
                 UplinkCommand::CommandValve(valve_id, valve_cmd) => {
-                    let _ = vehicle.try_command_valve(valve_id, valve_cmd);
+                    if vehicle.try_command_valve(valve_id, valve_cmd).is_err() {
+                        defmt::warn!(
+                            "CommandValve {} {} rejected",
+                            defmt::Debug2Format(&valve_id),
+                            defmt::Debug2Format(&valve_cmd)
+                        );
+                    }
                 }
                 _ => {}
             }

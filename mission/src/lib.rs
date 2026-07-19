@@ -1,16 +1,18 @@
 #![no_std]
 #![allow(async_fn_in_trait)]
 
+pub mod bus;
 pub mod flight_logic;
-pub mod foreign_io;
+pub mod inventory;
 mod mavlink;
-pub mod propulsion;
 mod settings;
 mod traits;
+pub mod valves;
 mod vehicle;
 
 pub use settings::*;
 pub use traits::*;
 pub use vehicle::Vehicle;
 
-pub use propulsion::{PropulsionError, TankId};
+pub use inventory::TankId;
+pub use valves::ValveError;

@@ -10,8 +10,8 @@ pub use simulation::{RecoveryFlags, SharedSimulation, Simulation, StdOutputs, St
 
 #[cfg(not(feature = "hybrid"))]
 pub type Vehicle<F = mission::NoStorage> =
-    mission::Vehicle<StdSensors, StdOutputs, F, mission::NoPropulsion>;
+    mission::Vehicle<StdSensors, StdOutputs, F, mission::bus::NoBus>;
 
 #[cfg(feature = "hybrid")]
 pub type Vehicle<F = mission::NoStorage> =
-    mission::Vehicle<StdSensors, StdOutputs, F, simulation::hybrid::SitlPeriphery>;
+    mission::Vehicle<StdSensors, StdOutputs, F, simulation::hybrid::SitlBus>;

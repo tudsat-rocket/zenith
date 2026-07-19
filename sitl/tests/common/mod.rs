@@ -9,16 +9,16 @@ use rapid_dialect::FlightMode;
 use sitl::{RecoveryFlags, SharedSimulation, Simulation, StdOutputs, StdSensors};
 
 #[cfg(not(feature = "hybrid"))]
-use mission::NoPropulsion;
+use mission::bus::NoBus;
 
 #[cfg(feature = "hybrid")]
-use sitl::simulation::hybrid::SitlPropulsion;
+use sitl::simulation::hybrid::SitlBus;
 
 #[cfg(not(feature = "hybrid"))]
-pub type Vehicle = MissionVehicle<StdSensors, StdOutputs, MemoryStorage, NoPropulsion>;
+pub type Vehicle = MissionVehicle<StdSensors, StdOutputs, MemoryStorage, NoBus>;
 
 #[cfg(feature = "hybrid")]
-pub type Vehicle = MissionVehicle<StdSensors, StdOutputs, MemoryStorage, SitlPropulsion>;
+pub type Vehicle = MissionVehicle<StdSensors, StdOutputs, MemoryStorage, SitlBus>;
 
 /// Test `Storage` double that hands out a fixed `Settings` (or None).
 pub struct MemoryStorage {
@@ -55,12 +55,12 @@ impl Harness {
         let storage = MemoryStorage::new(settings);
 
         #[cfg(not(feature = "hybrid"))]
-        let vehicle = MissionVehicle::new(sensors, outputs, storage, NoPropulsion).await;
+        let vehicle = MissionVehicle::new(sensors, outputs, storage, NoBus).await;
 
         #[cfg(feature = "hybrid")]
         let vehicle = {
-            let propulsion = SitlPropulsion::new(sim.clone());
-            MissionVehicle::new(sensors, outputs, storage, propulsion).await
+            let bus = SitlBus::new(sim.clone());
+            MissionVehicle::new(sensors, outputs, storage, bus).await
         };
 
         Self { vehicle, sim }

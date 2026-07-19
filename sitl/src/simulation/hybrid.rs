@@ -2,13 +2,15 @@
 
 use std::num::Wrapping;
 
-use mission::foreign_io::{
-    DataWithTime, ForeignInputImage, ForeignIo, ForeignOutputImage, ValveState,
-};
+use mission::bus::{Bus, BusInputImage, BusOutputImage, DataWithTime, ValveState};
 use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::ValveId;
 
-use mission::propulsion::{ALL_BINARY_OUTPUTS, ALL_VALVES, BinaryOutputId, TankId, ValveCommand};
+use mission::inventory::{
+    BinaryOutputId, BinaryOutputMap, InventoryId, PressSensId, PressureSensorMap, TankId,
+    TemperatureSensorMap, ValveMap,
+};
+use mission::valves::ValveCommand;
 
 use crate::simulation::hybrid::fluid::{
     AMBIENT_PRESSURE, AMBIENT_TEMP, n2o_liquid_density, n2o_saturation_pressure,
@@ -243,74 +245,53 @@ impl HybridSimulation {
     }
 }
 
-pub struct SitlPeriphery {
+pub struct SitlBus {
     sim: super::SharedSimulation,
 }
 
-impl SitlPeriphery {
+impl SitlBus {
     pub fn new(sim: super::SharedSimulation) -> Self {
         Self { sim }
     }
 }
 
-impl ForeignIo for SitlPeriphery {
-    fn tick(&mut self) {}
-
-    fn get_input_image(&mut self) -> ForeignInputImage {
+impl Bus for SitlBus {
+    fn get_input_image(&mut self) -> BusInputImage {
         let sim = self.sim.lock().unwrap();
 
         let t = (sim.physics.time * 1000.0) as u32;
 
-        let temp_sens = [
+        let temp_sens = TemperatureSensorMap::from_fn(|_id| {
             sim.hybrid
                 .tank_temperature(TankId::Oxidizer)
-                .map(|v| DataWithTime::new(v, Wrapping(t))),
-            sim.hybrid
-                .tank_temperature(TankId::Oxidizer)
-                .map(|v| DataWithTime::new(v, Wrapping(t))),
-        ];
+                .map(|v| DataWithTime::new(v, Wrapping(t)))
+        });
 
-        let press_sens = [
-            None,
-            Some(DataWithTime::new(
-                sim.hybrid.tank_pressure(TankId::Pressurant),
-                Wrapping(t),
-            )),
-            None,
-            None,
-            Some(DataWithTime::new(
-                sim.hybrid.tank_pressure(TankId::Oxidizer),
-                Wrapping(t),
-            )),
-            Some(DataWithTime::new(
-                sim.hybrid.tank_pressure(TankId::Oxidizer),
-                Wrapping(t),
-            )),
-            Some(DataWithTime::new(
-                sim.hybrid.tank_pressure(TankId::CombustionChamber),
-                Wrapping(t),
-            )),
-            Some(DataWithTime::new(300.0, Wrapping(t))),
-            Some(DataWithTime::new(50.0, Wrapping(t))),
-        ];
+        let press_sens = PressureSensorMap::from_fn(|id| {
+            use PressSensId as P;
+            let pressure = match id {
+                P::PressurantTank => sim.hybrid.tank_pressure(TankId::Pressurant),
+                P::OxTankUpper | P::OxTankLower => sim.hybrid.tank_pressure(TankId::Oxidizer),
+                P::CombustionChamber => sim.hybrid.tank_pressure(TankId::CombustionChamber),
+                P::ExternalPressurant => 300.0,
+                P::ExternalOxidizer => 50.0,
+                P::Nosecone | P::PReg1 | P::PReg2 => return None,
+            };
+            Some(DataWithTime::new(pressure, Wrapping(t)))
+        });
 
-        let valve_state_dyn: Vec<_> = ALL_VALVES
-            .iter()
-            .map(|i| {
-                Some(DataWithTime::new(
-                    ValveState::from_percent_open((100.0 * sim.hybrid.valve_state(*i)) as u16),
-                    Wrapping(t),
-                ))
-            })
-            .collect();
-        let valve_state_slice = valve_state_dyn.as_slice();
-        let valve_state = valve_state_slice.try_into().unwrap();
+        let valve_state = ValveMap::from_fn(|id| {
+            Some(DataWithTime::new(
+                ValveState::from_percent_open((100.0 * sim.hybrid.valve_state(id)) as u16),
+                Wrapping(t),
+            ))
+        });
 
-        ForeignInputImage {
+        BusInputImage {
             temp_sens,
             press_sens,
             valve_state,
-            binary_outputs: [None; ALL_BINARY_OUTPUTS.len()],
+            binary_outputs: BinaryOutputMap::splat(None),
             ox_tank_level: Some(DataWithTime::new(
                 sim.hybrid.tank_level(TankId::Oxidizer),
                 Wrapping(t),
@@ -318,25 +299,27 @@ impl ForeignIo for SitlPeriphery {
         }
     }
 
-    fn set_output_image(&mut self, outputs: ForeignOutputImage) {
+    fn set_output_image(&mut self, outputs: BusOutputImage) {
         let mut sim = self.sim.lock().unwrap();
 
-        for i in &ALL_VALVES {
-            let valve_state = outputs.valve[*i as usize - 1];
+        for i in ValveId::ALL {
+            let valve_state = outputs.valve[i];
+            let p = valve_state.promille();
+
             // TODO: resolve this
-            let cmd = if valve_state.promille() == 0 {
+            let cmd = if p == 0 {
                 ValveCommand::Close
-            } else if valve_state.promille() == 1000 {
+            } else if p == 1000 {
                 ValveCommand::Open
             } else {
-                let f = (valve_state.promille() as f32) / 1000.0;
+                let f = (p as f32) / 1000.0;
                 ValveCommand::Partial(f)
             };
 
-            sim.hybrid.command_valve(*i, cmd);
+            sim.hybrid.command_valve(i, cmd);
         }
 
-        if outputs.binary_output[BinaryOutputId::Igniter1 as usize] {
+        if outputs.binary_output[BinaryOutputId::Igniter1] {
             sim.hybrid.fire_igniter();
         }
     }

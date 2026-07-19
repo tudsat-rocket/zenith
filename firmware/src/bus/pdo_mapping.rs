@@ -1,11 +1,9 @@
 use mission::{
-    foreign_io::ValveState,
-    propulsion::{
-        ALL_BINARY_OUTPUTS, ALL_VALVES, BinaryOutputId, PressSensId, TempSensId, ValveId,
-    },
+    bus::ValveState,
+    inventory::{BinaryOutputId, ValveId},
 };
 
-use crate::foreign::mapping::{BINARY_OUTPUT_ID_MAP, VALVE_ID_MAP};
+use crate::bus::mapping::{BINARY_OUTPUT_ID_MAP, VALVE_ID_MAP};
 
 /// every pdo message has 8 bytes payload
 /// every entry is encoded as litle endian
@@ -95,10 +93,10 @@ pub fn valve_msg_to_valve(node_id: u16, data: &[u8]) -> heapless::Vec<(ValveId, 
 }
 
 fn valve_id_for(node_id: u16, subindex: usize) -> Option<ValveId> {
-    ALL_VALVES.iter().copied().find(|&id| {
-        let addr = VALVE_ID_MAP.get_io_addr(id);
-        addr.node_id as u16 == node_id && addr.subindex as usize == subindex
-    })
+    VALVE_ID_MAP
+        .iter()
+        .find(|(_, addr)| addr.node_id as u16 == node_id && addr.subindex as usize == subindex)
+        .map(|(id, _)| id)
 }
 
 pub fn binary_output_msg_to_bo(
@@ -118,10 +116,10 @@ pub fn binary_output_msg_to_bo(
 }
 
 fn bo_id_for(node_id: u16, subindex: usize) -> Option<BinaryOutputId> {
-    ALL_BINARY_OUTPUTS.iter().copied().find(|&id| {
-        let addr = &BINARY_OUTPUT_ID_MAP.0[id as usize];
-        addr.node_id as u16 == node_id && addr.subindex as usize == subindex
-    })
+    BINARY_OUTPUT_ID_MAP
+        .iter()
+        .find(|(_, addr)| addr.node_id as u16 == node_id && addr.subindex as usize == subindex)
+        .map(|(id, _)| id)
 }
 
 fn decode_le_u16x4(data: &[u8]) -> Option<[u16; 4]> {

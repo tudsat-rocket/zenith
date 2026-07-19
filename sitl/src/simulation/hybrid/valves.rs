@@ -1,6 +1,6 @@
 //! Valve actuation simulation
 
-use mission::propulsion::ValveCommand;
+use mission::valves::ValveCommand;
 
 #[derive(Copy, Clone)]
 pub struct Valve {
@@ -43,10 +43,9 @@ impl Valve {
     pub fn tick(&mut self, dt: f32) {
         let target = match self.commanded {
             ValveCommand::Open => 1.0,
-            ValveCommand::Close => 0.0,
             ValveCommand::Partial(p) => p,
             ValveCommand::PulseOpen(dur) if dur.as_secs_f32() > self.commanded_time => 1.0,
-            ValveCommand::PulseOpen(_) => 0.0,
+            ValveCommand::Close | ValveCommand::PulseOpen(_) => 0.0,
         };
 
         let max_step = dt / self.travel_time;

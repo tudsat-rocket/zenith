@@ -12,7 +12,7 @@ use networking::Links;
 use sitl::{RecoveryFlags, SharedSimulation, Simulation, StdOutputs, StdSensors, Vehicle};
 
 #[cfg(feature = "hybrid")]
-use sitl::simulation::hybrid::SitlPeriphery;
+use sitl::simulation::hybrid::SitlBus;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -31,7 +31,7 @@ async fn main(spawner: Spawner) {
             StdSensors::new(sim.clone()),
             StdOutputs::new(flags),
             mission::NoStorage,
-            mission::NoPropulsion,
+            mission::bus::NoBus,
         )
         .await;
         let links = Links::init(spawner);
@@ -45,7 +45,7 @@ async fn main(spawner: Spawner) {
             StdSensors::new(sim.clone()),
             StdOutputs::new(flags),
             mission::NoStorage,
-            SitlPeriphery::new(sim.clone()),
+            SitlBus::new(sim.clone()),
         )
         .await;
         let links = Links::init(spawner);
@@ -74,7 +74,7 @@ async fn main_loop(mut vehicle: Vehicle, mut links: Links, sim: SharedSimulation
                 #[cfg(feature = "hybrid")]
                 UplinkCommand::CommandValve(valve, valve_cmd) => {
                     if let Err(_e) = vehicle.try_command_valve(valve, valve_cmd) {
-                        log::warn!("CommandValve {:?} {:?} rejected.", valve, valve_cmd);
+                        log::warn!("CommandValve {valve:?} {valve_cmd:?} rejected.");
                     }
                 }
                 _ => {}
