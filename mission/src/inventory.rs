@@ -50,6 +50,7 @@ pub enum BinaryOutputId {
     Igniter2,
     Camera1,
     Camera2,
+    Camera3,
 }
 
 /// A fixed-size array indexed by an id enum instead of a raw usize.
@@ -61,7 +62,7 @@ pub struct InventoryMap<I, T, const N: usize> {
 pub type ValveMap<T> = InventoryMap<ValveId, T, 9>;
 pub type TemperatureSensorMap<T> = InventoryMap<TempSensId, T, 2>;
 pub type PressureSensorMap<T> = InventoryMap<PressSensId, T, 9>;
-pub type BinaryOutputMap<T> = InventoryMap<BinaryOutputId, T, 4>;
+pub type BinaryOutputMap<T> = InventoryMap<BinaryOutputId, T, 5>;
 pub type TankMap<T> = InventoryMap<TankId, T, 6>;
 
 /// An id enum that can key an [`InventoryMap`]: N variants, each mapping to a unique dense index
@@ -186,8 +187,14 @@ impl InventoryId<9> for PressSensId {
     }
 }
 
-impl InventoryId<4> for BinaryOutputId {
-    const ALL: [Self; 4] = [Self::Igniter1, Self::Igniter2, Self::Camera1, Self::Camera2];
+impl InventoryId<5> for BinaryOutputId {
+    const ALL: [Self; 5] = [
+        Self::Igniter1,
+        Self::Igniter2,
+        Self::Camera1,
+        Self::Camera2,
+        Self::Camera3,
+    ];
 
     fn idx(self) -> usize {
         self as usize

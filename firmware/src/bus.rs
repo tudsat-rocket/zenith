@@ -27,7 +27,8 @@ use mission::inventory::{BinaryOutputId, BinaryOutputMap, InventoryId, ValveMap}
 
 use crate::bus::mapping::{BINARY_OUTPUT_ID_MAP, VALVE_ID_MAP};
 use crate::bus::pdo_mapping::{
-    PdMessageKind, ProcessDataCanId, binary_output_msg_to_bo, valve_msg_to_valve,
+    PdMessageKind, ProcessDataCanId, SensorReading, binary_output_msg_to_bo,
+    sensor_msg_to_readings, valve_msg_to_valve,
 };
 use crate::can::{CanRxSubscriber, CanTxPublisher};
 
@@ -35,8 +36,8 @@ mod mapping;
 mod pdo_mapping;
 
 pub const VERY_FRESH_DURATION: Duration = Duration::from_millis(50);
-pub const BINARY_OUTPUT_MESSAGE_INTERVAL: Duration = Duration::from_millis(50);
-pub const VALVE_MESSAGE_INTERVAL: Duration = Duration::from_millis(50);
+pub const BINARY_OUTPUT_MESSAGE_INTERVAL: Duration = Duration::from_millis(500);
+pub const VALVE_MESSAGE_INTERVAL: Duration = Duration::from_millis(500);
 
 pub struct BusHandler {
     pub input: BusInputImage,
@@ -116,6 +117,7 @@ impl Bus for BusHandler {
                 &heapless::Vec::from_slice(&(target_state.promille().to_le_bytes())).unwrap(),
                 io_addr,
             );
+
             let frame = can_msg_to_frame(&msg);
 
             if self.can.0.try_publish(frame).is_err() {
@@ -131,30 +133,33 @@ impl Bus for BusHandler {
 }
 
 fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u32>) {
+    defmt::info!("try_injest_can_msg");
     let Id::Standard(cob_id) = frame.header().id() else {
         return;
     };
     if frame.header().len() != 8 {
+        defmt::warn!("injesting can msg with non 8 length not supported");
         return;
     }
     let data = frame.data();
 
     let Ok(pd_id) = ProcessDataCanId::try_from(cob_id.as_raw()) else {
+        defmt::warn!(
+            "injest can msg not process data can id: cob: 0x{:x}",
+            cob_id.as_raw()
+        );
         return;
     };
 
     let node_id = pd_id.node_id;
 
-    // The empty arms below are kept separate: each is an independent unimplemented
-    // message kind, not actually duplicate logic.
-    #[allow(clippy::match_same_arms)]
     match pd_id.kind {
         PdMessageKind::Valves => {
             for (id, state) in valve_msg_to_valve(node_id as u16, data) {
                 image.valve_state[id] = Some(DataWithTime::new(state, time));
             }
         }
-        // TODO: add
+        // NOTE: currently all sensor processing must happen on nodes on the bus
         PdMessageKind::PwmUs
         | PdMessageKind::RawBus0a
         | PdMessageKind::RawBus1a
@@ -166,8 +171,24 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
                 image.binary_outputs[id] = Some(DataWithTime::new(bool_state, time));
             }
         }
-        // FIXME: add
-        PdMessageKind::Sensor0 | PdMessageKind::Sensor1 => (),
+        PdMessageKind::Sensor0 | PdMessageKind::Sensor1 => {
+            defmt::info!("injesting sensor msg");
+            for reading in sensor_msg_to_readings(node_id as u16, pd_id.kind, data) {
+                match reading {
+                    SensorReading::Temperature(id, value) => {
+                        image.temp_sens[id] = Some(DataWithTime::new(value, time));
+                    }
+                    SensorReading::Pressure(id, value) => {
+                        defmt::info!(
+                            "pressure sensor injest with id: {}, value: {}",
+                            id as u8,
+                            value
+                        );
+                        image.press_sens[id] = Some(DataWithTime::new(value, time));
+                    }
+                }
+            }
+        }
     }
 }
 
