@@ -19,11 +19,11 @@ fn state_machine_advances_correctly() {
 
         let expected = [
             FlightMode::Idle,
-            FlightMode::Armed,
+            FlightMode::DetectLaunch,
             FlightMode::Burn,
             FlightMode::Coast,
-            FlightMode::RecoveryDrogue,
-            FlightMode::RecoveryMain,
+            FlightMode::DeployDrogue,
+            FlightMode::DeployMain,
             FlightMode::Landed,
         ];
 

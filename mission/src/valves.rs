@@ -111,19 +111,19 @@ impl ValveController {
             }
 
             // Vent valves pulsable for relief during pressurize, plus the ox fill for dump.
-            M::Pressurizing => {
+            M::Pressurize => {
                 matches!(valve, V::PressurantVent | V::OxidizerVent | V::OxidizerFill)
             }
 
             // No manual overrides anywhere else
             M::Idle
-            | M::Venting
-            | M::Armed
-            | M::Ignition
+            | M::Vent
+            | M::DetectLaunch
+            | M::Ignite
             | M::Burn
             | M::Coast
-            | M::RecoveryDrogue
-            | M::RecoveryMain
+            | M::DeployDrogue
+            | M::DeployMain
             | M::Landed => false,
         }
     }
@@ -206,7 +206,7 @@ impl ValveController {
             M::Hold => return None,
 
             // Inert ground modes: everything closed.
-            M::Idle | M::Armed => closed,
+            M::Idle | M::DetectLaunch => closed,
 
             // On-pad modes
             M::FillPressurant => match valve {
@@ -217,21 +217,21 @@ impl ValveController {
                 V::OxidizerFill | V::ExternalOxidizerFill => open,
                 _ => closed,
             },
-            M::Pressurizing => match valve {
+            M::Pressurize => match valve {
                 V::Pressurization => open,
                 _ => closed,
             },
-            M::Venting => match valve {
+            M::Vent => match valve {
                 V::PressurantVent | V::OxidizerVent => open,
                 _ => closed,
             },
 
             // In-flight modes
-            M::Ignition | M::Burn | M::Coast => match valve {
+            M::Ignite | M::Burn | M::Coast => match valve {
                 V::Main | V::Pressurization => open,
                 _ => closed,
             },
-            M::RecoveryDrogue | M::RecoveryMain | M::Landed => match valve {
+            M::DeployDrogue | M::DeployMain | M::Landed => match valve {
                 V::PressurantVent | V::OxidizerVent => open,
                 _ => closed,
             },

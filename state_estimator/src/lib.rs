@@ -387,7 +387,7 @@ impl StateEstimator {
         }
 
         // Continuously reset ground altitude before arming.
-        if mode < FlightMode::Armed {
+        if mode < FlightMode::DetectLaunch {
             self.altitude_ground = self.altitude_asl();
         }
 
@@ -396,15 +396,15 @@ impl StateEstimator {
             FlightMode::Idle
             | FlightMode::FillPressurant
             | FlightMode::FillOxidizer
-            | FlightMode::Venting
-            | FlightMode::Pressurizing
+            | FlightMode::Vent
+            | FlightMode::Pressurize
             | FlightMode::Hold
-            | FlightMode::Armed
-            | FlightMode::Ignition => self.altitude_asl(),
+            | FlightMode::DetectLaunch
+            | FlightMode::Ignite => self.altitude_asl(),
             FlightMode::Burn
             | FlightMode::Coast
-            | FlightMode::RecoveryDrogue
-            | FlightMode::RecoveryMain => f32::max(self.altitude_max, self.altitude_asl()),
+            | FlightMode::DeployDrogue
+            | FlightMode::DeployMain => f32::max(self.altitude_max, self.altitude_asl()),
             FlightMode::Landed => self.altitude_max,
         };
     }
@@ -496,7 +496,7 @@ impl StateEstimator {
 
         //        Some(self.altitude_asl() + remaining_height)
         //    }
-        //    FlightMode::RecoveryDrogue | FlightMode::RecoveryMain | FlightMode::Landed => {
+        //    FlightMode::DeployDrogue | FlightMode::DeployMain | FlightMode::Landed => {
         //        Some(self.altitude_max)
         //    }
         //    _ => None,

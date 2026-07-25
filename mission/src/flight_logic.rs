@@ -43,7 +43,7 @@ impl FlightLogic {
 
         match mode {
             // Takeoff detection: sustained high acceleration along body Z axis
-            FlightMode::Armed | FlightMode::Ignition => {
+            FlightMode::DetectLaunch | FlightMode::Ignite => {
                 let accel_z = estimator.acceleration_vehicle().map(|a| a.z).unwrap_or(0.0);
                 // ~3G threshold for 50ms
                 let high_accel = accel_z > 3.0 * GRAVITY;
@@ -64,22 +64,22 @@ impl FlightLogic {
                 let falling = self.true_since(time, estimator.vertical_speed() < 0.0, 500);
                 let min_exceeded = t_since_takeoff > params.min_time_to_drogue;
                 let max_exceeded = t_since_takeoff > 30_000; // safety: 30s max coast
-                ((min_exceeded && falling) || max_exceeded).then_some(FlightMode::RecoveryDrogue)
+                ((min_exceeded && falling) || max_exceeded).then_some(FlightMode::DeployDrogue)
             }
 
             // Main chute deployment: below altitude threshold
-            FlightMode::RecoveryDrogue => {
+            FlightMode::DeployDrogue => {
                 let below_alt = self.true_since(
                     time,
                     estimator.altitude_agl() < params.main_deploy_altitude,
                     100,
                 );
                 let min_time = params.min_time_to_main;
-                (t_in_mode > min_time && below_alt).then_some(FlightMode::RecoveryMain)
+                (t_in_mode > min_time && below_alt).then_some(FlightMode::DeployMain)
             }
 
             // Landing detection: near-zero vertical speed with ~1G present
-            FlightMode::RecoveryMain => {
+            FlightMode::DeployMain => {
                 let gravity_present = estimator
                     .acceleration_vehicle()
                     .map(|acc| (GRAVITY * 0.9..GRAVITY * 1.1).contains(&acc.magnitude()))
@@ -97,8 +97,8 @@ impl FlightLogic {
             | FlightMode::Landed
             | FlightMode::FillPressurant
             | FlightMode::FillOxidizer
-            | FlightMode::Venting
-            | FlightMode::Pressurizing
+            | FlightMode::Vent
+            | FlightMode::Pressurize
             | FlightMode::Hold => None,
         }
     }

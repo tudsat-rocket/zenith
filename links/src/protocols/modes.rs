@@ -17,14 +17,14 @@ fn mode_properties(mode: FlightMode) -> MavModeProperty {
 
     let hidden = match mode {
         #[cfg(feature = "hybrid")]
-        FlightMode::Armed => true,
+        FlightMode::DetectLaunch => true,
         #[cfg(not(feature = "hybrid"))]
         FlightMode::FillPressurant
         | FlightMode::FillOxidizer
-        | FlightMode::Venting
-        | FlightMode::Pressurizing
+        | FlightMode::Vent
+        | FlightMode::Pressurize
         | FlightMode::Hold
-        | FlightMode::Ignition => true,
+        | FlightMode::Ignite => true,
         _ => false,
     };
 
@@ -38,12 +38,12 @@ fn mode_properties(mode: FlightMode) -> MavModeProperty {
 
     if matches!(
         mode,
-        FlightMode::Armed
-            | FlightMode::Ignition
+        FlightMode::DetectLaunch
+            | FlightMode::Ignite
             | FlightMode::Burn
             | FlightMode::Coast
-            | FlightMode::RecoveryDrogue
-            | FlightMode::RecoveryMain
+            | FlightMode::DeployDrogue
+            | FlightMode::DeployMain
     ) {
         props |= MavModeProperty::AUTO_MODE;
     }

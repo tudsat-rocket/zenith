@@ -115,12 +115,13 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         }
 
         // Set our on-board recovery outputs based on flight mode.
-        self.outputs.set_recovery_armed(self.mode >= FM::Armed);
-        self.outputs.set_drogue(self.mode == FM::RecoveryDrogue);
-        self.outputs.set_main(self.mode == FM::RecoveryMain);
+        self.outputs
+            .set_recovery_armed(self.mode >= FM::DetectLaunch);
+        self.outputs.set_drogue(self.mode == FM::DeployDrogue);
+        self.outputs.set_main(self.mode == FM::DeployMain);
 
         // The igniters are energized for the first IGNITER_ON_DURATION_MS of Ignition.
-        let igniting = self.mode == FM::Ignition
+        let igniting = self.mode == FM::Ignite
             && (self.time - self.mode_entered_at).0 < IGNITER_ON_DURATION_MS;
         self.bus_outputs.binary_output[BinaryOutputId::Igniter1] = igniting;
         self.bus_outputs.binary_output[BinaryOutputId::Igniter2] = igniting;
@@ -151,7 +152,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
 
         // Camera outputs are turned on automatically, but are not automatically turned
         // back off.
-        if mode >= FlightMode::Armed {
+        if mode >= FlightMode::DetectLaunch {
             self.bus_outputs.binary_output[BinaryOutputId::Camera1] = true;
             self.bus_outputs.binary_output[BinaryOutputId::Camera2] = true;
         }

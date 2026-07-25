@@ -296,7 +296,7 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
         let r = &self.readings;
 
         let hw_armed = self.is_physically_armed();
-        let armed = self.mode >= FlightMode::Armed;
+        let armed = self.mode >= FlightMode::DetectLaunch;
 
         // All sensors/subsystems physically present on the board.
         let present = MavSysStatusSensor::_3D_GYRO
@@ -319,7 +319,7 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
         if !hw_armed {
             enabled -= MavSysStatusSensor::MOTOR_OUTPUTS;
         }
-        if self.mode != FlightMode::Burn && self.mode != FlightMode::Ignition {
+        if self.mode != FlightMode::Burn && self.mode != FlightMode::Ignite {
             enabled -= MavSysStatusSensor::PROPULSION;
         }
 

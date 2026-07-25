@@ -20,7 +20,7 @@ const MAX_TICKS: u32 = 400_000;
 async fn estimator_altitude_at_main_deploy(h: &mut Harness) -> f32 {
     h.arm();
     let result = h
-        .run_until(MAX_TICKS, |h| h.mode() == FlightMode::RecoveryMain)
+        .run_until(MAX_TICKS, |h| h.mode() == FlightMode::DeployMain)
         .await;
     assert!(
         result.is_ok(),

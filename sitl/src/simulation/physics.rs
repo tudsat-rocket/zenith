@@ -186,7 +186,7 @@ impl FlightPhysics {
             self.phase = FlightPhase::Pad;
             self.phase_time = 0.0;
             self.armed_time = None;
-        } else if mode >= FlightMode::Armed && self.armed_time.is_none() {
+        } else if mode >= FlightMode::DetectLaunch && self.armed_time.is_none() {
             log::info!(
                 "[SIM] Vehicle armed at t={:.2}s, launching in 5s",
                 self.time
@@ -251,7 +251,7 @@ impl FlightPhysics {
                 }
                 #[cfg(feature = "hybrid")]
                 {
-                    if self.mode == FlightMode::Ignition {
+                    if self.mode == FlightMode::Ignite {
                         self.transition(FlightPhase::Burn);
                     }
                 }

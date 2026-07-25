@@ -25,10 +25,10 @@ fn recovery_outputs_fire_in_matching_modes() {
         let result = h
             .run_until(MAX_TICKS, |h| {
                 match h.mode() {
-                    FlightMode::RecoveryDrogue if h.drogue_active() => {
+                    FlightMode::DeployDrogue if h.drogue_active() => {
                         drogue_true_in_drogue = true;
                     }
-                    FlightMode::RecoveryMain if h.main_active() => {
+                    FlightMode::DeployMain if h.main_active() => {
                         main_true_in_main = true;
                     }
                     _ => {}
@@ -40,11 +40,11 @@ fn recovery_outputs_fire_in_matching_modes() {
         assert!(result.is_ok(), "flight did not reach Landed");
         assert!(
             drogue_true_in_drogue,
-            "drogue output was never high while in RecoveryDrogue"
+            "drogue output was never high while in DeployDrogue"
         );
         assert!(
             main_true_in_main,
-            "main output was never high while in RecoveryMain"
+            "main output was never high while in DeployMain"
         );
     });
 }
@@ -58,7 +58,7 @@ fn armed_does_not_auto_advance_without_thrust() {
         h.run_ticks(2_000).await;
         assert_eq!(
             h.mode(),
-            FlightMode::Armed,
+            FlightMode::DetectLaunch,
             "vehicle auto-advanced to {:?} without simulated thrust",
             h.mode()
         );
@@ -73,11 +73,11 @@ fn outputs_silent_before_drogue_phase() {
         let mut h = Harness::new(None).await;
         h.arm();
 
-        // On every tick before entering RecoveryDrogue, both outputs must
-        // be low. Stop the moment we see RecoveryDrogue.
+        // On every tick before entering DeployDrogue, both outputs must
+        // be low. Stop the moment we see DeployDrogue.
         let result = h
             .run_until(MAX_TICKS, |h| {
-                if h.mode() < FlightMode::RecoveryDrogue {
+                if h.mode() < FlightMode::DeployDrogue {
                     assert!(
                         !h.drogue_active(),
                         "drogue fired early in mode {:?} at alt {:.1}m",
@@ -91,13 +91,13 @@ fn outputs_silent_before_drogue_phase() {
                         h.altitude_agl(),
                     );
                 }
-                h.mode() >= FlightMode::RecoveryDrogue
+                h.mode() >= FlightMode::DeployDrogue
             })
             .await;
 
         assert!(
             result.is_ok(),
-            "vehicle never reached RecoveryDrogue within {MAX_TICKS} ticks"
+            "vehicle never reached DeployDrogue within {MAX_TICKS} ticks"
         );
     });
 }

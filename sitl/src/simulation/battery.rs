@@ -52,15 +52,15 @@ impl Battery {
             FlightMode::Idle => -0.2,
             FlightMode::FillPressurant
             | FlightMode::FillOxidizer
-            | FlightMode::Pressurizing
+            | FlightMode::Pressurize
             | FlightMode::Hold
-            | FlightMode::Venting
-            | FlightMode::Armed => 0.3,
-            FlightMode::Ignition => 4.8,
+            | FlightMode::Vent
+            | FlightMode::DetectLaunch => 0.3,
+            FlightMode::Ignite => 4.8,
             FlightMode::Burn
             | FlightMode::Coast
-            | FlightMode::RecoveryDrogue
-            | FlightMode::RecoveryMain => 2.4,
+            | FlightMode::DeployDrogue
+            | FlightMode::DeployMain => 2.4,
             FlightMode::Landed => 0.6,
         };
 

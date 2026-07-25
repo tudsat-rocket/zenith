@@ -63,10 +63,13 @@ impl Harness {
     }
 
     pub fn arm(&mut self) {
-        self.vehicle.set_mode(FlightMode::Armed);
+        self.vehicle.set_mode(FlightMode::DetectLaunch);
         // Notify sim directly so the 5s ignition timer starts even though
         // run_until/run_ticks hasn't seen the mode change yet.
-        self.sim.lock().unwrap().set_flight_mode(FlightMode::Armed);
+        self.sim
+            .lock()
+            .unwrap()
+            .set_flight_mode(FlightMode::DetectLaunch);
     }
 
     pub fn mode(&self) -> FlightMode {
