@@ -136,6 +136,11 @@ impl ValveController {
         cmd: ValveCommand,
         now: Wrapping<u32>,
     ) -> Result<(), ValveError> {
+        // Extra valve IDs that the dialect defines but we might not have.
+        if !ValveId::ALL.contains(&valve) {
+            return Err(ValveError::InvalidCommand);
+        }
+
         if !self.manual_valve_allowed(valve) {
             return Err(ValveError::NotPermittedInMode);
         }
