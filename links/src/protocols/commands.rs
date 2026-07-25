@@ -8,7 +8,7 @@
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::watch::Sender;
-use embassy_time::{Duration, Instant};
+use embassy_time::{Duration, Instant, Timer};
 
 use rapid_dialect::rapid::enums::{MavCmd, MavResult, ValveId};
 use rapid_dialect::rapid::messages::{AvailableModes, CommandAck};
@@ -68,6 +68,8 @@ pub async fn run(
             Rapid::CommandLong(cmd)
                 if cmd.target_system == system_id && cmd.target_component == component_id =>
             {
+                let mut reboot_requested = false;
+
                 let result = match cmd.command {
                     MavCmd::DoSetMode => {
                         let custom_mode = cmd.param2 as u8;
@@ -100,6 +102,14 @@ pub async fn run(
                             MavResult::Denied
                         }
                     }
+                    MavCmd::PreflightRebootShutdown => match cmd.param1 as u32 {
+                        0 => MavResult::Accepted,
+                        1 => {
+                            reboot_requested = true;
+                            MavResult::Accepted
+                        }
+                        _ => MavResult::Unsupported,
+                    },
                     MavCmd::CanForward => {
                         cmd_tx.publish(UplinkCommand::RequestCanForwarding).await;
                         MavResult::Accepted
@@ -141,6 +151,10 @@ pub async fn run(
                 };
 
                 let _ = tx.publish(Rapid::CommandAck(ack)).await;
+
+                if reboot_requested {
+                    reboot().await;
+                }
             }
             Rapid::CommandInt(cmd)
                 if cmd.target_system == system_id && cmd.target_component == component_id =>
@@ -210,4 +224,15 @@ pub async fn run(
 
         link_quality_sender.send(lq);
     }
+}
+
+async fn reboot() {
+    log::warn!("rebooting");
+    Timer::after(Duration::from_millis(250)).await;
+
+    #[cfg(target_os = "none")]
+    cortex_m::peripheral::SCB::sys_reset();
+
+    #[cfg(not(target_os = "none"))]
+    log::error!("no MCU to reset on this platform, ignoring");
 }
