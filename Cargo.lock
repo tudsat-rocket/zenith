@@ -1185,6 +1185,7 @@ dependencies = [
  "rand 0.8.5",
  "rand_chacha 0.3.1",
  "rapid-dialect",
+ "sequential-storage",
  "serde",
  "siphasher 0.3.11",
  "state_estimator",
@@ -1557,6 +1558,7 @@ dependencies = [
 name = "links"
 version = "0.1.0"
 dependencies = [
+ "cortex-m",
  "embassy-futures",
  "embassy-sync 0.7.2",
  "embassy-time",
@@ -1646,6 +1648,15 @@ dependencies = [
 name = "lorawan-macros"
 version = "0.1.0"
 source = "git+https://github.com/lora-rs/lora-rs.git#85906f076a54f90d4f8b39aa14fd554df5e434a6"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
+]
+
+[[package]]
+name = "macros"
+version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1813,11 +1824,15 @@ checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 name = "mission"
 version = "0.1.0"
 dependencies = [
+ "critical-section",
+ "embassy-sync 0.7.2",
  "links",
  "log",
+ "macros",
  "mavio",
  "nalgebra",
  "num-traits",
+ "params",
  "rapid-dialect",
  "state_estimator",
 ]
@@ -1931,6 +1946,14 @@ checksum = "4047d9235d1423d66cc97da7d07eddb54d4f154d6c13805c6d0793956f4f25b0"
 dependencies = [
  "cortex-m",
  "defmt 0.3.100",
+]
+
+[[package]]
+name = "params"
+version = "0.1.0"
+dependencies = [
+ "nalgebra",
+ "rapid-dialect",
 ]
 
 [[package]]
@@ -2176,7 +2199,7 @@ checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
 [[package]]
 name = "rapid-dialect"
 version = "0.1.0"
-source = "git+https://github.com/tudsat-rocket/rapid-dialect#47a0eda20a551132179fc19388af68234ba49ba6"
+source = "git+https://github.com/tudsat-rocket/rapid-dialect#cdaef6ad1c93c58875dcab122ced07c1ec2565f7"
 dependencies = [
  "heck",
  "mavinspect",
@@ -2338,6 +2361,15 @@ name = "semver-parser"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
+
+[[package]]
+name = "sequential-storage"
+version = "8.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e750f14f4f6e5a81277c66311713a56106c8df0196df62a634d1fc806556832b"
+dependencies = [
+ "embedded-storage-async",
+]
 
 [[package]]
 name = "serde"
@@ -2555,8 +2587,10 @@ dependencies = [
  "ahrs",
  "criterion",
  "filter",
+ "macros",
  "nalgebra",
  "num-traits",
+ "params",
  "rapid-dialect",
 ]
 

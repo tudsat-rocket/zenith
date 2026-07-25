@@ -3,7 +3,7 @@ use core::num::Wrapping;
 use rapid_dialect::FlightMode;
 use state_estimator::{GRAVITY, StateEstimator};
 
-use crate::RecoverySettings;
+use crate::RecoveryParams;
 
 /// Automatic flight mode transitions based on state estimator data.
 ///
@@ -36,7 +36,7 @@ impl FlightLogic {
         time: Wrapping<u32>,
         mode: FlightMode,
         estimator: &StateEstimator,
-        settings: &RecoverySettings,
+        params: &RecoveryParams,
     ) -> Option<FlightMode> {
         let t_in_mode = (time - self.mode_time).0;
         let t_since_takeoff = (time - self.takeoff_time).0;
@@ -62,7 +62,7 @@ impl FlightLogic {
             // Apogee detection: sustained negative vertical speed
             FlightMode::Coast => {
                 let falling = self.true_since(time, estimator.vertical_speed() < 0.0, 500);
-                let min_exceeded = t_since_takeoff > settings.min_time_to_drogue;
+                let min_exceeded = t_since_takeoff > params.min_time_to_drogue;
                 let max_exceeded = t_since_takeoff > 30_000; // safety: 30s max coast
                 ((min_exceeded && falling) || max_exceeded).then_some(FlightMode::RecoveryDrogue)
             }
@@ -71,10 +71,10 @@ impl FlightLogic {
             FlightMode::RecoveryDrogue => {
                 let below_alt = self.true_since(
                     time,
-                    estimator.altitude_agl() < settings.main_deploy_altitude,
+                    estimator.altitude_agl() < params.main_deploy_altitude,
                     100,
                 );
-                let min_time = settings.min_time_to_main;
+                let min_time = params.min_time_to_main;
                 (t_in_mode > min_time && below_alt).then_some(FlightMode::RecoveryMain)
             }
 

@@ -44,6 +44,7 @@ embedded-can = { workspace = true }
 embedded-nal-async = { workspace = true }
 embedded-io-async = { workspace = true }
 embedded-storage-async = { workspace = true }
+sequential-storage = "8.0.1"
 
 cortex-m = { version = "0.7", features = ["inline-asm", "critical-section-single-core"] }
 cortex-m-rt = "0.7"

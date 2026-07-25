@@ -3,9 +3,10 @@ use nalgebra::Vector3;
 use rapid_dialect::Rapid;
 
 use links::UplinkCommand;
+use params::{ParamId, ParamValue};
 use state_estimator::GpsDatum;
 
-use crate::Settings;
+use crate::Params;
 
 #[derive(Clone, Default)]
 pub struct AdcData {
@@ -70,19 +71,6 @@ pub trait TelemetryLink {
 }
 
 pub trait Storage {
-    async fn read_settings(&mut self) -> Option<Settings>;
-    async fn write_settings(&mut self, settings: &Settings);
-}
-
-// This is only here because the firmware doesn't have a storage impl yet. once that's in, this
-// moves to SITL.
-#[derive(Default)]
-pub struct NoStorage;
-
-impl Storage for NoStorage {
-    async fn read_settings(&mut self) -> Option<Settings> {
-        None
-    }
-
-    async fn write_settings(&mut self, _settings: &Settings) {}
+    fn read_params(&mut self) -> Option<Params>;
+    fn write_param(&mut self, id: ParamId, value: ParamValue);
 }

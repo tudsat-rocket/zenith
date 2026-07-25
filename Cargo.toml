@@ -7,6 +7,8 @@ members = [
     "utils",
     "links",
     "mission",
+    "params",
+    "macros",
     "sitl",
 ]
 default-members = ["sitl"]
@@ -20,6 +22,12 @@ telemetry = { path = "telemetry" }
 utils = { path = "utils" }
 links = { path = "links" }
 mission = { path = "mission" }
+params = { path = "params" }
+macros = { path = "macros" }
+
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
 
 log = "0.4"
 env_logger = "0.11"

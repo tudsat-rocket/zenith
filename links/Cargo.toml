@@ -17,5 +17,9 @@ embassy-sync = { workspace = true }
 
 log = { workspace = true }
 
+# Only for the MCU reset behind PREFLIGHT_REBOOT_SHUTDOWN; the host/SITL build has no use for it.
+[target.'cfg(target_os = "none")'.dependencies]
+cortex-m = "0.7"
+
 [lints]
 workspace = true
