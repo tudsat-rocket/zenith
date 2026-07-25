@@ -32,13 +32,15 @@ fn mode_properties(mode: FlightMode) -> MavModeProperty {
         props |= MavModeProperty::NOT_USER_SELECTABLE;
     }
 
-    if !matches!(mode, FlightMode::Idle | FlightMode::Landed) {
+    if !matches!(mode, FlightMode::Idle | FlightMode::Hold) {
         props |= MavModeProperty::ADVANCED;
     }
 
     if matches!(
         mode,
-        FlightMode::Burn
+        FlightMode::Armed
+            | FlightMode::Ignition
+            | FlightMode::Burn
             | FlightMode::Coast
             | FlightMode::RecoveryDrogue
             | FlightMode::RecoveryMain
