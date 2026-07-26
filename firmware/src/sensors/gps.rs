@@ -110,9 +110,13 @@ impl GPS {
                 self.uart.set_config(&uart_config).unwrap();
 
                 while start.elapsed() < Duration::from_millis(2500) {
-                    if let Ok(_str) = self.read_gps_packet().await {
+                    if let Ok(str) = self.read_gps_packet().await
+                        && !str.is_empty()
+                        && str != "\0"
+                    {
                         return *baud_rate;
                     }
+
                     Timer::after(Duration::from_millis(10)).await;
                 }
             }
