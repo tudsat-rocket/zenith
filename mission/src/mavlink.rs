@@ -145,20 +145,20 @@ impl Into<GpsRawInt> for &VehicleSnapshot<'_> {
             lat: gps
                 .and_then(|g| g.latitude)
                 .map(|v| (f64::from(v) * 1e7) as i32)
-                .unwrap_or(0),
+                .unwrap_or(i32::MAX),
             lon: gps
                 .and_then(|g| g.longitude)
                 .map(|v| (f64::from(v) * 1e7) as i32)
-                .unwrap_or(0),
+                .unwrap_or(i32::MAX),
             alt: gps
                 .and_then(|g| g.altitude)
                 .map(|v| (v * 1000.0) as i32)
-                .unwrap_or(0),
+                .unwrap_or(i32::MAX),
             eph: gps.map(|g| g.hdop).unwrap_or(u16::MAX),
             epv: u16::MAX,
             vel: u16::MAX,
             cog: u16::MAX,
-            satellites_visible: u8::MAX,
+            satellites_visible: gps.map(|g| g.num_satellites).unwrap_or(u8::MAX),
             alt_ellipsoid: 0,
             h_acc: 0,
             v_acc: 0,
