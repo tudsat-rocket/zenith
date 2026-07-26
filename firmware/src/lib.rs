@@ -26,6 +26,7 @@ use crate::bus::BusHandler;
 
 pub mod board;
 pub mod bus;
+pub mod buzzer;
 pub mod can;
 pub mod links;
 pub mod sensors;

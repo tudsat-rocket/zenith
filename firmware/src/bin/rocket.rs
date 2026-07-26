@@ -13,10 +13,10 @@ use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{Duration, Ticker};
 
-use firmware::Vehicle;
 use firmware::bus::BusHandler;
 use firmware::can::{CanRxSubscriber, CanTxPublisher};
 use firmware::links::{Links, UplinkCommand};
+use firmware::{Vehicle, buzzer};
 
 use {defmt_rtt as _, panic_probe as _};
 
@@ -55,6 +55,8 @@ async fn main(low_priority_spawner: Spawner) {
     )
     .await;
 
+    fw::buzzer::spawn(board.buzzer, low_priority_spawner);
+
     let can_tx_pub: CanTxPublisher = can1_tx.publisher().unwrap();
     let can_rx_sub: CanRxSubscriber = can1_rx.subscriber().unwrap();
     let bus = BusHandler::new(can_tx_pub, can_rx_sub);
@@ -78,6 +80,7 @@ async fn main(low_priority_spawner: Spawner) {
     high_priority_spawner
         .spawn(main_loop(vehicle, links, board.iwdg))
         .unwrap();
+    buzzer::request_song(buzzer::Song::StartupTech);
 }
 
 #[embassy_executor::task]
