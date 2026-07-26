@@ -14,10 +14,11 @@ use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{Duration, Instant, Ticker};
 use static_cell::StaticCell;
 
-use firmware::Vehicle;
 use firmware::bus::BusHandler;
+use firmware::buzzer::alerts::Alerts;
 use firmware::can::{CanRxSubscriber, CanTxPublisher};
 use firmware::links::{Links, UplinkCommand};
+use firmware::{Vehicle, buzzer};
 use rapid_dialect::rapid::enums::MavResult;
 
 use {defmt_rtt as _, panic_probe as _};
@@ -79,6 +80,8 @@ async fn init(low_priority_spawner: Spawner) {
     )
     .await;
 
+    fw::buzzer::spawn(board.buzzer, low_priority_spawner);
+
     let can_tx_pub: CanTxPublisher = can1_tx.publisher().unwrap();
     let can_rx_sub: CanRxSubscriber = can1_rx.subscriber().unwrap();
     let bus = BusHandler::new(can_tx_pub, can_rx_sub);
@@ -102,6 +105,14 @@ async fn init(low_priority_spawner: Spawner) {
     high_priority_spawner
         .spawn(main_loop(vehicle, links, board.iwdg))
         .unwrap();
+    buzzer::request_sound(buzzer::Sound::StartupTech);
+
+    Timer::after(Duration::from_secs(5)).await;
+    buzzer::request_sound(buzzer::Sound::Mario);
+
+    //Timer::after(Duration::from_secs(10)).await;
+
+    //buzzer::request_stop();
 }
 
 #[embassy_executor::task]
@@ -111,6 +122,7 @@ pub async fn main_loop(
     mut iwdg: IndependentWatchdog<'static, IWDG1>,
 ) -> ! {
     let mut cpu = fw::cpu::CpuMonitor::new();
+    let mut alerts = Alerts::default();
     let mut ticker = Ticker::every(Duration::from_micros(1000));
     loop {
         let tick_started = Instant::now();
@@ -120,6 +132,12 @@ pub async fn main_loop(
         }
 
         vehicle.tick().await;
+
+        // Let the buzzer know about mode changes and the battery voltage.
+        alerts.update(
+            vehicle.mode(),
+            vehicle.readings.power.as_ref().map(|p| p.bus_main_voltage),
+        );
 
         // TODO: this belongs somewhere else
         if let Some((token, cmd)) = links.try_recv_command() {
