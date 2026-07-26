@@ -24,39 +24,34 @@ pub struct GpsDatum {
     pub num_satellites: u8,
 }
 
-#[derive(Debug, Clone)]
-pub struct StateEstimatorSettings {
+/// Tunable state-estimator parameters. Each field is exposed over MAVLink as `SE_<name>`.
+#[derive(Debug, Clone, macros::ParameterGroup)]
+#[param_group(prefix = "SE")]
+pub struct StateEstimatorParams {
     /// proportional filter gain for Mahony attitude estimator
+    #[param(id = 0x0100, name = "MAHONY_KP", default = 0.1)]
     pub mahony_kp: f32,
     /// integral filter gain for Mahony attitude estimator
+    #[param(id = 0x0101, name = "MAHONY_KI", default = 0.0)]
     pub mahony_ki: f32,
     /// proportional filter gain for Mahony attitude estimator
+    #[param(id = 0x0102, name = "MAHONY_KP_ASC", default = 0.1)]
     pub mahony_kp_ascent: f32,
     /// integral filter gain for Mahony attitude estimator
+    #[param(id = 0x0103, name = "MAHONY_KI_ASC", default = 0.0)]
     pub mahony_ki_ascent: f32,
     /// accelerometer standard deviation for kalman filter
+    #[param(id = 0x0104, name = "STDDEV_ACC", default = 0.5)]
     pub std_dev_accelerometer: f32,
     /// barometer standard deviation for kalman filter
+    #[param(id = 0x0105, name = "STDDEV_BARO", default = 10.0)]
     pub std_dev_barometer: f32,
     /// barometer standard deviation for kalman filter when in the transsonic region
+    #[param(id = 0x0106, name = "STDDEV_BARO_T", default = 5000.0)]
     pub std_dev_barometer_transsonic: f32,
     /// process standard deviation for kalman filter
+    #[param(id = 0x0107, name = "STDDEV_PROC", default = 0.5)]
     pub std_dev_process: f32,
-}
-
-impl Default for StateEstimatorSettings {
-    fn default() -> Self {
-        Self {
-            mahony_kp: 0.1,
-            mahony_ki: 0.0,
-            mahony_kp_ascent: 0.1,
-            mahony_ki_ascent: 0.0,
-            std_dev_accelerometer: 0.5,
-            std_dev_barometer: 10.0,
-            std_dev_barometer_transsonic: 5000.0,
-            std_dev_process: 0.5,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -69,8 +64,10 @@ pub struct StateEstimator {
     mode_time: Wrapping<u32>,
     /// time of takeoff (entering Burn)
     takeoff_time: Wrapping<u32>,
-    /// settings
-    settings: StateEstimatorSettings,
+    /// main loop time step (s), for rebuilding filter matrices
+    dt: f32,
+    /// params
+    params: StateEstimatorParams,
     /// orientation
     ahrs: ahrs::Mahony<f32>,
     /// main Kalman filter
@@ -94,8 +91,8 @@ pub struct StateEstimator {
 }
 
 impl StateEstimator {
-    pub fn new(main_loop_freq_hertz: f32, settings: StateEstimatorSettings) -> Self {
-        Self::new_with_quat(main_loop_freq_hertz, settings, UnitQuaternion::default())
+    pub fn new(main_loop_freq_hertz: f32, params: StateEstimatorParams) -> Self {
+        Self::new_with_quat(main_loop_freq_hertz, params, UnitQuaternion::default())
     }
 
     #[allow(
@@ -104,14 +101,14 @@ impl StateEstimator {
     )]
     pub fn new_with_quat(
         main_loop_freq_hertz: f32,
-        settings: StateEstimatorSettings,
+        params: StateEstimatorParams,
         initial_orientation: UnitQuaternion<f32>,
     ) -> Self {
         let dt = 1.0 / main_loop_freq_hertz;
         let ahrs = ahrs::Mahony::new_with_quat(
             dt,
-            settings.mahony_kp,
-            settings.mahony_ki,
+            params.mahony_kp,
+            params.mahony_ki,
             initial_orientation,
         );
 
@@ -122,6 +119,10 @@ impl StateEstimator {
                 0.0, 0.0, 0.0, // XYZ velocity (m/s)
                 0.0, 0.0, 0.0 // XYZ acceleration (m/s^2)
             ],
+            // Process Covariance Matrix
+            Q: Self::process_noise(dt, params.std_dev_process),
+            // Measurement Covariance Matrix
+            R: Self::measurement_noise(&params),
             // State Transition Matrix
             F: matrix![
                     1.0, 0.0, 0.0, dt, 0.0, 0.0, 0.5 * dt * dt, 0.0, 0.0;
@@ -145,27 +146,6 @@ impl StateEstimator {
             ],
             // State Covariance Matrix (initialized to a high value)
             P: Matrix::<f32, U9, U9, _>::identity() * 999.0,
-            // Process Covariance Matrix
-            Q: matrix![
-                0.25f32 * dt.powi(4), 0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, 0.5f32 * dt.powi(2), 0.0, 0.0;
-                0.0, 0.25f32 * dt.powi(4), 0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, 0.5f32 * dt.powi(2), 0.0;
-                0.0, 0.0, 0.25f32 * dt.powi(4), 0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, 0.5f32 * dt.powi(2);
-                0.5f32 * dt.powi(3), 0.0, 0.0, dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0;
-                0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, dt.powi(2), 0.0, 0.0, dt, 0.0;
-                0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, dt.powi(2), 0.0, 0.0, dt;
-                0.5f32 * dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0, 1.0, 0.0, 0.0;
-                0.0, 0.5f32 * dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0, 1.0, 0.0;
-                0.0, 0.0, 0.5f32 * dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0, 1.0;
-            ] * settings.std_dev_process.powi(2),
-            // Measurement Covariance Matrix
-            R: matrix!(
-                settings.std_dev_barometer.powi(2), 0.0, 0.0, 0.0, 0.0, 0.0;
-                0.0, settings.std_dev_accelerometer.powi(2), 0.0, 0.0, 0.0, 0.0;
-                0.0, 0.0, settings.std_dev_accelerometer.powi(2), 0.0, 0.0, 0.0;
-                0.0, 0.0, 0.0, settings.std_dev_accelerometer.powi(2), 0.0, 0.0;
-                0.0, 0.0, 0.0, 0.0, GPS_NO_FIX_STD_DEV.powi(2), 0.0;
-                0.0, 0.0, 0.0, 0.0, 0.0, GPS_NO_FIX_STD_DEV.powi(2);
-            ),
             ..Default::default()
         };
 
@@ -174,7 +154,8 @@ impl StateEstimator {
             mode: FlightMode::default(),
             mode_time: Wrapping(0),
             takeoff_time: Wrapping(0),
-            settings,
+            dt,
+            params,
             ahrs,
             kalman,
             orientation: None,
@@ -187,6 +168,67 @@ impl StateEstimator {
             #[cfg(not(target_os = "none"))]
             last_apogee_error: 0.0,
         }
+    }
+
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "operator-overloaded nalgebra matrix math, not primitive overflow"
+    )]
+    fn process_noise(dt: f32, std_dev_process: f32) -> OMatrix<f32, U9, U9> {
+        matrix![
+            0.25f32 * dt.powi(4), 0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, 0.5f32 * dt.powi(2), 0.0, 0.0;
+            0.0, 0.25f32 * dt.powi(4), 0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, 0.5f32 * dt.powi(2), 0.0;
+            0.0, 0.0, 0.25f32 * dt.powi(4), 0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, 0.5f32 * dt.powi(2);
+            0.5f32 * dt.powi(3), 0.0, 0.0, dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0;
+            0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, dt.powi(2), 0.0, 0.0, dt, 0.0;
+            0.0, 0.0, 0.5f32 * dt.powi(3), 0.0, 0.0, dt.powi(2), 0.0, 0.0, dt;
+            0.5f32 * dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0, 1.0, 0.0, 0.0;
+            0.0, 0.5f32 * dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0, 1.0, 0.0;
+            0.0, 0.0, 0.5f32 * dt.powi(2), 0.0, 0.0, dt, 0.0, 0.0, 1.0;
+        ] * std_dev_process.powi(2)
+    }
+
+    fn measurement_noise(params: &StateEstimatorParams) -> OMatrix<f32, U6, U6> {
+        matrix!(
+            params.std_dev_barometer.powi(2), 0.0, 0.0, 0.0, 0.0, 0.0;
+            0.0, params.std_dev_accelerometer.powi(2), 0.0, 0.0, 0.0, 0.0;
+            0.0, 0.0, params.std_dev_accelerometer.powi(2), 0.0, 0.0, 0.0;
+            0.0, 0.0, 0.0, params.std_dev_accelerometer.powi(2), 0.0, 0.0;
+            0.0, 0.0, 0.0, 0.0, GPS_NO_FIX_STD_DEV.powi(2), 0.0;
+            0.0, 0.0, 0.0, 0.0, 0.0, GPS_NO_FIX_STD_DEV.powi(2);
+        )
+    }
+
+    /// Mahony (acc_gain, kp, ki) for the current flight mode. In the free-fall flight modes we
+    /// ignore the accelerometer data for orientation estimation.
+    fn mode_gains(&self) -> (f32, f32, f32) {
+        match self.mode {
+            FlightMode::Burn | FlightMode::Coast => (
+                0.0,
+                self.params.mahony_kp_ascent,
+                self.params.mahony_ki_ascent,
+            ),
+            _ => (1.0, self.params.mahony_kp, self.params.mahony_ki),
+        }
+    }
+
+    fn apply_mode_gains(&mut self) {
+        let (acc_gain, kp, ki) = self.mode_gains();
+        *self.ahrs.acc_gain_mut() = acc_gain;
+        *self.ahrs.kp_mut() = kp;
+        *self.ahrs.ki_mut() = ki;
+    }
+
+    pub fn params(&self) -> &StateEstimatorParams {
+        &self.params
+    }
+
+    pub fn update_params(&mut self, params: StateEstimatorParams) {
+        self.params = params;
+        self.apply_mode_gains();
+
+        self.kalman.Q = Self::process_noise(self.dt, self.params.std_dev_process);
+        self.kalman.R = Self::measurement_noise(&self.params);
     }
 
     #[allow(
@@ -261,20 +303,7 @@ impl StateEstimator {
             self.mode = mode;
             self.mode_time = self.time;
 
-            // In the free-fall flight modes we ignore the accelerometer data
-            // for orientation estimation.
-            (
-                *self.ahrs.acc_gain_mut(),
-                *self.ahrs.kp_mut(),
-                *self.ahrs.ki_mut(),
-            ) = match self.mode {
-                FlightMode::Burn | FlightMode::Coast => (
-                    0.0,
-                    self.settings.mahony_kp_ascent,
-                    self.settings.mahony_ki_ascent,
-                ),
-                _ => (1.0, self.settings.mahony_kp, self.settings.mahony_ki),
-            };
+            self.apply_mode_gains();
         }
 
         // Determine accelerometer to use. We prefer the primary because it is less noisy,
@@ -328,7 +357,7 @@ impl StateEstimator {
         };
         let f = ((mach.clamp(0.1, 1.0) - 0.1) / 0.9).powi(1);
         self.kalman.R[0] =
-            self.settings.std_dev_barometer + f * self.settings.std_dev_barometer_transsonic;
+            self.params.std_dev_barometer + f * self.params.std_dev_barometer_transsonic;
 
         // Update the Kalman filter with barometric altitude and world-space acceleration
         let altitude_baro = barometer
@@ -451,8 +480,8 @@ impl StateEstimator {
         //        // By how much should we reduce our drag estimate to roughly match the
         //        // average over the remaining flight?
         //        let reduction = 1.0
-        //            + self.settings.drag_reduction_factor
-        //                * self.mach().powf(self.settings.drag_reduction_exp);
+        //            + self.params.drag_reduction_factor
+        //                * self.mach().powf(self.params.drag_reduction_exp);
 
         //        // This gives 0.5 * air density * drag coefficient * area
         //        let drag_over_vel_squared =
@@ -506,7 +535,7 @@ impl StateEstimator {
     fn correct_orientation(&self, raw: &Vector3<f32>) -> Vector3<f32> {
         *raw
         // TODO
-        //match self.settings.orientation {
+        //match self.params.orientation {
         //    Orientation::ZUp => *raw,
         //    Orientation::ZDown => Vector3::new(-raw.x, raw.y, -raw.z),
         //}

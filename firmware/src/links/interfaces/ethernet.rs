@@ -131,6 +131,16 @@ impl EthernetHandle {
             ))
             .unwrap();
 
+        spawner
+            .spawn(run_params(
+                ETHERNET_SYSTEM_ID,
+                0x01,
+                tx.publisher().unwrap(),
+                rx.subscriber().unwrap(),
+                commands.publisher().unwrap(),
+            ))
+            .unwrap();
+
         Self {
             tx: tx.publisher().unwrap(),
             cmd_rx: commands.subscriber().unwrap(),
@@ -183,6 +193,25 @@ async fn run_link_quality(
 #[embassy_executor::task(pool_size = 2)]
 async fn run_modes(tx: InterfaceTxPublisher, rx: InterfaceCommandSubscriber) {
     protocols::modes::run(tx, rx).await;
+}
+
+#[embassy_executor::task(pool_size = 2)]
+async fn run_params(
+    system_id: u8,
+    component_id: u8,
+    tx: InterfaceTxPublisher,
+    rx: InterfaceRxSubscriber,
+    cmd_tx: InterfaceCommandPublisher,
+) {
+    protocols::params::run(
+        system_id,
+        component_id,
+        tx,
+        rx,
+        cmd_tx,
+        &crate::storage::PARAM_STORE,
+    )
+    .await;
 }
 
 #[embassy_executor::task]

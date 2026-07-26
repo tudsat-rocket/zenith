@@ -4,13 +4,13 @@ use num_traits::Float as _;
 use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::{
     GpsFixType, MavAutopilot, MavBatteryChargeState, MavBatteryFault, MavBatteryFunction,
-    MavBatteryMode, MavBatteryType, MavModeFlag, MavSysStatusSensor, MavSysStatusSensorExtended,
-    MavType, RocketCapability,
+    MavBatteryMode, MavBatteryType, MavModeFlag, MavProtocolCapability, MavSysStatusSensor,
+    MavSysStatusSensorExtended, MavType, RocketCapability,
 };
 use rapid_dialect::rapid::messages::{
-    Attitude, BatteryStatus, GlobalPositionInt, GpsRawInt, Heartbeat, LocalPositionNed, RocketInfo,
-    ScaledImu, ScaledImu2, ScaledImu3, ScaledPressure, ScaledPressure2, ScaledPressure3, SysStatus,
-    VfrHud,
+    Attitude, AutopilotVersion, BatteryStatus, GlobalPositionInt, GpsRawInt, Heartbeat,
+    LocalPositionNed, RocketInfo, ScaledImu, ScaledImu2, ScaledImu3, ScaledPressure,
+    ScaledPressure2, ScaledPressure3, SysStatus, VfrHud,
 };
 
 use crate::vehicle::VehicleSnapshot;
@@ -396,6 +396,18 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
             onboard_control_sensors_present_extended: recovery_present,
             onboard_control_sensors_enabled_extended: recovery_enabled,
             onboard_control_sensors_health_extended: recovery_health,
+        }
+    }
+}
+
+impl Into<AutopilotVersion> for &VehicleSnapshot<'_> {
+    fn into(self) -> AutopilotVersion {
+        AutopilotVersion {
+            // Ground stations only enable their parameter UI once one of the PARAM_ENCODE_* flags
+            // says how param_value is encoded. We encode bytewise (see links::protocols::params),
+            // so the C-cast flag must stay clear.
+            capabilities: MavProtocolCapability::PARAM_ENCODE_BYTEWISE,
+            ..Default::default()
         }
     }
 }

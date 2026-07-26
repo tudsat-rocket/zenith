@@ -9,6 +9,7 @@ use links::UplinkCommand;
 use mission::TelemetryLink;
 
 use networking::Links;
+use sitl::simulation::storage;
 use sitl::{RecoveryFlags, SharedSimulation, Simulation, StdOutputs, StdSensors, Vehicle};
 
 #[cfg(feature = "hybrid")]
@@ -30,7 +31,7 @@ async fn main(spawner: Spawner) {
         let vehicle = Vehicle::new(
             StdSensors::new(Arc::clone(&sim)),
             StdOutputs::new(flags),
-            mission::NoStorage,
+            storage::init(None),
             mission::bus::NoBus,
         )
         .await;
@@ -48,7 +49,7 @@ async fn main(spawner: Spawner) {
         let vehicle = Vehicle::new(
             StdSensors::new(Arc::clone(&sim)),
             StdOutputs::new(flags),
-            mission::NoStorage,
+            storage::init(None),
             SitlBus::new(Arc::clone(&sim)),
         )
         .await;
@@ -79,12 +80,12 @@ async fn main_loop(mut vehicle: Vehicle, mut links: Links, sim: SharedSimulation
         vehicle.tick().await;
 
         if let Some(cmd) = links.try_recv_command() {
-            // Collapses to a single arm without the `hybrid` feature; kept as a match since
-            // CommandValve is a real arm with it.
-            #[cfg_attr(not(feature = "hybrid"), allow(clippy::collapsible_match))]
             match cmd {
                 UplinkCommand::SetFlightMode(fm) => {
                     vehicle.set_mode(fm);
+                }
+                UplinkCommand::SetParam { id, raw } => {
+                    vehicle.set_param(id, raw).await;
                 }
                 #[cfg(feature = "hybrid")]
                 UplinkCommand::CommandValve(valve, valve_cmd) => {

@@ -4,9 +4,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use mission::{Settings, Storage, Vehicle as MissionVehicle};
-use rapid_dialect::FlightMode;
-use sitl::{RecoveryFlags, SharedSimulation, Simulation, StdOutputs, StdSensors};
+use links::UplinkCommand;
+use mission::{Params, TelemetryLink, Vehicle as MissionVehicle};
+use rapid_dialect::{FlightMode, Rapid};
+use sitl::{MemoryStorage, RecoveryFlags, SharedSimulation, Simulation, StdOutputs, StdSensors};
 
 #[cfg(not(feature = "hybrid"))]
 use mission::bus::NoBus;
@@ -20,39 +21,34 @@ pub type Vehicle = MissionVehicle<StdSensors, StdOutputs, MemoryStorage, NoBus>;
 #[cfg(feature = "hybrid")]
 pub type Vehicle = MissionVehicle<StdSensors, StdOutputs, MemoryStorage, SitlBus>;
 
-/// Test `Storage` double that hands out a fixed `Settings` (or None).
-pub struct MemoryStorage {
-    stored: Option<Settings>,
-}
-
-impl MemoryStorage {
-    pub fn new(stored: Option<Settings>) -> Self {
-        Self { stored }
-    }
-}
-
-impl Storage for MemoryStorage {
-    async fn read_settings(&mut self) -> Option<Settings> {
-        self.stored.clone()
-    }
-
-    async fn write_settings(&mut self, settings: &Settings) {
-        self.stored = Some(settings.clone());
-    }
-}
-
 pub struct Harness {
     pub vehicle: Vehicle,
     pub sim: SharedSimulation,
 }
 
+/// Collects what the vehicle puts on the downlink, for asserting on telemetry contents.
+#[derive(Default)]
+pub struct CapturedLink {
+    pub messages: Vec<Rapid>,
+}
+
+impl TelemetryLink for CapturedLink {
+    fn send_message(&mut self, message: Rapid) {
+        self.messages.push(message);
+    }
+
+    fn try_recv_command(&mut self) -> Option<UplinkCommand> {
+        None
+    }
+}
+
 impl Harness {
-    pub async fn new(settings: Option<Settings>) -> Self {
+    pub async fn new(params: Option<Params>) -> Self {
         let flags = RecoveryFlags::default();
         let sim: SharedSimulation = Arc::new(Mutex::new(Simulation::new(flags.clone())));
         let sensors = StdSensors::new(Arc::clone(&sim));
         let outputs = StdOutputs::new(flags);
-        let storage = MemoryStorage::new(settings);
+        let storage = MemoryStorage::new(params);
 
         #[cfg(not(feature = "hybrid"))]
         let vehicle = MissionVehicle::new(sensors, outputs, storage, NoBus).await;
@@ -120,6 +116,20 @@ impl Harness {
             self.tick_sim();
             self.vehicle.tick().await;
         }
+    }
+
+    /// Runs the telemetry scheduler alongside the vehicle for `n` ticks (one tick is 1ms) and
+    /// returns every message it emitted.
+    pub async fn collect_telemetry(&mut self, n: u32) -> Vec<Rapid> {
+        let mut link = CapturedLink::default();
+
+        for _ in 0..n {
+            self.tick_sim();
+            self.vehicle.tick().await;
+            self.vehicle.send_telemetry(&mut link);
+        }
+
+        link.messages
     }
 
     pub async fn run_until(

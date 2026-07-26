@@ -17,10 +17,11 @@ pub enum UplinkCommand {
     RequestAvailableModes(usize),
     RequestCanForwarding,
     CommandValve(ValveId, ValveCommand),
+    SetParam { id: u16, raw: u32 },
 }
 
 pub const DOWNLINK_N: usize = 32;
-pub const DOWNLINK_PUBS: usize = 5;
+pub const DOWNLINK_PUBS: usize = 6;
 pub type InterfaceTx = PubSubChannel<CriticalSectionRawMutex, Rapid, DOWNLINK_N, 1, DOWNLINK_PUBS>;
 pub type InterfaceTxPublisher =
     Publisher<'static, CriticalSectionRawMutex, Rapid, DOWNLINK_N, 1, DOWNLINK_PUBS>;
@@ -37,9 +38,22 @@ pub type InterfaceRxSubscriber =
 
 pub const COMMAND_N: usize = 32;
 pub const COMMAND_SUBS: usize = 5;
+pub const COMMAND_PUBS: usize = 2;
 pub type InterfaceCommands =
-    PubSubChannel<CriticalSectionRawMutex, UplinkCommand, COMMAND_N, COMMAND_SUBS, 1>;
-pub type InterfaceCommandPublisher =
-    Publisher<'static, CriticalSectionRawMutex, UplinkCommand, COMMAND_N, COMMAND_SUBS, 1>;
-pub type InterfaceCommandSubscriber =
-    Subscriber<'static, CriticalSectionRawMutex, UplinkCommand, COMMAND_N, COMMAND_SUBS, 1>;
+    PubSubChannel<CriticalSectionRawMutex, UplinkCommand, COMMAND_N, COMMAND_SUBS, COMMAND_PUBS>;
+pub type InterfaceCommandPublisher = Publisher<
+    'static,
+    CriticalSectionRawMutex,
+    UplinkCommand,
+    COMMAND_N,
+    COMMAND_SUBS,
+    COMMAND_PUBS,
+>;
+pub type InterfaceCommandSubscriber = Subscriber<
+    'static,
+    CriticalSectionRawMutex,
+    UplinkCommand,
+    COMMAND_N,
+    COMMAND_SUBS,
+    COMMAND_PUBS,
+>;

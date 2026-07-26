@@ -112,6 +112,16 @@ impl Links {
             ))
             .unwrap();
 
+        spawner
+            .spawn(run_params(
+                SYSTEM_ID,
+                COMPONENT_ID,
+                tx.publisher().unwrap(),
+                rx.subscriber().unwrap(),
+                commands.publisher().unwrap(),
+            ))
+            .unwrap();
+
         Self {
             tx: tx.publisher().unwrap(),
             cmd_rx: commands.subscriber().unwrap(),
@@ -222,4 +232,23 @@ async fn run_link_quality(
 #[embassy_executor::task]
 async fn run_modes(tx: InterfaceTxPublisher, rx: InterfaceCommandSubscriber) {
     links::protocols::modes::run(tx, rx).await;
+}
+
+#[embassy_executor::task]
+async fn run_params(
+    system_id: u8,
+    component_id: u8,
+    tx: InterfaceTxPublisher,
+    rx: links::InterfaceRxSubscriber,
+    cmd_tx: InterfaceCommandPublisher,
+) {
+    links::protocols::params::run(
+        system_id,
+        component_id,
+        tx,
+        rx,
+        cmd_tx,
+        &sitl::simulation::storage::PARAM_STORE,
+    )
+    .await;
 }

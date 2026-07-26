@@ -18,7 +18,7 @@ use lora_phy::iv::GenericSx126xInterfaceVariant;
 use lora_phy::sx126x::{Sx126x, Sx1262};
 
 use mission::bus::Bus;
-use mission::{BaroReading, NoStorage, Outputs, SensorReadings, Sensors};
+use mission::{BaroReading, Outputs, SensorReadings, Sensors};
 
 use sensors::*;
 
@@ -29,6 +29,7 @@ pub mod bus;
 pub mod can;
 pub mod links;
 pub mod sensors;
+pub mod storage;
 
 bind_interrupts!(struct Irqs {
     FDCAN1_IT0 => embassy_stm32::can::IT0InterruptHandler<FDCAN1>;
@@ -44,7 +45,7 @@ pub type OurSpiDevice<'a> = SpiDevice<'a, CriticalSectionRawMutex, Spi<'static, 
 pub type LoraVariant = GenericSx126xInterfaceVariant<Output<'static>, ExtiInput<'static>>;
 pub type LoraTransceiver = Sx126x<OurSpiDevice<'static>, LoraVariant, Sx1262>;
 
-pub type Vehicle = mission::Vehicle<BoardSensors, BoardOutputs, NoStorage, BusHandler>;
+pub type Vehicle = mission::Vehicle<BoardSensors, BoardOutputs, storage::FlashStorage, BusHandler>;
 
 pub struct BoardSensors {
     pub imu1: LSM6<OurSpiDevice<'static>>,

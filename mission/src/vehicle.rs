@@ -3,9 +3,9 @@ use core::num::Wrapping;
 
 use rapid_dialect::rapid::enums::ValveId;
 use rapid_dialect::rapid::messages::{
-    Attitude, BatteryStatus, GlobalPositionInt, GpsRawInt, Heartbeat, LocalPositionNed,
-    PressureVessel, RocketInfo, ScaledImu, ScaledImu2, ScaledImu3, ScaledPressure, ScaledPressure2,
-    ScaledPressure3, SysStatus, Valve, VfrHud,
+    Attitude, AutopilotVersion, BatteryStatus, GlobalPositionInt, GpsRawInt, Heartbeat,
+    LocalPositionNed, PressureVessel, RocketInfo, ScaledImu, ScaledImu2, ScaledImu3,
+    ScaledPressure, ScaledPressure2, ScaledPressure3, SysStatus, Valve, VfrHud,
 };
 use rapid_dialect::{FlightMode, Rapid};
 
@@ -15,7 +15,7 @@ use crate::TelemetryLink;
 use crate::bus::{Bus, BusInputImage, BusOutputImage};
 use crate::flight_logic::FlightLogic;
 use crate::inventory::{BinaryOutputId, InventoryId, TankId};
-use crate::settings::{RecoverySettings, Settings};
+use crate::params::{Params, RecoveryParams};
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
 use crate::valves::{ValveCommand, ValveController, ValveError};
 
@@ -34,7 +34,7 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     /// Vehicle time at which the current mode was entered.
     mode_entered_at: Wrapping<u32>,
     flight_logic: FlightLogic,
-    recovery_settings: RecoverySettings,
+    recovery_params: RecoveryParams,
     pub sensors: S,
     pub outputs: O,
     pub storage: F,
@@ -49,7 +49,7 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
 pub struct VehicleSnapshot<'a> {
     pub time: Wrapping<u32>,
     pub mode: FlightMode,
-    pub recovery_settings: &'a RecoverySettings,
+    pub recovery_params: &'a RecoveryParams,
     pub readings: &'a SensorReadings,
     pub state_estimator: &'a StateEstimator,
     pub input_image: &'a BusInputImage,
@@ -58,33 +58,27 @@ pub struct VehicleSnapshot<'a> {
 
 impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
     pub async fn new(sensors: S, outputs: O, mut storage: F, bus: B) -> Self {
-        let settings = storage.read_settings().await.unwrap_or_else(|| {
-            log::info!("No settings stored in flash, reverting to defaults.");
-            Settings::default()
+        let params = storage.read_params().unwrap_or_else(|| {
+            log::info!("No params stored in flash, reverting to defaults.");
+            Params::default()
         });
 
-        Self::new_with_settings(sensors, outputs, storage, settings, bus)
+        Self::new_with_params(sensors, outputs, storage, params, bus)
     }
 
-    pub fn new_with_settings(
-        sensors: S,
-        outputs: O,
-        storage: F,
-        settings: Settings,
-        bus: B,
-    ) -> Self {
+    pub fn new_with_params(sensors: S, outputs: O, storage: F, params: Params, bus: B) -> Self {
         Self {
             time: Wrapping(0),
             mode: FlightMode::default(),
             mode_entered_at: Wrapping(0),
             flight_logic: FlightLogic::default(),
-            recovery_settings: settings.recovery,
+            recovery_params: params.recovery,
             sensors,
             outputs,
             storage,
             bus,
             readings: SensorReadings::default(),
-            state_estimator: StateEstimator::new(1000.0, settings.state_estimator),
+            state_estimator: StateEstimator::new(1000.0, params.state_estimator),
             bus_inputs: BusInputImage::default(),
             bus_outputs: BusOutputImage::default(),
             valves: ValveController::new(),
@@ -115,7 +109,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             self.time,
             self.mode,
             &self.state_estimator,
-            &self.recovery_settings,
+            &self.recovery_params,
         ) {
             self.set_mode(new_mode);
         }
@@ -171,11 +165,35 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.valves.try_command(valve, cmd, self.time)
     }
 
+    pub async fn set_param(&mut self, id: u16, raw: u32) {
+        use crate::params::ParameterGroup;
+
+        let Some(descriptor) = Params::by_id(id) else {
+            log::warn!("Ignoring set_param for unknown param id {id:#x}");
+            return;
+        };
+
+        let value = descriptor.ty.decode_raw(raw);
+
+        let mut params = Params {
+            state_estimator: self.state_estimator.params().clone(),
+            recovery: self.recovery_params.clone(),
+        };
+
+        params.set(descriptor.id, value);
+
+        log::info!("Applying param {} (id {id:#x})", descriptor.name);
+        self.recovery_params = params.recovery;
+        self.state_estimator.update_params(params.state_estimator);
+
+        self.storage.write_param(descriptor.id, value);
+    }
+
     pub fn into_snapshot(&self) -> VehicleSnapshot<'_> {
         VehicleSnapshot {
             time: self.time,
             mode: self.mode,
-            recovery_settings: &self.recovery_settings,
+            recovery_params: &self.recovery_params,
             readings: &self.readings,
             input_image: &self.bus_inputs,
             state_estimator: &self.state_estimator,
@@ -238,6 +256,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         if self.time.0 % VEHICLE_INFO_INTERVAL_MS == 0 {
             let snap = self.into_snapshot();
             Self::send_msg::<RocketInfo>(&snap, link);
+            Self::send_msg::<AutopilotVersion>(&snap, link);
         }
 
         // these are instance messages, so the generic send_msg is not enough here

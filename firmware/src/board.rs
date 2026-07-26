@@ -42,6 +42,8 @@ pub struct Board {
     pub adc: BoardAdc,
     #[cfg(not(feature = "gcs"))]
     pub gps: GPS,
+    pub flash: crate::storage::Flash,
+    pub params: mission::Params,
     pub can1: embassy_stm32::can::Can<'static>,
     pub can2: embassy_stm32::can::Can<'static>,
     pub lora1: LoRa<LoraTransceiver, embassy_time::Delay>,
@@ -313,14 +315,8 @@ pub async fn init() -> Board {
     let spi3 = embassy_sync::mutex::Mutex::<CriticalSectionRawMutex, _>::new(spi3);
     let spi3 = SPI3_SHARED.init(spi3);
 
-    //use storage::{Flash, FlashHandle};
-
-    //let spi3_cs_flash = Output::new(p.PD6, Level::High, Speed::VeryHigh);
-    //#[cfg(not(feature = "gcs"))]
-    //let (flash, flash_handle, settings) = Flash::init(SpiDevice::new(spi3, spi3_cs_flash))
-    //    .await
-    //    .map_err(|_e| ())
-    //    .unwrap();
+    let spi3_cs_flash = Output::new(p.PD6, Level::High, Speed::VeryHigh);
+    let (flash, params) = crate::storage::Flash::init(SpiDevice::new(spi3, spi3_cs_flash)).await;
 
     // Initialize GPS
     #[cfg(not(feature = "gcs"))]
@@ -331,7 +327,7 @@ pub async fn init() -> Board {
     ////#[cfg(not(feature = "gcs"))]
     ////let power = PowerMonitor::init(adc, p.PB0, p.PC5, p.PC4).await;
 
-    // TODO: check if correct settings for buzzer
+    // TODO: check if correct params for buzzer
     let buzzer_pin = PwmPin::new_with_config(
         p.PB10,
         PwmPinConfig {
@@ -408,12 +404,12 @@ pub async fn init() -> Board {
         },
         #[cfg(not(feature = "gcs"))]
         gps,
+        flash,
+        params,
         lora1,
         lora2,
         can1,
         can2,
-        //flash,
-        //flash_handle,
         usb,
         ethernet,
         rng,

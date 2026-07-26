@@ -37,6 +37,13 @@ async fn main(low_priority_spawner: Spawner) {
     interrupt::I2C3_ER.set_priority(Priority::P7);
     let medium_priority_spawner = EXECUTOR_MEDIUM.start(interrupt::I2C3_ER);
 
+    let storage = fw::storage::spawn(board.flash, board.params, &low_priority_spawner);
+
+    fw::sensors::power::spawn(board.adc, low_priority_spawner);
+    #[cfg(not(feature = "gcs"))]
+    fw::sensors::gps::spawn(board.gps, low_priority_spawner);
+
+    // Spawn bus handling tasks
     let can1_rx = fw::can::CAN1_RX_CH.init(PubSubChannel::new());
     let can1_tx = fw::can::CAN1_TX_CH.init(PubSubChannel::new());
 
@@ -48,25 +55,12 @@ async fn main(low_priority_spawner: Spawner) {
     )
     .await;
 
-    fw::sensors::power::spawn(board.adc, low_priority_spawner);
+    let can_tx_pub: CanTxPublisher = can1_tx.publisher().unwrap();
+    let can_rx_sub: CanRxSubscriber = can1_rx.subscriber().unwrap();
+    let bus = BusHandler::new(can_tx_pub, can_rx_sub);
 
-    #[cfg(not(feature = "gcs"))]
-    fw::sensors::gps::spawn(board.gps, low_priority_spawner);
-
-    let bus_handler = {
-        let can_tx_pub: CanTxPublisher = can1_tx.publisher().unwrap();
-        let can_rx_sub: CanRxSubscriber = can1_rx.subscriber().unwrap();
-        BusHandler::new(can_tx_pub, can_rx_sub)
-    };
-
-    let vehicle = Vehicle::new(
-        board.sensors,
-        board.outputs,
-        mission::NoStorage,
-        bus_handler,
-    )
-    .await;
-
+    // Initialize main Vehicle & Linkss structs
+    let vehicle = Vehicle::new(board.sensors, board.outputs, storage, bus).await;
     let links = Links::init(
         board.ethernet,
         board.seed,
@@ -79,8 +73,8 @@ async fn main(low_priority_spawner: Spawner) {
     )
     .await;
 
+    // Unleash the watchdog and spawn the main loop.
     board.iwdg.unleash();
-
     high_priority_spawner
         .spawn(main_loop(vehicle, links, board.iwdg))
         .unwrap();
@@ -110,6 +104,9 @@ pub async fn main_loop(
                             defmt::Debug2Format(&valve_cmd)
                         );
                     }
+                }
+                UplinkCommand::SetParam { id, raw } => {
+                    vehicle.set_param(id, raw).await;
                 }
                 _ => {}
             }

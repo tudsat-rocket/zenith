@@ -8,12 +8,14 @@ pub mod hybrid;
 mod outputs;
 mod physics;
 pub mod sensors;
+pub mod storage;
 
 pub use battery::Battery;
 pub use outputs::StdOutputs;
 pub use physics::RecoveryFlags;
 pub use physics::{DT, FlightPhysics};
 pub use sensors::StdSensors;
+pub use storage::MemoryStorage;
 
 #[cfg(feature = "hybrid")]
 use hybrid::HybridSimulation;

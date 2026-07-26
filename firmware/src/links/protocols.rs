@@ -3,4 +3,4 @@
 pub mod can_probe;
 
 // Shared protocol handlers from the links crate
-pub use links::protocols::{commands, link_quality, modes};
+pub use links::protocols::{commands, link_quality, modes, params};

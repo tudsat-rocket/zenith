@@ -366,6 +366,14 @@ async fn main(spawner: Spawner) {
         error!("[FAILED]  CAN 2 -> CAN 1 (1Mbps)");
     }
 
+    if !board.flash.is_healthy() {
+        error!("[FAILED]  Flash (JEDEC probe)");
+    } else if board.flash.selftest_roundtrip().await {
+        info!("[SUCCESS] Flash");
+    } else {
+        error!("[FAILED]  Flash (roundtrip)");
+    }
+
     info!("===== SELF TEST COMPLETE =====");
 
     let mut ticker = Ticker::every(Duration::from_hz(1));
