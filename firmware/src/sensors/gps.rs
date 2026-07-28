@@ -41,6 +41,7 @@ static CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, GpsDatum, 5>> = Stat
 pub struct GPS {
     uart: Uart<'static, Async>,
     sender: Sender<'static, CriticalSectionRawMutex, GpsDatum, 5>,
+    seq: u32,
 }
 
 pub struct GPSHandle {
@@ -81,6 +82,7 @@ impl GPS {
         let gps = GPS {
             uart,
             sender: channel.sender(),
+            seq: 0,
         };
 
         let handle = GPSHandle {
@@ -195,12 +197,14 @@ impl GPS {
         let num_satellites = segments[7].parse().unwrap_or(0);
         let hdop = (segments[8].parse::<f32>().unwrap_or(99.99) * 100.0) as u16;
 
+        self.seq = self.seq.wrapping_add(1);
         let datum: GpsDatum = GpsDatum {
             latitude,
             longitude,
             altitude,
             hdop,
             num_satellites,
+            seq: self.seq,
         };
 
         self.sender.send(datum).await;

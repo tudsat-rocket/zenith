@@ -72,6 +72,12 @@ struct SensorModel {
     config: SensorConfig,
     /// Time since the last emitted GPS fix [s]
     gps_time_since_update: f32,
+    /// Last sentence the simulated receiver put out. The board's GPS handle hands its last datum to
+    /// every sensor tick, so this one has to as well: reporting a datum only on the ticks the
+    /// receiver happens to update would look like a receiver that keeps falling off the bus.
+    last_gps: Option<GpsDatum>,
+    /// Mirrors the real receiver's sentence counter; see [`GpsDatum::seq`].
+    gps_seq: u32,
 }
 
 impl SensorModel {
@@ -80,6 +86,8 @@ impl SensorModel {
             rng: rand::thread_rng(),
             config: SensorConfig::default(),
             gps_time_since_update: f32::INFINITY,
+            last_gps: None,
+            gps_seq: 0,
         }
     }
 
@@ -192,44 +200,64 @@ impl SensorModel {
         /// Below this mach number the GPS fix is always kept; above ~1.0 it is always dropped.
         const GPS_FIX_LOSS_MACH_LOW: f32 = 0.6;
         const GPS_FIX_LOSS_MACH_HIGH: f32 = 1.0;
+        /// HDOP a u-blox reports while it has no solution, and what the NMEA parser falls back to
+        /// for an empty field.
+        const NO_FIX_HDOP: u16 = 9999;
+        /// Satellites under open sky. The state estimator discards fixes below six, so nominal
+        /// reception has to sit clear of that threshold to be usable at all.
+        const SATELLITES_TRACKED: std::ops::RangeInclusive<u8> = 9..=13;
+        /// Still in view once the solution is gone, but too few to fix on.
+        const SATELLITES_SEARCHING: std::ops::RangeInclusive<u8> = 0..=4;
 
         if self.gps_time_since_update < self.config.gps_update_period {
-            return None;
+            return self.last_gps.clone();
         }
 
         self.gps_time_since_update = 0.0;
+        self.gps_seq = self.gps_seq.wrapping_add(1);
 
         let mach = physics.velocity.magnitude() / MACH_M_PER_S;
         let loss_prob = ((mach - GPS_FIX_LOSS_MACH_LOW)
             / (GPS_FIX_LOSS_MACH_HIGH - GPS_FIX_LOSS_MACH_LOW))
             .clamp(0.0, 1.0);
-        if self.rng.r#gen::<f32>() < loss_prob {
-            return None;
-        }
+        let datum = if self.rng.r#gen::<f32>() < loss_prob {
+            // A receiver that loses lock keeps sending sentences, it just stops filling in the
+            // position; going silent instead would report as no receiver on the bus at all.
+            GpsDatum {
+                latitude: None,
+                longitude: None,
+                altitude: None,
+                hdop: NO_FIX_HDOP,
+                num_satellites: self.rng.gen_range(SATELLITES_SEARCHING),
+                seq: self.gps_seq,
+            }
+        } else {
+            let horiz = self.config.gps_horizontal_noise;
+            let vert = self.config.gps_vertical_noise;
+            let noise_x = self.rng.gen_range(-horiz..horiz);
+            let noise_y = self.rng.gen_range(-horiz..horiz);
+            let noise_z = self.rng.gen_range(-vert..vert);
 
-        let horiz = self.config.gps_horizontal_noise;
-        let vert = self.config.gps_vertical_noise;
-        let noise_x = self.rng.gen_range(-horiz..horiz);
-        let noise_y = self.rng.gen_range(-horiz..horiz);
-        let noise_z = self.rng.gen_range(-vert..vert);
+            let origin_lat = self.config.gps_origin_lat;
+            let origin_lon = self.config.gps_origin_lon;
+            let meters_per_degree_lon = METERS_PER_DEGREE_LAT * origin_lat.to_radians().cos();
 
-        let origin_lat = self.config.gps_origin_lat;
-        let origin_lon = self.config.gps_origin_lon;
-        let meters_per_degree_lon = METERS_PER_DEGREE_LAT * origin_lat.to_radians().cos();
+            let lat = origin_lat + (physics.position.y + noise_y) / METERS_PER_DEGREE_LAT;
+            let lon = origin_lon + (physics.position.x + noise_x) / meters_per_degree_lon;
+            let alt = physics.position.z + noise_z;
 
-        let lat = origin_lat + (physics.position.y + noise_y) / METERS_PER_DEGREE_LAT;
-        let lon = origin_lon + (physics.position.x + noise_x) / meters_per_degree_lon;
-        let alt = physics.position.z + noise_z;
+            GpsDatum {
+                latitude: Some(lat),
+                longitude: Some(lon),
+                altitude: Some(alt),
+                hdop: self.rng.gen_range(80..150),
+                num_satellites: self.rng.gen_range(SATELLITES_TRACKED),
+                seq: self.gps_seq,
+            }
+        };
 
-        let hdop = self.rng.gen_range(80..150);
-
-        Some(GpsDatum {
-            latitude: Some(lat),
-            longitude: Some(lon),
-            altitude: Some(alt),
-            hdop,
-            num_satellites: 5,
-        })
+        self.last_gps = Some(datum.clone());
+        Some(datum)
     }
 }
 

@@ -23,6 +23,8 @@ pub struct GpsDatum {
     /// Horizontal dilution of precision * 100
     pub hdop: u16,
     pub num_satellites: u8,
+    /// Incremented by the receiver for every datum it emits.
+    pub seq: u32,
 }
 
 /// Tunable state-estimator parameters. Each field is exposed over MAVLink as `SE_<name>`.
@@ -87,6 +89,8 @@ pub struct StateEstimator {
     // TODO: move altitude_ground into here?
     gps_origin: Option<Vector3<f32>>,
     last_covariance_update: Wrapping<u32>,
+    /// Sequence number of the last GPS fix
+    last_gps_seq: Option<u32>,
     #[cfg(not(target_os = "none"))]
     pub last_apogee_error: f32,
 }
@@ -166,6 +170,7 @@ impl StateEstimator {
             altitude_max: -10_000.0,
             gps_origin: None,
             last_covariance_update: Wrapping(0),
+            last_gps_seq: None,
             #[cfg(not(target_os = "none"))]
             last_apogee_error: 0.0,
         }
@@ -264,12 +269,17 @@ impl StateEstimator {
         self.kalman.predict(None, None, None, None);
         let z = Vector6::new(altitude_baro, accel.x, accel.y, accel.z, pos.x, pos.y);
 
-        // Updating the state covariance is pretty expensive, so we just don't
-        // do it every time.
-        // TODO: try and get rid of this, at least make configurable
-        if gps.is_some() || (self.time - self.last_covariance_update).0 > 10 {
+        // Updating the state covariance is pretty expensive, so we only do it when there is
+        // something new to learn from: a fix we have not folded in yet, or every tenth tick as
+        // a floor. (TODO: make configurable)
+        let gps_is_new = gps.is_some_and(|gps| Some(gps.seq) != self.last_gps_seq);
+
+        if gps_is_new || (self.time - self.last_covariance_update).0 > 10 {
             self.kalman.update(&z, None, None);
             self.last_covariance_update = self.time;
+            if let Some(gps) = gps {
+                self.last_gps_seq = Some(gps.seq);
+            }
         } else {
             self.kalman.update_steadystate(&z);
         }
