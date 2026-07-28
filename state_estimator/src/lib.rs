@@ -356,9 +356,9 @@ impl StateEstimator {
         } else {
             0.0
         };
-        let f = ((mach.clamp(0.1, 1.0) - 0.1) / 0.9).powi(1);
-        self.kalman.R[0] =
-            self.params.std_dev_barometer + f * self.params.std_dev_barometer_transsonic;
+        let f = (mach.clamp(0.1, 1.0) - 0.1) / 0.9;
+        self.kalman.R[(0, 0)] =
+            (self.params.std_dev_barometer + f * self.params.std_dev_barometer_transsonic).powi(2);
 
         // Update the Kalman filter with barometric altitude and world-space acceleration
         let altitude_baro = barometer
