@@ -133,7 +133,6 @@ impl Bus for BusHandler {
 }
 
 fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u32>) {
-    defmt::info!("try_injest_can_msg");
     let Id::Standard(cob_id) = frame.header().id() else {
         return;
     };

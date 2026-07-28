@@ -156,7 +156,7 @@ impl EthernetHandle {
 impl TelemetryLink for EthernetHandle {
     fn send_message(&mut self, message: Rapid) {
         if self.tx.try_publish(message).is_err() {
-            defmt::warn!("downlink queue full, dropping telemetry message");
+            // defmt::warn!("downlink queue full, dropping telemetry message");
         }
     }
 

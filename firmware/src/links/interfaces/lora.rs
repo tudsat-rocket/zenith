@@ -142,7 +142,7 @@ impl LoraHandle {
         };
 
         if let Err(e) = self.tx.try_send((t as u16, msg)) {
-            defmt::error!("Failed to send downlink msg.");
+            // defmt::error!("Failed to send downlink msg.");
         }
     }
 }

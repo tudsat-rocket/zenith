@@ -171,8 +171,8 @@ impl<RK: RadioKind, M: TelemetryMessage, S: AnySender<M::Output>> HoppingReceive
                 Ok((time_or_seq, msg)) => {
                     return Ok(Some((time_or_seq, msg, status)));
                 }
-                Err(e) => {
-                    defmt::warn!("Failed to decode packet: {}", defmt::Display2Format(&e));
+                Err(_e) => {
+                    // defmt::warn!("Failed to decode packet: {}", defmt::Display2Format(&e));
                 }
             }
         }
