@@ -129,7 +129,7 @@ impl Links {
     }
 
     pub fn send_telemetry_messages(&mut self, vehicle: &Vehicle) {
-        vehicle.send_telemetry(self);
+        vehicle.snapshot().send_telemetry(self);
     }
 }
 

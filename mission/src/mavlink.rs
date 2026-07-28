@@ -1,3 +1,8 @@
+//! The vehicle's state at one tick, and the MAVLink built from it.
+
+use core::f32;
+use core::num::Wrapping;
+
 #[cfg(target_os = "none")]
 use num_traits::Float as _;
 
@@ -9,19 +14,54 @@ use rapid_dialect::rapid::enums::{
 };
 use rapid_dialect::rapid::messages::{
     Attitude, AutopilotVersion, BatteryStatus, GlobalPositionInt, GpsRawInt, Heartbeat,
-    LocalPositionNed, RocketInfo, ScaledImu, ScaledImu2, ScaledImu3, ScaledPressure,
-    ScaledPressure2, ScaledPressure3, SysStatus, VfrHud,
+    LocalPositionNed, PressureVessel, RocketInfo, ScaledImu, ScaledImu2, ScaledImu3,
+    ScaledPressure, ScaledPressure2, ScaledPressure3, SysStatus, Valve, VfrHud,
 };
 
-use crate::vehicle::VehicleSnapshot;
+use state_estimator::StateEstimator;
+
+use crate::TelemetryLink;
+use crate::bus::{BusInputImage, BusOutputImage};
+use crate::inventory::{InventoryId, TankId, ValveId};
+use crate::params::RecoveryParams;
+use crate::schedule::downlink_schedule;
+use crate::traits::SensorReadings;
+
+/// Everything the vehicle exposes about one tick, borrowed rather than copied. Built by
+/// `Vehicle::snapshot`; the conversions in this module read nothing else.
+pub struct VehicleSnapshot<'a> {
+    pub time: Wrapping<u32>,
+    pub mode: FlightMode,
+    pub recovery_params: &'a RecoveryParams,
+    pub readings: &'a SensorReadings,
+    pub state_estimator: &'a StateEstimator,
+    pub input_image: &'a BusInputImage,
+    pub output_image: &'a BusOutputImage,
+}
 
 impl VehicleSnapshot<'_> {
+    /// This determines the pattern of data the flight computer sends via MAVlink for all of the
+    /// non-RF telemetry paths (primarily ethernet): which messages go out unprompted, and how often.
+    ///
+    /// At most one message goes out per tick, the phases coming from [`crate::schedule`].
+    pub fn send_telemetry(&self, link: &mut impl TelemetryLink) {
+        downlink_schedule! { self.time.0, self, link:
+            every 50 ms => Attitude, ScaledImu;
+            every 100 ms =>
+                LocalPositionNed, VfrHud, ScaledImu2, ScaledImu3,
+                ScaledPressure, ScaledPressure2, ScaledPressure3;
+            every 200 ms => BatteryStatus;
+            every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt;
+            every 1000 ms => RocketInfo, AutopilotVersion;
+            // One message per component
+            every 200 ms => PressureVessel[TankId::ALL], Valve[ValveId::ALL];
+        }
+    }
+
     /// Whether the vehicle is *physically* armed, i.e. the arming pins/switches are thrown. This is
     /// orthogonal to the flight mode and is what MAVLink SAFETY_ARMED reflects.
     fn is_physically_armed(&self) -> bool {
         const RECOVERY_ARMED_THRESHOLD_MV: u16 = 6000;
-        #[cfg(feature = "hybrid")]
-        const IO_ARMED_THRESHOLD_MV: u16 = 6000;
 
         let recovery_hot = self
             .readings
@@ -32,12 +72,7 @@ impl VehicleSnapshot<'_> {
 
         // TODO: replace with a real IO-board armed flag once available on the bus.
         #[cfg(feature = "hybrid")]
-        let io_armed = self
-            .readings
-            .power
-            .as_ref()
-            .map(|p| p.bus_supply_voltage > IO_ARMED_THRESHOLD_MV)
-            .unwrap_or(false);
+        let io_armed = false;
         #[cfg(not(feature = "hybrid"))]
         let io_armed = false;
 
@@ -464,6 +499,77 @@ impl Into<BatteryStatus> for &VehicleSnapshot<'_> {
             voltages_ext: [u16::MAX; 4],
             mode: MavBatteryMode::Unknown,
             fault_bitmask: MavBatteryFault::default(),
+        }
+    }
+}
+
+/// A message the flight computer sends one of per component.
+trait InstanceMessage<I> {
+    fn build(snapshot: &VehicleSnapshot<'_>, id: I) -> Self;
+}
+
+impl InstanceMessage<TankId> for PressureVessel {
+    fn build(snap: &VehicleSnapshot<'_>, tank: TankId) -> Self {
+        let p_ids = tank.pressure_sensors();
+        let t_ids = tank.temperature_sensors();
+
+        let pressure1 = p_ids[0]
+            .map(|id| snap.input_image.press_sens[id])
+            .and_then(|o| o.map(|d| d.data))
+            .map(|bar| (bar * 100.0).clamp(0.0, f32::from(u16::MAX)) as u16)
+            .unwrap_or(u16::MAX);
+
+        let pressure2 = p_ids[1]
+            .map(|id| snap.input_image.press_sens[id])
+            .and_then(|o| o.map(|d| d.data))
+            .map(|bar| (bar * 100.0).clamp(0.0, f32::from(u16::MAX)) as u16)
+            .unwrap_or(u16::MAX);
+
+        let temperature1 = t_ids[0]
+            .map(|id| snap.input_image.temp_sens[id])
+            .and_then(|o| o.map(|d| d.data))
+            .map(|celsius| (celsius * 100.0).clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16)
+            .unwrap_or(i16::MAX);
+
+        let temperature2 = t_ids[1]
+            .map(|id| snap.input_image.temp_sens[id])
+            .and_then(|o| o.map(|d| d.data))
+            .map(|celsius| (celsius * 100.0).clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16)
+            .unwrap_or(i16::MAX);
+
+        let level = (tank == TankId::Oxidizer)
+            .then_some(snap.input_image.ox_tank_level.map(|d| d.data))
+            .flatten()
+            .map(|l| (l * 10000.0).clamp(0.0, f32::from(u16::MAX)) as u16)
+            .unwrap_or(u16::MAX);
+
+        PressureVessel {
+            id: tank as u8,
+            flags: tank.flags(),
+            fluid: tank.fluid(),
+            pressure1,
+            pressure2,
+            rated_pressure: (tank.pressure_rating_bar() * 100.0) as u16,
+            temperature1,
+            temperature2,
+            volume: (tank.volume_l() * 1000.0) as u16,
+            level,
+        }
+    }
+}
+
+impl InstanceMessage<ValveId> for Valve {
+    fn build(snap: &VehicleSnapshot<'_>, valve: ValveId) -> Self {
+        // Both fields use 0.0 = fully closed, 1.0 = fully open; NAN = unknown.
+        let state = snap.input_image.valve_state[valve]
+            .map(|state| f32::from(state.data.promille()) / 1000.0)
+            .unwrap_or(f32::NAN);
+        let commanded = f32::from(snap.output_image.valve[valve].promille()) / 1000.0;
+
+        Valve {
+            id: valve,
+            state,
+            commanded,
         }
     }
 }

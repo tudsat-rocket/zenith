@@ -6,6 +6,7 @@ pub mod flight_logic;
 pub mod inventory;
 mod mavlink;
 pub mod params;
+mod schedule;
 mod traits;
 pub mod valves;
 mod vehicle;

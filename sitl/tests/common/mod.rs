@@ -121,18 +121,30 @@ impl Harness {
         }
     }
 
-    /// Runs the telemetry scheduler alongside the vehicle for `n` ticks (one tick is 1ms) and
-    /// returns every message it emitted.
-    pub async fn collect_telemetry(&mut self, n: u32) -> Vec<Rapid> {
-        let mut link = CapturedLink::default();
+    /// Runs the telemetry scheduler alongside the vehicle for `n` ticks (one tick is 1ms), keeping
+    /// the emitted messages grouped by the tick they went out on.
+    pub async fn collect_telemetry_by_tick(&mut self, n: u32) -> Vec<Vec<Rapid>> {
+        let mut per_tick = Vec::with_capacity(n as usize);
 
         for _ in 0..n {
+            let mut link = CapturedLink::default();
             self.tick_sim();
             self.vehicle.tick().await;
-            self.vehicle.send_telemetry(&mut link);
+            self.vehicle.snapshot().send_telemetry(&mut link);
+            per_tick.push(link.messages);
         }
 
-        link.messages
+        per_tick
+    }
+
+    /// [`Self::collect_telemetry_by_tick`] without the grouping, for asserting on what was sent
+    /// rather than on when.
+    pub async fn collect_telemetry(&mut self, n: u32) -> Vec<Rapid> {
+        self.collect_telemetry_by_tick(n)
+            .await
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     pub async fn run_until(

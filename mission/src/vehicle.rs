@@ -1,30 +1,17 @@
-use core::f32;
 use core::num::Wrapping;
 
+use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::ValveId;
-use rapid_dialect::rapid::messages::{
-    Attitude, AutopilotVersion, BatteryStatus, GlobalPositionInt, GpsRawInt, Heartbeat,
-    LocalPositionNed, PressureVessel, RocketInfo, ScaledImu, ScaledImu2, ScaledImu3,
-    ScaledPressure, ScaledPressure2, ScaledPressure3, SysStatus, Valve, VfrHud,
-};
-use rapid_dialect::{FlightMode, Rapid};
 
 use state_estimator::StateEstimator;
 
-use crate::TelemetryLink;
 use crate::bus::{Bus, BusInputImage, BusOutputImage};
 use crate::flight_logic::FlightLogic;
-use crate::inventory::{BinaryOutputId, InventoryId, TankId};
+use crate::inventory::BinaryOutputId;
+use crate::mavlink::VehicleSnapshot;
 use crate::params::{Params, RecoveryParams};
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
 use crate::valves::{ValveCommand, ValveController, ValveError};
-
-pub const HEARTBEAT_INTERVAL_MS: u32 = 500;
-pub const SENSOR_INTERVAL_MS: u32 = 100;
-pub const BATTERY_INTERVAL_MS: u32 = 200;
-pub const GPS_INTERVAL_MS: u32 = 500;
-pub const VEHICLE_INFO_INTERVAL_MS: u32 = 1000;
-pub const PROPULSION_INTERVAL_MS: u32 = 200;
 
 pub const IGNITER_ON_DURATION_MS: u32 = 3000;
 
@@ -44,16 +31,6 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     pub bus_inputs: BusInputImage,
     pub bus_outputs: BusOutputImage,
     pub valves: ValveController,
-}
-
-pub struct VehicleSnapshot<'a> {
-    pub time: Wrapping<u32>,
-    pub mode: FlightMode,
-    pub recovery_params: &'a RecoveryParams,
-    pub readings: &'a SensorReadings,
-    pub state_estimator: &'a StateEstimator,
-    pub input_image: &'a BusInputImage,
-    pub output_image: &'a BusOutputImage,
 }
 
 impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
@@ -190,7 +167,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.storage.write_param(descriptor.id, value);
     }
 
-    pub fn into_snapshot(&self) -> VehicleSnapshot<'_> {
+    pub fn snapshot(&self) -> VehicleSnapshot<'_> {
         VehicleSnapshot {
             time: self.time,
             mode: self.mode,
@@ -199,144 +176,6 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             input_image: &self.bus_inputs,
             state_estimator: &self.state_estimator,
             output_image: &self.bus_outputs,
-        }
-    }
-
-    // NOTE: this wrapper is probably not required
-    fn send_msg<M: mavio::Message + Into<Rapid>>(
-        snaphot: &VehicleSnapshot,
-        link: &mut impl TelemetryLink,
-    ) where
-        for<'a> &'a VehicleSnapshot<'a>: Into<M>,
-    {
-        let m: M = snaphot.into();
-        link.send_message(m.into());
-    }
-
-    /// This determines the pattern of data the flight computer sends via MAVlink for all of the
-    /// non-RF telemetry paths (primarily ethernet)
-    pub fn send_telemetry(&self, link: &mut impl TelemetryLink) {
-        if self.time.0 % HEARTBEAT_INTERVAL_MS == 0 {
-            let snap = self.into_snapshot();
-            link.send_message(Heartbeat::from(&snap).into());
-        }
-
-        if self.time.0 % HEARTBEAT_INTERVAL_MS == HEARTBEAT_INTERVAL_MS / 2 {
-            let snap = self.into_snapshot();
-            Self::send_msg::<SysStatus>(&snap, link);
-        }
-
-        if self.time.0 % SENSOR_INTERVAL_MS == 0 {
-            let snap = self.into_snapshot();
-            Self::send_msg::<Attitude>(&snap, link);
-            Self::send_msg::<LocalPositionNed>(&snap, link);
-            Self::send_msg::<VfrHud>(&snap, link);
-            Self::send_msg::<ScaledImu>(&snap, link);
-            Self::send_msg::<ScaledImu2>(&snap, link);
-            Self::send_msg::<ScaledImu3>(&snap, link);
-        }
-
-        if self.time.0 % GPS_INTERVAL_MS == 0 {
-            let snap = self.into_snapshot();
-            Self::send_msg::<GlobalPositionInt>(&snap, link);
-            Self::send_msg::<GpsRawInt>(&snap, link);
-        }
-
-        if self.time.0 % SENSOR_INTERVAL_MS == SENSOR_INTERVAL_MS / 2 {
-            let snap = self.into_snapshot();
-            Self::send_msg::<ScaledPressure>(&snap, link);
-            Self::send_msg::<ScaledPressure2>(&snap, link);
-            Self::send_msg::<ScaledPressure3>(&snap, link);
-        }
-
-        if self.time.0 % BATTERY_INTERVAL_MS == 0 {
-            let snap = self.into_snapshot();
-            Self::send_msg::<BatteryStatus>(&snap, link);
-        }
-
-        if self.time.0 % VEHICLE_INFO_INTERVAL_MS == 0 {
-            let snap = self.into_snapshot();
-            Self::send_msg::<RocketInfo>(&snap, link);
-            Self::send_msg::<AutopilotVersion>(&snap, link);
-        }
-
-        // these are instance messages, so the generic send_msg is not enough here
-        if self.time.0 % PROPULSION_INTERVAL_MS == 0 {
-            self.send_pressure_vessels(link);
-            self.send_valve_states(link);
-        }
-    }
-
-    fn send_pressure_vessels(&self, link: &mut impl TelemetryLink) {
-        for tank in TankId::ALL {
-            let p_ids = tank.pressure_sensors();
-            let t_ids = tank.temperature_sensors();
-
-            let pressure1 = p_ids[0]
-                .map(|id| self.bus_inputs.press_sens[id])
-                .and_then(|o| o.map(|d| d.data))
-                .map(|bar| (bar * 100.0).clamp(0.0, f32::from(u16::MAX)) as u16)
-                .unwrap_or(u16::MAX);
-
-            let pressure2 = p_ids[1]
-                .map(|id| self.bus_inputs.press_sens[id])
-                .and_then(|o| o.map(|d| d.data))
-                .map(|bar| (bar * 100.0).clamp(0.0, f32::from(u16::MAX)) as u16)
-                .unwrap_or(u16::MAX);
-
-            let temperature1 = t_ids[0]
-                .map(|id| self.bus_inputs.temp_sens[id])
-                .and_then(|o| o.map(|d| d.data))
-                .map(|celsius| {
-                    (celsius * 100.0).clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
-                })
-                .unwrap_or(i16::MAX);
-
-            let temperature2 = t_ids[1]
-                .map(|id| self.bus_inputs.temp_sens[id])
-                .and_then(|o| o.map(|d| d.data))
-                .map(|celsius| {
-                    (celsius * 100.0).clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
-                })
-                .unwrap_or(i16::MAX);
-
-            let level = (tank == TankId::Oxidizer)
-                .then_some(self.bus_inputs.ox_tank_level.map(|d| d.data))
-                .flatten()
-                .map(|l| (l * 10000.0).clamp(0.0, f32::from(u16::MAX)) as u16)
-                .unwrap_or(u16::MAX);
-
-            let msg = PressureVessel {
-                id: tank as u8,
-                flags: tank.flags(),
-                fluid: tank.fluid(),
-                pressure1,
-                pressure2,
-                rated_pressure: (tank.pressure_rating_bar() * 100.0) as u16,
-                temperature1,
-                temperature2,
-                volume: (tank.volume_l() * 1000.0) as u16,
-                level,
-            };
-            link.send_message(msg.into());
-        }
-    }
-
-    fn send_valve_states(&self, link: &mut impl TelemetryLink) {
-        for valve in ValveId::ALL {
-            // Both fields use 0.0 = fully closed, 1.0 = fully open; NAN = unknown.
-            let state = self.bus_inputs.valve_state[valve]
-                .map(|state| f32::from(state.data.promille()) / 1000.0)
-                .unwrap_or(f32::NAN);
-            let commanded = f32::from(self.bus_outputs.valve[valve].promille()) / 1000.0;
-
-            let msg = Valve {
-                id: valve,
-                state,
-                commanded,
-            };
-
-            link.send_message(msg.into());
         }
     }
 }

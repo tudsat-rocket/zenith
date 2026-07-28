@@ -49,8 +49,10 @@ impl Links {
 
     pub fn send_telemetry_messages(&mut self, vehicle: &Vehicle) {
         self.lora.send_telemetry_messages(vehicle);
-        vehicle.send_telemetry(&mut self.ethernet);
-        vehicle.send_telemetry(&mut self.usb);
+
+        let snapshot = vehicle.snapshot();
+        snapshot.send_telemetry(&mut self.ethernet);
+        snapshot.send_telemetry(&mut self.usb);
     }
 
     pub fn try_recv_command(&mut self) -> Option<UplinkCommand> {

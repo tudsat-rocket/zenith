@@ -115,7 +115,7 @@ impl LoraHandle {
         // In theory, we could choose the message to send dynamically based on vehicle state etc.
         let msg = match i % MESSAGE_PATTERN_LENGTH {
             0 | 2 | 4 | 6 => {
-                let snapshot = &vehicle.into_snapshot();
+                let snapshot = &vehicle.snapshot();
                 let heartbeat: Heartbeat = snapshot.into();
                 let local_position: LocalPositionNed = snapshot.into();
                 let attitude: Attitude = snapshot.into();
