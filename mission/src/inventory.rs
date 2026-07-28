@@ -161,6 +161,21 @@ impl InventoryId<9> for ValveId {
     }
 }
 
+// ValveId comes from the Mavlink dialect, so make sure at compile-time that ALL is well-behaved.
+#[allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "const-evaluated walk over a fixed-length array"
+)]
+const _: () = {
+    let ids = <ValveId as InventoryId<9>>::ALL;
+    let mut i = 0;
+    while i < ids.len() {
+        assert!(ids[i] as usize == i);
+        i += 1;
+    }
+};
+
 impl InventoryId<2> for TempSensId {
     const ALL: [Self; 2] = [Self::OxTankUpper, Self::OxTankLower];
 
