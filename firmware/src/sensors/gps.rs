@@ -181,12 +181,12 @@ impl GPS {
 
         // Latitude needs to converted from degrees and minutes to decimal degrees
         // Lat: DDMM.MM... Lng: DDDMM.MM...
-        let latitude = (segments[2].len() > 2)
-            .then(|| segments[2].split_at(2))
+        let latitude = segments[2]
+            .split_at_checked(2)
             .and_then(|(d, m)| d.parse::<f32>().ok().zip(m.parse::<f32>().ok()))
             .map(|(d, m)| (d + m / 60.0) * if segments[3] == "N" { 1.0 } else { -1.0 });
-        let longitude = (segments[4].len() > 3)
-            .then(|| segments[4].split_at(3))
+        let longitude = segments[4]
+            .split_at_checked(3)
             .and_then(|(d, m)| d.parse::<f32>().ok().zip(m.parse::<f32>().ok()))
             .map(|(d, m)| (d + m / 60.0) * if segments[5] == "E" { 1.0 } else { -1.0 });
         let altitude = segments[9].parse::<f32>().ok();
