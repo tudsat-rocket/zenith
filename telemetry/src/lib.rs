@@ -9,6 +9,7 @@
 //! drones, stationary equipment or other systems. The focus is on airborne ones though (rockets
 //! and drones).
 //!
+//! ```text
 //!     ____________________________                      ____________________________
 //!    |                            |                    |                            |
 //!    |   Rocket                   |                    |                 Receiver   |
@@ -29,7 +30,7 @@
 //!                              | Ground Station Software/ |
 //!                              |   Switches/Relays/etc.   |
 //!                              |__________________________|
-//!
+//! ```
 //!
 //! To accomplish this with our limited bandwidth, we restrict ourselves to a subset of MAVLink
 //! messages and package them in bespoke packets of uniform size, optimized for RF transmission.
@@ -43,14 +44,14 @@
 //! In order to still have the ability to use the same receiver for multiple vehicles without
 //! having to recompile constantly, we define "profiles" of vehicles, such as:
 //!
-//!     - Generic solid motor rocket, single parachute or dual deployment, no CAN bus stuff
-//!         - This could be used for many smaller projects without modification
-//!     - Super-special hybrid/biliquid EuRoC project
-//!         - This gets its own profile, includes information on the expected component IDs, the
-//!             available modes for these components
-//!     - PX4 or ArduCopter quadcopter
-//!     - ArduPlane fixed wing
-//!     - Stationary equipment (such as a filling station)
+//! - Generic solid motor rocket, single parachute or dual deployment, no CAN bus stuff
+//!   - This could be used for many smaller projects without modification
+//! - Super-special hybrid/biliquid EuRoC project
+//!   - This gets its own profile, includes information on the expected component IDs, the
+//!     available modes for these components
+//! - PX4 or ArduCopter quadcopter
+//! - ArduPlane fixed wing
+//! - Stationary equipment (such as a filling station)
 //!
 //! In theory, the profile (or the information contained therein) could be manually configured in
 //! the ground station software or the receiver, but instead vehicles identity themselves in their
@@ -143,7 +144,7 @@
 //!
 //! Each downlink packet consists of:
 //!
-//!
+//! ```text
 //!   | time  | msg id |   payload   | HMAC |
 //!
 //!      |        |           |         |
@@ -151,7 +152,7 @@
 //!               +-----------|---------|--  5b message identifier
 //!                           +---------|-- 14B message payload, depends on identifier
 //!                                     +-- 16b HMAC calculated over everything else
-//!
+//! ```
 //!
 //!   - time: time since boot and/or message counter, depending on your point of view.
 //!     Time is encoded as 11bits of time in 16*ms (time_in_ms >> 4). Since we assume our message

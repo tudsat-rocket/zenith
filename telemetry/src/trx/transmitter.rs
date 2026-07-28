@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
 use embassy_futures::select::{Either, select};
-use embassy_time::{Delay, Duration, Instant, Timer, with_timeout};
+use embassy_time::{Delay, Duration, Instant, Timer};
 
 use lora_phy::LoRa;
 use lora_phy::mod_params::{ModulationParams, PacketParams, RadioError};
@@ -11,6 +11,7 @@ use utils::anychannel::AnyReceiver;
 
 use crate::config::{FREQUENCIES, LinkConfig};
 use crate::messages::{DOWNLINK_PACKET_SIZE, DownlinkMessage, TelemetryMessage, UplinkMessage};
+use crate::trx::MAX_CONSECUTIVE_ERRORS;
 use crate::{DOWNLINK_MESSAGE_INTERVAL_MS, UPLINK_HOP_INTERVAL_MS};
 
 pub struct HoppingTransmitter<RK: RadioKind, M: TelemetryMessage, R: AnyReceiver<(u16, M)>> {
@@ -67,6 +68,37 @@ impl<RK: RadioKind, M: TelemetryMessage, R: AnyReceiver<(u16, M)>> HoppingTransm
 
         Ok(())
     }
+
+    /// Pull the transceiver's reset line and reconfigure it from scratch.
+    async fn reset_radio(&mut self) {
+        defmt::warn!("Resetting transmitter radio.");
+        if let Err(e) = self.radio.init().await {
+            defmt::error!("Failed to reset radio: {:?}", defmt::Debug2Format(&e));
+        }
+    }
+
+    /// Transmit a packet, hard-resetting the transceiver once transmissions have failed often
+    /// enough in a row.
+    async fn transmit_or_reset(
+        &mut self,
+        frequency: u32,
+        data: &[u8; DOWNLINK_PACKET_SIZE],
+        transmit_power: i32,
+        consecutive_errors: &mut u32,
+    ) {
+        match self.transmit_packet(frequency, data, transmit_power).await {
+            Ok(()) => *consecutive_errors = 0,
+            Err(e) => {
+                defmt::error!("Failed to transmit packet: {:?}", defmt::Debug2Format(&e));
+
+                *consecutive_errors = u32::saturating_add(*consecutive_errors, 1);
+                if *consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                    self.reset_radio().await;
+                    *consecutive_errors = 0;
+                }
+            }
+        }
+    }
 }
 
 impl<RK: RadioKind, R: AnyReceiver<(u16, DownlinkMessage)>>
@@ -74,6 +106,8 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, DownlinkMessage)>>
 {
     pub async fn run_downlink(mut self) {
         const TX_POWER: i32 = 10;
+
+        let mut consecutive_errors = 0;
 
         loop {
             let (time, msg) = self.receiver.anyreceive().await;
@@ -85,20 +119,8 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, DownlinkMessage)>>
 
             let frequency = self.config.frequency(time);
 
-            match with_timeout(
-                Duration::from_millis((DOWNLINK_MESSAGE_INTERVAL_MS - 1).into()),
-                self.transmit_packet(frequency, &bytes, TX_POWER),
-            )
-            .await
-            {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    defmt::error!("Failed to transmit packet: {:?}", defmt::Debug2Format(&e));
-                }
-                Err(_) => {
-                    defmt::error!("Timed out while transmitting.");
-                }
-            }
+            self.transmit_or_reset(frequency, &bytes, TX_POWER, &mut consecutive_errors)
+                .await;
         }
     }
 }
@@ -115,6 +137,7 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage)>> HoppingTransmitter<RK,
         const TX_POWER: i32 = 22;
 
         let mut connection = None;
+        let mut consecutive_errors = 0;
 
         loop {
             let (seq, message) =
@@ -175,23 +198,8 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage)>> HoppingTransmitter<RK,
                         Timer::after(Duration::from_millis(remaining + 1)).await;
                     }
 
-                    match with_timeout(
-                        Duration::from_millis(100),
-                        self.transmit_packet(frequency, &bytes, TX_POWER),
-                    )
-                    .await
-                    {
-                        Ok(Ok(_)) => {}
-                        Ok(Err(e)) => {
-                            defmt::error!(
-                                "Failed to transmit packet: {:?}",
-                                defmt::Debug2Format(&e)
-                            );
-                        }
-                        Err(_) => {
-                            defmt::error!("Timed out while transmitting.");
-                        }
-                    }
+                    self.transmit_or_reset(frequency, &bytes, TX_POWER, &mut consecutive_errors)
+                        .await;
                 }
             } else {
                 // If we don't have a good connection, we send on all uplink frequencies.
@@ -200,23 +208,8 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage)>> HoppingTransmitter<RK,
                     .zip(self.config.frequency_mask)
                     .filter_map(|(f, m)| m.then_some(*f))
                 {
-                    match with_timeout(
-                        Duration::from_millis(100),
-                        self.transmit_packet(frequency, &bytes, TX_POWER),
-                    )
-                    .await
-                    {
-                        Ok(Ok(_)) => {}
-                        Ok(Err(e)) => {
-                            defmt::error!(
-                                "Failed to transmit packet: {:?}",
-                                defmt::Debug2Format(&e)
-                            );
-                        }
-                        Err(_) => {
-                            defmt::error!("Timed out while transmitting.");
-                        }
-                    }
+                    self.transmit_or_reset(frequency, &bytes, TX_POWER, &mut consecutive_errors)
+                        .await;
                 }
             }
         }

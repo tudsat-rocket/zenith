@@ -28,6 +28,7 @@ pub mod board;
 pub mod bus;
 pub mod can;
 pub mod links;
+pub mod lora_iv;
 pub mod sensors;
 pub mod storage;
 
@@ -42,7 +43,8 @@ bind_interrupts!(struct Irqs {
 });
 
 pub type OurSpiDevice<'a> = SpiDevice<'a, CriticalSectionRawMutex, Spi<'static, Async>, Output<'a>>;
-pub type LoraVariant = GenericSx126xInterfaceVariant<Output<'static>, ExtiInput<'static>>;
+pub type LoraVariant =
+    lora_iv::BoundedWaits<GenericSx126xInterfaceVariant<Output<'static>, ExtiInput<'static>>>;
 pub type LoraTransceiver = Sx126x<OurSpiDevice<'static>, LoraVariant, Sx1262>;
 
 pub type Vehicle = mission::Vehicle<BoardSensors, BoardOutputs, storage::FlashStorage, BusHandler>;

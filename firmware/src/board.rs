@@ -33,8 +33,20 @@ use rand::prelude::*;
 use rand_chacha::ChaCha20Rng;
 use static_cell::StaticCell;
 
+use telemetry::DOWNLINK_MESSAGE_INTERVAL_MS;
+use telemetry::config::SEQUENCE_LENGTH;
+
+use crate::lora_iv::BoundedWaits;
 use crate::sensors::*;
 use crate::{BoardAdc, BoardOutputs, BoardSensors, Irqs, LoraTransceiver, OurSpiDevice};
+
+/// Upper bound for a single sx126x command's processing time.
+const LORA_BUSY_TIMEOUT: embassy_time::Duration = embassy_time::Duration::from_millis(50);
+
+/// Longest legitimate wait for an interrupt (one frequency hopping slot)
+const LORA_IRQ_TIMEOUT: embassy_time::Duration = embassy_time::Duration::from_millis(
+    2 * (SEQUENCE_LENGTH as u64) * (DOWNLINK_MESSAGE_INTERVAL_MS as u64),
+);
 
 pub struct Board {
     pub sensors: BoardSensors,
@@ -211,8 +223,11 @@ pub async fn init() -> Board {
         use_dcdc: false,
     };
     let lora1_spi = SpiDevice::new(spi4, lora1_cs);
-    let lora1_iv =
-        GenericSx126xInterfaceVariant::new(lora1_reset, lora1_irq, lora1_busy, None, None).unwrap();
+    let lora1_iv = BoundedWaits::new(
+        GenericSx126xInterfaceVariant::new(lora1_reset, lora1_irq, lora1_busy, None, None).unwrap(),
+        LORA_BUSY_TIMEOUT,
+        LORA_IRQ_TIMEOUT,
+    );
     let lora1 = LoRa::new(
         Sx126x::new(lora1_spi, lora1_iv, lora1_config),
         false,
@@ -228,8 +243,11 @@ pub async fn init() -> Board {
         use_dcdc: false,
     };
     let lora2_spi = SpiDevice::new(spi4, lora2_cs);
-    let lora2_iv =
-        GenericSx126xInterfaceVariant::new(lora2_reset, lora2_irq, lora2_busy, None, None).unwrap();
+    let lora2_iv = BoundedWaits::new(
+        GenericSx126xInterfaceVariant::new(lora2_reset, lora2_irq, lora2_busy, None, None).unwrap(),
+        LORA_BUSY_TIMEOUT,
+        LORA_IRQ_TIMEOUT,
+    );
     let lora2 = LoRa::new(
         Sx126x::new(lora2_spi, lora2_iv, lora2_config),
         false,

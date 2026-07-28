@@ -560,7 +560,7 @@ impl StateEstimator {
             && datum.altitude.is_some()
             && datum.hdop > 0
             && datum.hdop < 300
-            && datum.num_satellites > 6
+            && datum.num_satellites >= 6
     }
 
     #[allow(clippy::unused_self)]

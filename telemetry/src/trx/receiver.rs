@@ -3,9 +3,7 @@
 use core::marker::PhantomData;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_time::{
-    Delay, Duration, Instant, Ticker, TimeoutError, Timer, with_deadline, with_timeout,
-};
+use embassy_time::{Delay, Duration, Instant, Ticker, Timer, with_deadline};
 
 use lora_phy::mod_params::{ModulationParams, PacketParams, PacketStatus, RadioError};
 use lora_phy::mod_traits::{IrqState, RadioKind};
@@ -20,25 +18,18 @@ use crate::config::{FREQUENCIES, LinkConfig, SEQUENCE_LENGTH};
 use crate::messages::{
     ConnectionContext, DOWNLINK_PACKET_SIZE, DownlinkMessage, TelemetryMessage, UplinkMessage,
 };
+use crate::trx::MAX_CONSECUTIVE_ERRORS;
 use crate::{DOWNLINK_MESSAGE_INTERVAL_MS, UplinkCommand};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReceiveError {
     #[error("Radio error: {0:?}")]
     Radio(RadioError),
-    #[error("Timeout Error")]
-    Timeout(TimeoutError),
 }
 
 impl From<RadioError> for ReceiveError {
     fn from(value: RadioError) -> Self {
         Self::Radio(value)
-    }
-}
-
-impl From<TimeoutError> for ReceiveError {
-    fn from(value: TimeoutError) -> Self {
-        Self::Timeout(value)
     }
 }
 
@@ -102,14 +93,11 @@ impl<RK: RadioKind, M: TelemetryMessage, S: AnySender<M::Output>> HoppingReceive
                 return Ok(None);
             }
 
-            with_timeout(
-                Duration::from_millis(10),
-                self.radio
-                    .prepare_for_rx(RxMode::Continuous, &mod_params, &pkt_params),
-            )
-            .await??;
-
-            with_timeout(Duration::from_millis(10), self.radio.start_rx()).await??;
+            self.radio
+                .prepare_for_rx(RxMode::Continuous, &mod_params, &pkt_params)
+                .await?;
+            self.radio.clear_irq_status().await?;
+            self.radio.start_rx().await?;
 
             let mut buffer = [00u8; N as usize]; // TODO
 
@@ -122,16 +110,13 @@ impl<RK: RadioKind, M: TelemetryMessage, S: AnySender<M::Output>> HoppingReceive
                         return Err(e.into());
                     }
                     Err(_) => {
+                        self.radio.clear_irq_status().await?;
                         return Ok(None);
                     }
                 }
 
-                let irq_state =
-                    with_timeout(Duration::from_millis(10), self.radio.get_irq_state()).await??;
-                if irq_state.is_some() {
-                    with_timeout(Duration::from_millis(10), self.radio.clear_irq_status())
-                        .await??;
-                }
+                let irq_state = self.radio.get_irq_state().await?;
+                self.radio.clear_irq_status().await?;
 
                 match irq_state {
                     Some(IrqState::Done) => {
@@ -141,31 +126,7 @@ impl<RK: RadioKind, M: TelemetryMessage, S: AnySender<M::Output>> HoppingReceive
                 }
             }
 
-            let (_len, status) = match with_timeout(
-                Duration::from_millis(10),
-                self.radio.get_rx_result(&pkt_params, &mut buffer),
-            )
-            .await
-            {
-                Ok(Ok((len, status))) => (len, status),
-                Ok(Err(e)) => {
-                    defmt::error!("RX read error: {}", defmt::Debug2Format(&e));
-
-                    with_timeout(Duration::from_millis(1000), async {
-                        let _ = self.radio.enter_standby().await;
-                        let _ = self.radio.sleep(false).await;
-                        let _ = self.radio.init().await;
-                        let _ = self.radio.clear_irq_status().await;
-                    })
-                    .await?;
-
-                    return Err(e.into());
-                }
-                Err(_e) => {
-                    defmt::error!("get rx result timeout.");
-                    return Ok(None);
-                }
-            };
+            let (_len, status) = self.radio.get_rx_result(&pkt_params, &mut buffer).await?;
 
             match M::decode(buffer, &self.config.hmac_key) {
                 Ok((time_or_seq, msg)) => {
@@ -186,6 +147,14 @@ impl<RK: RadioKind, M: TelemetryMessage, S: AnySender<M::Output>> HoppingReceive
         let frequency = self.config.frequency(time);
         self.receive_until(frequency, deadline).await
     }
+
+    /// Pull the transceiver's reset line and reconfigure it from scratch.
+    async fn reset_radio(&mut self) {
+        defmt::warn!("Resetting receiver radio.");
+        if let Err(e) = self.radio.init().await {
+            defmt::error!("Failed to reset radio: {:?}", defmt::Debug2Format(&e));
+        }
+    }
 }
 
 impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S> {
@@ -201,6 +170,8 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
         mut self,
         mut connection_sender: CONN,
     ) -> ! {
+        let mut consecutive_errors = 0;
+
         loop {
             defmt::info!("Sweeping downlink frequencies");
 
@@ -212,6 +183,8 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
 
                 match self.receive_until(*f, deadline).await {
                     Ok(Some((time, msg, _status))) => {
+                        consecutive_errors = 0;
+
                         connection_sender
                             .anysend(Some((Instant::now(), time)))
                             .await;
@@ -223,9 +196,18 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
                         defmt::warn!("Connection lost.");
                         connection_sender.anysend(None).await;
                     }
-                    Ok(None) => {}
+                    Ok(None) => {
+                        consecutive_errors = 0;
+                    }
                     Err(e) => {
                         defmt::error!("Failed to receive packet: {:?}", defmt::Debug2Format(&e));
+
+                        consecutive_errors = u32::saturating_add(consecutive_errors, 1);
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            self.reset_radio().await;
+                            consecutive_errors = 0;
+                        }
+
                         Timer::after(Duration::from_millis(10)).await;
                     }
                 }
@@ -349,6 +331,7 @@ impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessa
     ) -> ! {
         let mut last_seq = u16::MAX;
         let mut packet_history: heapless::Deque<(Instant, u16), 32> = heapless::Deque::new();
+        let mut consecutive_errors = 0;
 
         loop {
             let Some((last_time_instant, last_time_counter)) = time_receiver.try_get() else {
@@ -365,12 +348,24 @@ impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessa
                 + Duration::from_millis(next_hop.wrapping_sub(last_time_counter) as u64);
 
             let (seq, msg, status) = match self.receive_until(frequency, deadline).await {
-                Ok(Some(x)) => x,
+                Ok(Some(x)) => {
+                    consecutive_errors = 0;
+                    x
+                }
                 Ok(None) => {
+                    consecutive_errors = 0;
                     continue;
                 }
                 Err(e) => {
                     defmt::error!("Error receiving uplink: {}", defmt::Debug2Format(&e));
+
+                    consecutive_errors = u32::saturating_add(consecutive_errors, 1);
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        self.reset_radio().await;
+                        consecutive_errors = 0;
+                    }
+
+                    Timer::after(Duration::from_millis(10)).await;
                     continue;
                 }
             };
