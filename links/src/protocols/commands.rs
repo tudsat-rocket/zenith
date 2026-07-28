@@ -107,8 +107,9 @@ pub async fn run(
                     MavCmd::CommandValve => {
                         let valve_id = ValveId::try_from(cmd.param1 as u8).ok();
                         let target_pos = cmd.param2.is_finite().then(|| cmd.param2.clamp(0.0, 1.0));
-                        let duration = (cmd.param3.is_finite() && cmd.param3 > 0.0)
-                            .then(|| core::time::Duration::from_secs_f32(cmd.param3));
+                        let duration = core::time::Duration::try_from_secs_f32(cmd.param3)
+                            .ok()
+                            .filter(|dur| !dur.is_zero());
 
                         let valve_cmd = match (target_pos, duration) {
                             (Some(p), Some(dur)) if p > 0.99 => Some(ValveCommand::PulseOpen(dur)),
