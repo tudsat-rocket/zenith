@@ -314,7 +314,7 @@ mod tests {
         check::<ValveId, 9>();
         check::<TempSensId, 2>();
         check::<PressSensId, 9>();
-        check::<BinaryOutputId, 4>();
+        check::<BinaryOutputId, 5>();
         check::<TankId, 6>();
     }
 }
