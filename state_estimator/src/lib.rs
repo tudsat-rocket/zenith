@@ -11,6 +11,7 @@ use nalgebra::*;
 use rapid_dialect::FlightMode;
 
 pub const GRAVITY: f32 = 9.80665;
+const GPS_NOMINAL_STD_DEV: f32 = 3.0;
 const GPS_NO_FIX_STD_DEV: f32 = 999_999.0;
 
 #[derive(Debug, Clone, Default)]
@@ -242,9 +243,9 @@ impl StateEstimator {
         gps: Option<&GpsDatum>,
     ) {
         // Update GPS measurement noise
-        let std_dev = self.hdop_to_std_dev(gps.as_ref().map(|gps| gps.hdop));
-        self.kalman.R[(4, 4)] = std_dev;
-        self.kalman.R[(5, 5)] = std_dev;
+        let variance = self.hdop_to_std_dev(gps.map(|gps| gps.hdop)).powi(2);
+        self.kalman.R[(4, 4)] = variance;
+        self.kalman.R[(5, 5)] = variance;
 
         let pos = if let Some(gps) = &gps {
             let global_pos = Vector3::new(
@@ -554,7 +555,7 @@ impl StateEstimator {
 
     #[allow(clippy::unused_self)]
     fn hdop_to_std_dev(&self, hdop: Option<u16>) -> f32 {
-        hdop.map(|hdop| (hdop as f32 / 100.0) * 0.003)
+        hdop.map(|hdop| (f32::from(hdop) / 100.0) * GPS_NOMINAL_STD_DEV)
             .unwrap_or(GPS_NO_FIX_STD_DEV)
     }
 
