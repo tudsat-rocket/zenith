@@ -75,15 +75,27 @@ impl Bus for BusHandler {
     fn set_output_image(&mut self, outputs: BusOutputImage) {
         // Each output gets a message every time that state changes or every x_MESSAGE_INTERVAL.
 
+        let now = Instant::now();
+
+        // A state change goes out immediately, but for periodic refreshes we limit ourselves to
+        // one message per tick (by setting this to false on the first refresh CAN send).
+        //
+        // This flattens out the refresh spike; otherwise all outputs would be refreshed in the
+        // exact same tick until the state for a given valve is changed for the first time.
+        let mut may_refresh = true;
+
         for i in BinaryOutputId::ALL {
             let last_message = self.last_binary_output_messages[i];
             let is_due = last_message
-                .map(|i| i.elapsed() > BINARY_OUTPUT_MESSAGE_INTERVAL)
+                .map(|t| now.saturating_duration_since(t) > BINARY_OUTPUT_MESSAGE_INTERVAL)
                 .unwrap_or(true);
             let has_changed = outputs.binary_output[i] != self.outputs_last.binary_output[i];
 
-            if !has_changed && !is_due {
-                continue;
+            if !has_changed {
+                if !is_due || !may_refresh {
+                    continue;
+                }
+                may_refresh = false;
             }
 
             let target_state = outputs.binary_output[i];
@@ -96,18 +108,21 @@ impl Bus for BusHandler {
                 self.can.0.publish_immediate(frame);
             }
 
-            self.last_binary_output_messages[i] = Some(Instant::now());
+            self.last_binary_output_messages[i] = Some(now);
         }
 
         for i in ValveId::ALL {
             let last_message = self.last_valve_messages[i];
             let is_due = last_message
-                .map(|i| i.elapsed() > VALVE_MESSAGE_INTERVAL)
+                .map(|t| now.saturating_duration_since(t) > VALVE_MESSAGE_INTERVAL)
                 .unwrap_or(true);
             let has_changed = outputs.valve[i] != self.outputs_last.valve[i];
 
-            if !has_changed && !is_due {
-                continue;
+            if !has_changed {
+                if !is_due || !may_refresh {
+                    continue;
+                }
+                may_refresh = false;
             }
 
             let target_state = outputs.valve[i];
@@ -125,7 +140,7 @@ impl Bus for BusHandler {
                 self.can.0.publish_immediate(frame);
             }
 
-            self.last_valve_messages[i] = Some(Instant::now());
+            self.last_valve_messages[i] = Some(now);
         }
 
         self.outputs_last = outputs;
