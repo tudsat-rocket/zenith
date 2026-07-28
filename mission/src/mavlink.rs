@@ -91,7 +91,7 @@ impl Into<LocalPositionNed> for &VehicleSnapshot<'_> {
             time_boot_ms: self.time.0,
             x: pos.y,
             y: pos.x,
-            z: -pos.z,
+            z: -self.state_estimator.altitude_agl(),
             vx: vel.y,
             vy: vel.x,
             vz: -vel.z,
