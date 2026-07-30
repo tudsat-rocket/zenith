@@ -12,10 +12,11 @@ use embassy_executor::Spawner;
 use embassy_stm32::adc::{Adc, AdcChannel, Instance, SampleTime, Temperature, VrefInt};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
 use embassy_time::{Duration, Instant, Ticker, Timer};
+//use firmware::buzzer;
 
 use mission::AdcData;
 
-use crate::BoardAdc;
+use crate::{BoardAdc, buzzer};
 
 const VSENSE_DIVIDER: u64 = (100 + 10) / 10;
 
@@ -68,6 +69,11 @@ async fn run(mut adc: BoardAdc) -> ! {
         let temperature = read_buffer[1] as i32;
 
         let bus_main_voltage = VSENSE_DIVIDER * 3300 * (read_buffer[2] as u64) / 65536;
+
+        defmt::info!("main bus voltage at {:?}", bus_main_voltage);
+        if bus_main_voltage < 10 {
+            buzzer::request_sound(buzzer::Sound::BatteryExtremLow);
+        }
         let bus_supply_voltage = VSENSE_DIVIDER * 3300 * (read_buffer[3] as u64) / 65536;
         let fc_current = (33000 * (read_buffer[4] as u64)) / 65536;
 

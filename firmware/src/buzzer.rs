@@ -1,3 +1,5 @@
+use core::ops::Not;
+
 use embassy_executor::{SendSpawner, Spawner};
 use embassy_stm32::can::CanTx;
 use embassy_stm32::lptim::pwm::Pwm;
@@ -25,18 +27,38 @@ static STARTUP_TECH: [Note; 6] = [
     Note::pause(100),
 ];
 
+static BATTERY_LOW: [Note; 3] = [Note::new(A, 4, 100), Note::pause(20), Note::new(A, 4, 100)];
+
+static BATTERY_EXTREM_LOW: [Note; 7] = [
+    Note::new(A, 5, 100),
+    Note::pause(40),
+    Note::new(A, 5, 100),
+    Note::pause(100),
+    Note::new(A, 6, 200),
+    Note::pause(40),
+    Note::new(A, 6, 200),
+];
+
+static MODE_CHANGE: [Note; 1] = [Note::new(E, 4, 1000)];
+
 #[derive(Clone, Copy, PartialEq, Format)]
-pub enum Song {
+pub enum Sound {
     StartupTech,
+    BatteryLow,
+    BatteryExtremLow,
+    ModeChange,
 }
 
-fn get_song_notes(song: Song) -> &'static [Note] {
-    match song {
-        Song::StartupTech => &STARTUP_TECH,
+fn get_song_notes(sound: Sound) -> &'static [Note] {
+    match sound {
+        Sound::StartupTech => &STARTUP_TECH,
+        Sound::BatteryLow => &BATTERY_LOW,
+        Sound::BatteryExtremLow => &BATTERY_EXTREM_LOW,
+        Sound::ModeChange => &MODE_CHANGE,
     }
 }
 
-pub static SONG_CHANNEL: Channel<ThreadModeRawMutex, Song, 1> = Channel::new();
+pub static SOUND_CHANNEL: Channel<ThreadModeRawMutex, Sound, 1> = Channel::new();
 
 static STOP_SIGAL: Signal<ThreadModeRawMutex, ()> = Signal::new();
 
@@ -51,7 +73,7 @@ pub fn spawn(buzzer: (SimplePwm<'static, TIM2>, embassy_stm32::timer::Channel), 
 #[embassy_executor::task]
 async fn buzzer_controller() {
     loop {
-        let new_song = SONG_CHANNEL.receive().await;
+        let new_song = SOUND_CHANNEL.receive().await;
         info!("New Song selected {:?}", new_song);
 
         // stop the player to play the next song
@@ -71,17 +93,17 @@ pub async fn player(buzzer: (SimplePwm<'static, TIM2>, embassy_stm32::timer::Cha
     let max_duty = pwm.max_duty_cycle() as u16;
 
     // set the volume of the the buzzer
-    let volume = 10u16;
+    let volume = 30u16;
     pwm.channel(channel).set_duty_cycle(volume * max_duty / 100);
 
     loop {
-        let song = SONG_CHANNEL.receive().await;
+        let song = SOUND_CHANNEL.receive().await;
         let notes = get_song_notes(song);
 
         for note in notes.iter() {
             // stop playing the song when the stop signal is set
             if STOP_SIGAL.signaled() {
-                info!("Song aborted - Play new song");
+                info!("Sound aborted - Play new sound");
                 pwm.channel(channel).disable();
                 STOP_SIGAL.reset();
                 break;
@@ -106,8 +128,8 @@ pub async fn player(buzzer: (SimplePwm<'static, TIM2>, embassy_stm32::timer::Cha
 ///
 /// This will stop the currently playing song and
 /// will start playing the requested song
-pub fn request_song(song: Song) {
-    let _ = SONG_CHANNEL.try_send(song);
+pub fn request_sound(sound: Sound) {
+    let _ = SOUND_CHANNEL.try_send(sound);
 }
 
 struct Note {
