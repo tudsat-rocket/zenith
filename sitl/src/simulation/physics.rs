@@ -167,6 +167,19 @@ impl FlightPhysics {
         self.chamber_pressure = pressure;
     }
 
+    /// Chamber pressure as a fraction of the nominal operating pressure.
+    #[cfg(feature = "hybrid")]
+    fn thrust_fraction(&self) -> f32 {
+        const NOMINAL_CHAMBER_PRESSURE: f32 = 17.0;
+        (self.chamber_pressure / NOMINAL_CHAMBER_PRESSURE).clamp(0.0, 1.0)
+    }
+
+    /// Acceleration [m/s^2] the motor produces at the current chamber pressure and mass.
+    #[cfg(feature = "hybrid")]
+    fn thrust_accel(&self) -> f32 {
+        self.thrust_fraction() * self.config.thrust_force / self.mass
+    }
+
     pub fn set_flight_mode(&mut self, mode: FlightMode) {
         if mode == self.mode {
             return;
@@ -214,11 +227,11 @@ impl FlightPhysics {
                     };
                     #[cfg(feature = "hybrid")]
                     let thrust_accel = {
-                        let normalized = (self.chamber_pressure / 17.0).clamp(0.0, 1.0);
-                        self.mass -=
-                            normalized * (self.config.propellant_mass / self.config.burn_time) * DT;
+                        self.mass -= self.thrust_fraction()
+                            * (self.config.propellant_mass / self.config.burn_time)
+                            * DT;
                         self.mass = self.mass.max(self.config.dry_mass);
-                        normalized * self.config.thrust_force / self.mass
+                        self.thrust_accel()
                     };
                     thrust_accel * self.body_z
                 }
@@ -251,7 +264,10 @@ impl FlightPhysics {
                 }
                 #[cfg(feature = "hybrid")]
                 {
-                    if self.mode == FlightMode::Ignite {
+                    // Liftoff is decided by the propulsion model, not by the flight mode: entering
+                    // Ignite only starts the sequence, and the main valve opens some way into it.
+                    // Until the motor can actually carry the vehicle we stay clamped to the pad.
+                    if self.thrust_accel() > GRAVITY {
                         self.transition(FlightPhase::Burn);
                     }
                 }
@@ -262,12 +278,8 @@ impl FlightPhysics {
                     self.transition(FlightPhase::Coast);
                 }
                 #[cfg(feature = "hybrid")]
-                {
-                    let normalized = (self.chamber_pressure / 17.0).clamp(0.0, 1.0);
-                    let thrust_accel = normalized * self.config.thrust_force / self.mass;
-                    if thrust_accel < 1.0 && self.phase_time > 0.5 {
-                        self.transition(FlightPhase::Coast);
-                    }
+                if self.thrust_accel() < 1.0 && self.phase_time > 0.5 {
+                    self.transition(FlightPhase::Coast);
                 }
             }
             FlightPhase::Coast => {

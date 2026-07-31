@@ -20,6 +20,7 @@ pub use params::{ParamDescriptor, ParamId, ParamType, ParamValue, ParameterField
 pub struct Params {
     pub state_estimator: StateEstimatorParams,
     pub recovery: RecoveryParams,
+    pub propulsion: PropulsionParams,
 }
 
 /// Recovery / parachute deployment parameters, exposed over MAVLink as `REC_*`.
@@ -35,6 +36,18 @@ pub struct RecoveryParams {
     /// Minimum time (ms) after drogue before allowing main deployment
     #[param(id = 0x0202, name = "MIN_T_MAIN", default = 3000)]
     pub min_time_to_main: u32,
+}
+
+/// Ignition sequence parameters, exposed over MAVLink as `PROP_*`.
+#[derive(Debug, Clone, macros::ParameterGroup)]
+#[param_group(prefix = "PROP")]
+pub struct PropulsionParams {
+    /// Time (ms) the igniter outputs are high after entering ignition mode
+    #[param(id = 0x0300, name = "IGNTR_TIME", default = 1500)]
+    pub igniter_on_time: u32,
+    /// Delay (ms) after ignition mode is entered after which main valve is opened
+    #[param(id = 0x0301, name = "MAIN_DELAY", default = 700)]
+    pub main_valve_delay: u32,
 }
 
 /// Live mirror of the current [`Params`] for the MAVLink param protocol tasks. Starts empty (the

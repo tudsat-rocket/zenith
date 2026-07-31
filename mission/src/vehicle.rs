@@ -9,11 +9,9 @@ use crate::bus::{Bus, BusInputImage, BusOutputImage};
 use crate::flight_logic::FlightLogic;
 use crate::inventory::BinaryOutputId;
 use crate::mavlink::VehicleSnapshot;
-use crate::params::{Params, RecoveryParams};
+use crate::params::{Params, PropulsionParams, RecoveryParams};
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
 use crate::valves::{ValveCommand, ValveController, ValveError};
-
-pub const IGNITER_ON_DURATION_MS: u32 = 3000;
 
 pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     pub time: Wrapping<u32>,
@@ -22,6 +20,7 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     mode_entered_at: Wrapping<u32>,
     flight_logic: FlightLogic,
     recovery_params: RecoveryParams,
+    propulsion_params: PropulsionParams,
     pub sensors: S,
     pub outputs: O,
     pub storage: F,
@@ -50,6 +49,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             mode_entered_at: Wrapping(0),
             flight_logic: FlightLogic::default(),
             recovery_params: params.recovery,
+            propulsion_params: params.propulsion,
             sensors,
             outputs,
             storage,
@@ -97,14 +97,14 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.outputs.set_drogue(self.mode == FM::DeployDrogue);
         self.outputs.set_main(self.mode == FM::DeployMain);
 
-        // The igniters are energized for the first IGNITER_ON_DURATION_MS of Ignition.
+        // The igniters are energized for the first PROP_IGNTR_TIME milliseconds of Ignition.
         let igniting = self.mode == FM::Ignite
-            && (self.time - self.mode_entered_at).0 < IGNITER_ON_DURATION_MS;
+            && (self.time - self.mode_entered_at).0 < self.propulsion_params.igniter_on_time;
         self.bus_outputs.binary_output[BinaryOutputId::Igniter1] = igniting;
         self.bus_outputs.binary_output[BinaryOutputId::Igniter2] = igniting;
 
         // Determine the intended state of all valves and push it out on the vehicle bus.
-        self.bus_outputs.valve = self.valves.resolve(self.time);
+        self.bus_outputs.valve = self.valves.resolve(self.time, &self.propulsion_params);
         self.bus.set_output_image(self.bus_outputs);
 
         self.time += 1;
@@ -125,7 +125,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.mode_entered_at = self.time;
 
         self.flight_logic.set_mode(self.time, mode);
-        self.valves.set_mode(mode);
+        self.valves.set_mode(mode, self.time);
 
         // Camera outputs are turned on automatically, but are not automatically turned
         // back off.
@@ -156,12 +156,14 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         let mut params = Params {
             state_estimator: self.state_estimator.params().clone(),
             recovery: self.recovery_params.clone(),
+            propulsion: self.propulsion_params.clone(),
         };
 
         params.set(descriptor.id, value);
 
         log::info!("Applying param {} (id {id:#x})", descriptor.name);
         self.recovery_params = params.recovery;
+        self.propulsion_params = params.propulsion;
         self.state_estimator.update_params(params.state_estimator);
 
         self.storage.write_param(descriptor.id, value);
