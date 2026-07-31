@@ -1,7 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    reason = "boot-time socket/task setup; panic-on-failure is the embedded model"
-)]
 #![allow(clippy::indexing_slicing, reason = "fixed-size network packet buffers")]
 
 use embassy_sync::watch::Watch;
@@ -55,6 +51,10 @@ pub struct EthernetHandle {
 }
 
 impl EthernetHandle {
+    #[allow(
+        clippy::unwrap_used,
+        reason = "boot-time socket/task setup; panic-on-failure is the embedded model"
+    )]
     #[allow(
         clippy::needless_pass_by_value,
         reason = "at the moment we always pass the CAN stuff, even for the GCS where we don't need it."
@@ -228,6 +228,7 @@ async fn run_socket(
     publisher: InterfaceRxPublisher,
 ) -> ! {
     let remote_endpoint = (embassy_net::Ipv4Address::BROADCAST, 14550);
+    #[allow(clippy::unwrap_used, reason = "valid port, no other listeners")]
     socket.bind(14551).unwrap();
     socket.set_hop_limit(Some(4));
 
@@ -243,10 +244,16 @@ async fn run_socket(
         .await
         {
             Either::First(message) => {
-                let frame = endpoint.next_frame(&message).unwrap();
+                let Ok(frame) = endpoint.next_frame(&message) else {
+                    defmt::error!("Failed to create MAVLink frame");
+                    continue;
+                };
 
                 let mut transmit_buffer = [0; 1024];
-                let n = frame.serialize(&mut transmit_buffer).unwrap();
+                let Ok(n) = frame.serialize(&mut transmit_buffer) else {
+                    defmt::error!("Failed to serialize frame");
+                    continue;
+                };
                 let serialized = &transmit_buffer[..n];
 
                 if let Err(e) = socket.send_to(serialized, remote_endpoint).await {

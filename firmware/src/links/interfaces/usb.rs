@@ -1,7 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    reason = "boot-time USB setup; panic-on-failure is the embedded model"
-)]
 #![allow(clippy::indexing_slicing, reason = "fixed-size USB packet buffers")]
 
 use embassy_sync::watch::Watch;
@@ -62,6 +58,10 @@ pub struct UsbHandle {
 }
 
 impl UsbHandle {
+    #[allow(
+        clippy::unwrap_used,
+        reason = "boot-time USB setup; panic-on-failure is the embedded model"
+    )]
     pub fn init(driver: Driver<'static, USB_OTG_FS>, spawner: Spawner) -> Self {
         let tx = DOWNLINK.init(PubSubChannel::new());
         let rx = UPLINK.init(PubSubChannel::new());
@@ -248,10 +248,16 @@ async fn run_downlink(
         loop {
             let message = subscriber.next_message_pure().await;
 
-            let frame = endpoint.next_frame(&message).unwrap();
+            let Ok(frame) = endpoint.next_frame(&message) else {
+                defmt::error!("Failed to create MAVLink frame");
+                continue;
+            };
 
             let mut transmit_buffer = [0; 1024];
-            let n = frame.serialize(&mut transmit_buffer).unwrap();
+            let Ok(n) = frame.serialize(&mut transmit_buffer) else {
+                defmt::error!("Failed to serialize frame");
+                continue;
+            };
             let serialized = &transmit_buffer[..n];
 
             match with_timeout(
