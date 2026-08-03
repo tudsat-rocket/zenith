@@ -11,9 +11,10 @@ use embassy_stm32::interrupt::{InterruptExt, Priority};
 use embassy_stm32::peripherals::*;
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_sync::pubsub::PubSubChannel;
-use embassy_time::{Duration, Ticker};
+use embassy_time::{Duration, Ticker, Timer};
 
 use firmware::bus::BusHandler;
+use firmware::buzzer::request_sound_continues;
 use firmware::can::{CanRxSubscriber, CanTxPublisher};
 use firmware::links::{Links, UplinkCommand};
 use firmware::{Vehicle, buzzer};
@@ -81,13 +82,6 @@ async fn main(low_priority_spawner: Spawner) {
         .spawn(main_loop(vehicle, links, board.iwdg))
         .unwrap();
     buzzer::request_sound(buzzer::Sound::StartupTech);
-
-    /*loop {
-        Timer::after(Duration::from_secs(5)).await;
-        buzzer::request_sound(buzzer::Sound::BatteryExtremLow);
-        Timer::after(Duration::from_secs(2));
-        buzzer::request_sound(buzzer::Sound::BatteryExtremLow);
-    }*/
 }
 
 #[embassy_executor::task]

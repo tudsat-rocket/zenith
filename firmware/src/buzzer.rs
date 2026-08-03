@@ -5,7 +5,7 @@ use embassy_stm32::can::CanTx;
 use embassy_stm32::lptim::pwm::Pwm;
 use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::simple_pwm::SimplePwm;
-use embassy_sync::channel::Channel;
+use embassy_sync::channel::{Channel, TryReceiveError};
 use embassy_sync::signal::Signal;
 use static_cell::StaticCell;
 
@@ -40,7 +40,11 @@ static BATTERY_EXTREM_LOW: [Note; 7] = [
     Note::new(A, 6, 200),
 ];
 
-static MODE_CHANGE: [Note; 1] = [Note::new(E, 4, 1000)];
+static MODE_CHANGE: [Note; 3] = [
+    Note::new(E, 4, 1000),
+    Note::pause(100),
+    Note::new(B, 4, 1000),
+];
 
 #[derive(Clone, Copy, PartialEq, Format)]
 pub enum Sound {
@@ -59,27 +63,12 @@ fn get_song_notes(sound: Sound) -> &'static [Note] {
     }
 }
 
-pub static SOUND_CHANNEL: Channel<ThreadModeRawMutex, Sound, 1> = Channel::new();
+pub static SOUND_CHANNEL: Channel<ThreadModeRawMutex, (Sound, bool), 1> = Channel::new();
 
 static STOP_SIGAL: Signal<ThreadModeRawMutex, ()> = Signal::new();
 
 pub fn spawn(buzzer: (SimplePwm<'static, TIM2>, embassy_stm32::timer::Channel), spawner: Spawner) {
-    spawner.spawn(buzzer_controller()).unwrap();
     spawner.spawn(player(buzzer)).unwrap();
-}
-
-/// Buzzer buzzer controller
-///
-/// Listens for a new song and sets the stop signal as soon as a new song is selected
-#[embassy_executor::task]
-async fn buzzer_controller() {
-    loop {
-        let new_song = SOUND_CHANNEL.receive().await;
-        info!("New Song selected {:?}", new_song);
-
-        // stop the player to play the next song
-        STOP_SIGAL.signal(());
-    }
 }
 
 /// The song player
@@ -98,26 +87,46 @@ pub async fn player(buzzer: (SimplePwm<'static, TIM2>, embassy_stm32::timer::Cha
     pwm.channel(channel).set_duty_cycle(volume * max_duty / 100);
 
     loop {
-        let song = SOUND_CHANNEL.receive().await;
-        let notes = get_song_notes(song);
+        let (sound, play_continous) = SOUND_CHANNEL.receive().await;
+        let notes = get_song_notes(sound);
 
-        for note in notes.iter() {
-            // stop playing the song when the stop signal is set
-            if STOP_SIGAL.signaled() {
-                info!("Sound aborted - Play new sound");
-                pwm.channel(channel).disable();
-                STOP_SIGAL.reset();
+        'play_song: loop {
+            for note in notes.iter() {
+                // check if there is a new sound in the channel
+                // only abort playing if this is a new sound
+                match SOUND_CHANNEL.try_peek() {
+                    Ok((peaked_sound, _)) => {
+                        if peaked_sound != sound {
+                            info!("New sound selected - abort");
+                            pwm.channel(channel).disable();
+                            break 'play_song;
+                        }
+                    }
+                    Err(_) => {
+                        // do nothing
+                    }
+                }
+                if STOP_SIGAL.signaled() {
+                    info!("Stop signal trigger. Abort playing");
+                    pwm.channel(channel).disable();
+                    STOP_SIGAL.reset();
+                    break 'play_song;
+                }
+
+                // play the next note
+                if let Some(frequency) = note.frequency() {
+                    pwm.set_frequency(Hertz::hz(frequency as u32));
+                    pwm.channel(channel).enable();
+                } else {
+                    pwm.channel(channel).disable();
+                }
+                Timer::after(Duration::from_millis(note.duration as u64)).await;
+            }
+
+            // break the loop if the sound was requested as non-repeating
+            if !play_continous {
                 break;
             }
-
-            // play the next note
-            if let Some(frequency) = note.frequency() {
-                pwm.set_frequency(Hertz::hz(frequency as u32));
-                pwm.channel(channel).enable();
-            } else {
-                pwm.channel(channel).disable();
-            }
-            Timer::after(Duration::from_millis(note.duration as u64)).await;
         }
 
         // turn off buzzer
@@ -130,7 +139,20 @@ pub async fn player(buzzer: (SimplePwm<'static, TIM2>, embassy_stm32::timer::Cha
 /// This will stop the currently playing song and
 /// will start playing the requested song
 pub fn request_sound(sound: Sound) {
-    let _ = SOUND_CHANNEL.try_send(sound);
+    let _ = SOUND_CHANNEL.try_send((sound, false));
+}
+
+/// Request a new sond and play the sound play_continous
+///
+/// This will stop the currently playing song if it is a new song
+/// it will start playing the request_sound
+pub fn request_sound_continues(sound: Sound) {
+    let _ = SOUND_CHANNEL.try_send((sound, true));
+}
+
+/// Request to stop playing
+pub fn request_stop() {
+    let _ = STOP_SIGAL.signal(());
 }
 
 struct Note {

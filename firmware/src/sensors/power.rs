@@ -16,7 +16,10 @@ use embassy_time::{Duration, Instant, Ticker, Timer};
 
 use mission::AdcData;
 
-use crate::{BoardAdc, buzzer};
+use crate::{
+    BoardAdc,
+    buzzer::{self, Sound, request_sound},
+};
 
 const VSENSE_DIVIDER: u64 = (100 + 10) / 10;
 
@@ -70,10 +73,13 @@ async fn run(mut adc: BoardAdc) -> ! {
 
         let bus_main_voltage = VSENSE_DIVIDER * 3300 * (read_buffer[2] as u64) / 65536;
 
-        defmt::info!("main bus voltage at {:?}", bus_main_voltage);
-        if bus_main_voltage < 10 {
+        // alert the user if the battery voltage is below 10V
+        if bus_main_voltage < 100 {
             buzzer::request_sound(buzzer::Sound::BatteryExtremLow);
+        } else if (bus_main_voltage < 115) {
+            buzzer::request_sound(buzzer::Sound::BatteryLow);
         }
+
         let bus_supply_voltage = VSENSE_DIVIDER * 3300 * (read_buffer[3] as u64) / 65536;
         let fc_current = (33000 * (read_buffer[4] as u64)) / 65536;
 
