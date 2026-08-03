@@ -11,7 +11,7 @@ use embassy_stm32::interrupt::{InterruptExt, Priority};
 use embassy_stm32::peripherals::*;
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_sync::pubsub::PubSubChannel;
-use embassy_time::{Duration, Ticker, Timer};
+use embassy_time::{Duration, Ticker};
 
 use firmware::bus::BusHandler;
 use firmware::can::{CanRxSubscriber, CanTxPublisher};

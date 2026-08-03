@@ -16,6 +16,7 @@ use num_traits::Float;
 
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 
+#[allow(clippy::enum_glob_use, reason = "annoying")]
 use Semitone::*;
 
 static STARTUP_TECH: [Note; 6] = [
