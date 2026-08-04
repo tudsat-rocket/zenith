@@ -11,12 +11,13 @@ use embassy_stm32::interrupt::{InterruptExt, Priority};
 use embassy_stm32::peripherals::*;
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_sync::pubsub::PubSubChannel;
-use embassy_time::{Duration, Ticker};
+use embassy_time::{Duration, Ticker, Timer};
 
-use firmware::Vehicle;
 use firmware::bus::BusHandler;
+use firmware::buzzer::request_sound_continues;
 use firmware::can::{CanRxSubscriber, CanTxPublisher};
 use firmware::links::{Links, UplinkCommand};
+use firmware::{Vehicle, buzzer};
 
 use {defmt_rtt as _, panic_probe as _};
 
@@ -55,6 +56,8 @@ async fn main(low_priority_spawner: Spawner) {
     )
     .await;
 
+    fw::buzzer::spawn(board.buzzer, low_priority_spawner);
+
     let can_tx_pub: CanTxPublisher = can1_tx.publisher().unwrap();
     let can_rx_sub: CanRxSubscriber = can1_rx.subscriber().unwrap();
     let bus = BusHandler::new(can_tx_pub, can_rx_sub);
@@ -78,6 +81,14 @@ async fn main(low_priority_spawner: Spawner) {
     high_priority_spawner
         .spawn(main_loop(vehicle, links, board.iwdg))
         .unwrap();
+    buzzer::request_sound(buzzer::Sound::StartupTech);
+
+    Timer::after(Duration::from_secs(5)).await;
+    buzzer::request_sound(buzzer::Sound::Mario);
+
+    //Timer::after(Duration::from_secs(10)).await;
+
+    //buzzer::request_stop();
 }
 
 #[embassy_executor::task]
