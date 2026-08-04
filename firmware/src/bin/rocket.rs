@@ -82,6 +82,13 @@ async fn main(low_priority_spawner: Spawner) {
         .spawn(main_loop(vehicle, links, board.iwdg))
         .unwrap();
     buzzer::request_sound(buzzer::Sound::StartupTech);
+
+    Timer::after(Duration::from_secs(5)).await;
+    buzzer::request_sound(buzzer::Sound::Mario);
+
+    //Timer::after(Duration::from_secs(10)).await;
+
+    //buzzer::request_stop();
 }
 
 #[embassy_executor::task]

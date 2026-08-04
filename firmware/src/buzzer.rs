@@ -19,6 +19,9 @@ use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 #[allow(clippy::enum_glob_use, reason = "annoying")]
 use Semitone::*;
 
+mod sounds;
+use sounds::mario::MARIO;
+
 static STARTUP_TECH: [Note; 6] = [
     Note::new(E, 4, 100),
     Note::pause(20),
@@ -46,12 +49,48 @@ static MODE_CHANGE: [Note; 3] = [
     Note::new(B, 4, 1000),
 ];
 
+static IGNITION: [Note; 28] = [
+    Note::new(C, 4, 1000),
+    Note::pause(10),
+    Note::new(C, 4, 1000),
+    Note::pause(10),
+    Note::new(C, 4, 1000),
+    Note::pause(10),
+    Note::new(C, 4, 500),
+    Note::pause(10),
+    Note::new(C, 4, 500),
+    Note::pause(10),
+    Note::new(C, 4, 500),
+    Note::pause(10),
+    Note::new(C, 4, 250),
+    Note::pause(10),
+    Note::new(C, 4, 250),
+    Note::pause(10),
+    Note::new(C, 4, 250),
+    Note::pause(10),
+    Note::new(C, 4, 125),
+    Note::pause(10),
+    Note::new(C, 4, 125),
+    Note::pause(10),
+    Note::new(C, 4, 125),
+    Note::pause(10),
+    Note::new(C, 4, 125),
+    Note::pause(10),
+    Note::new(C, 4, 10000),
+    Note::pause(10),
+];
+
+static TEST: [Note; 1] = [Note::new(A, 4, 10)];
+
 #[derive(Clone, Copy, PartialEq, Format)]
 pub enum Sound {
     StartupTech,
     BatteryLow,
     BatteryExtremLow,
     ModeChange,
+    Ignition,
+    test,
+    Mario,
 }
 
 fn get_song_notes(sound: Sound) -> &'static [Note] {
@@ -60,6 +99,9 @@ fn get_song_notes(sound: Sound) -> &'static [Note] {
         Sound::BatteryLow => &BATTERY_LOW,
         Sound::BatteryExtremLow => &BATTERY_EXTREM_LOW,
         Sound::ModeChange => &MODE_CHANGE,
+        Sound::Ignition => &IGNITION,
+        Sound::test => &TEST,
+        Sound::Mario => &MARIO,
     }
 }
 
@@ -137,7 +179,7 @@ pub async fn player(buzzer: (SimplePwm<'static, TIM2>, embassy_stm32::timer::Cha
 /// Request a new song.
 ///
 /// This will stop the currently playing song and
-/// will start playing the requested song
+/// will start playing the requestNicolas.kruppa@tudsat.spaceed song
 pub fn request_sound(sound: Sound) {
     let _ = SOUND_CHANNEL.try_send((sound, false));
 }
