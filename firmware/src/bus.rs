@@ -15,6 +15,7 @@ use embassy_time::{Duration, Instant};
 use embedded_can::Id;
 
 use heapless::Vec;
+use iocan_proto::{TpdoFrame, TpdoKind, decode_pdo};
 use num_traits::float::Float;
 use zencan_common::{CanId, CanMessage, sdo::SdoRequest};
 
@@ -27,8 +28,7 @@ use mission::inventory::{BinaryOutputId, BinaryOutputMap, InventoryId, ValveMap}
 
 use crate::bus::mapping::{BINARY_OUTPUT_ID_MAP, VALVE_ID_MAP};
 use crate::bus::pdo_mapping::{
-    PdMessageKind, ProcessDataCanId, SensorReading, binary_output_msg_to_bo,
-    sensor_msg_to_readings, valve_msg_to_valve,
+    SensorReading, hco_msg_to_binary_outputs, sensor_msg_to_readings, valve_msg_to_valve,
 };
 use crate::can::{CanRxSubscriber, CanTxPublisher};
 
@@ -151,43 +151,38 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
     let Id::Standard(cob_id) = frame.header().id() else {
         return;
     };
-    if frame.header().len() != 8 {
-        defmt::warn!("injesting can msg with non 8 length not supported");
-        return;
-    }
-    let data = frame.data();
 
-    let Ok(pd_id) = ProcessDataCanId::try_from(cob_id.as_raw()) else {
-        defmt::warn!(
-            "injest can msg not process data can id: cob: 0x{:x}",
-            cob_id.as_raw()
-        );
+    let Some((node_id, kind_index)) = decode_pdo(cob_id.as_raw()) else {
         return;
     };
 
-    let node_id = pd_id.node_id;
+    let Ok(data) = <[u8; 8]>::try_from(frame.data()) else {
+        defmt::warn!("injesting can msg with non 8 length not supported");
+        return;
+    };
 
-    match pd_id.kind {
-        PdMessageKind::Valves => {
-            for (id, state) in valve_msg_to_valve(node_id as u16, data) {
+    let Some(kind) = TpdoKind::from_index(kind_index) else {
+        defmt::warn!("injest can msg with unknown tpdo kind: {}", kind_index);
+        return;
+    };
+
+    match TpdoFrame::decode(kind, data) {
+        // The measured position is where the valve actually is; commanded and target are the
+        // node echoing back what it was asked for, which we already know.
+        TpdoFrame::ValveMeasured(positions) => {
+            for (id, state) in valve_msg_to_valve(node_id, positions) {
                 image.valve_state[id] = Some(DataWithTime::new(state, time));
             }
         }
-        // NOTE: currently all sensor processing must happen on nodes on the bus
-        PdMessageKind::PwmUs
-        | PdMessageKind::RawBus0a
-        | PdMessageKind::RawBus1a
-        | PdMessageKind::RawBus0b
-        | PdMessageKind::RawBus1b => (),
-
-        PdMessageKind::BinaryOutpus => {
-            for (id, bool_state) in binary_output_msg_to_bo(node_id as u16, data) {
+        // Digital level and PWM width share one frame now; the outputs we drive as binary
+        // outputs report themselves as digital.
+        TpdoFrame::HcoState(outputs) => {
+            for (id, bool_state) in hco_msg_to_binary_outputs(node_id, outputs) {
                 image.binary_outputs[id] = Some(DataWithTime::new(bool_state, time));
             }
         }
-        PdMessageKind::Sensor0 | PdMessageKind::Sensor1 => {
-            defmt::info!("injesting sensor msg");
-            for reading in sensor_msg_to_readings(node_id as u16, pd_id.kind, data) {
+        TpdoFrame::Sensor0(values) | TpdoFrame::Sensor1(values) | TpdoFrame::Sensor3(values) => {
+            for reading in sensor_msg_to_readings(node_id, kind, values) {
                 match reading {
                     SensorReading::Temperature(id, value) => {
                         image.temp_sens[id] = Some(DataWithTime::new(value, time));
@@ -203,6 +198,23 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
                 }
             }
         }
+        // NOTE: currently all sensor processing must happen on nodes on the bus, so the raw
+        // amplifier windows are ignored. The rest has no home in the input image (yet) —
+        // listed one by one so that a new frame kind fails to compile rather than being
+        // silently dropped here.
+        TpdoFrame::ValveCommanded(_)
+        | TpdoFrame::ValveTarget(_)
+        | TpdoFrame::ValveStatus { .. }
+        | TpdoFrame::ValveCurrent(_)
+        | TpdoFrame::RawBus0A(_)
+        | TpdoFrame::RawBus0B(_)
+        | TpdoFrame::RawBus1A(_)
+        | TpdoFrame::RawBus1B(_)
+        | TpdoFrame::SensorUnits(_)
+        | TpdoFrame::I2cScan { .. }
+        | TpdoFrame::RailVoltage(_)
+        | TpdoFrame::RailCurrent(_)
+        | TpdoFrame::Status { .. } => (),
     }
 }
 

@@ -1174,6 +1174,7 @@ dependencies = [
  "embedded-nal-async",
  "embedded-storage-async",
  "heapless 0.8.0",
+ "iocan-proto",
  "links",
  "lora-phy",
  "mavio",
@@ -1458,6 +1459,14 @@ dependencies = [
  "hermit-abi 0.3.9",
  "libc",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "iocan-proto"
+version = "0.1.0"
+source = "git+https://github.com/tudsat-rocket/io_board_firmware.git?rev=83ce2c4e8b302e328f3ba96b5403e669fbed7cf2#83ce2c4e8b302e328f3ba96b5403e669fbed7cf2"
+dependencies = [
+ "defmt 0.3.100",
 ]
 
 [[package]]

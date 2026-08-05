@@ -73,6 +73,7 @@ rand = { version = "0.8", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
 bitflags = "2.9.1"
 zencan-common = { version = "0.0.4", default-features = false, features = [ "defmt" ] }
+iocan-proto = { git = "https://github.com/tudsat-rocket/io_board_firmware.git", rev = "83ce2c4e8b302e328f3ba96b5403e669fbed7cf2", features = ["defmt"] }
 
 rapid-dialect = { workspace = true }
 
