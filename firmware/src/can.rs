@@ -9,6 +9,7 @@ use embassy_stm32::can::{Can, CanRx, CanTx, Frame};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber};
 
+use embassy_time::{Duration, Timer};
 use static_cell::StaticCell;
 
 pub const CAN_RX_QUEUE_SIZE: usize = 40;
@@ -48,20 +49,14 @@ async fn run_can_rx(can_rx: &'static mut CanRx<'static>, publisher: CanRxPublish
     loop {
         match can_rx.read().await {
             Ok(envelope) => {
-                debug!("can_rx: received can envelope");
                 let frame = envelope.frame;
 
                 if publisher.try_publish(frame).is_err() {
-                    warn!("CAN RX queue full, overwriting oldest frame");
+                    // CAN RX queue full, overwriting oldest frame
                     publisher.publish_immediate(frame);
                 }
             }
-            Err(e) => {
-                error!(
-                    "Can Bus Error: Failed to read can envelope: {:?}",
-                    Debug2Format(&e)
-                );
-            }
+            Err(_e) => Timer::after(Duration::from_millis(1)).await,
         }
     }
 }
@@ -69,7 +64,6 @@ async fn run_can_rx(can_rx: &'static mut CanRx<'static>, publisher: CanRxPublish
 async fn run_can_tx(can_tx: &'static mut CanTx<'static>, mut subscriber: CanTxSubscriber) -> ! {
     loop {
         let message = subscriber.next_message_pure().await;
-        debug!("publishing can message: {}", defmt::Debug2Format(&message));
         can_tx.write(&message).await;
     }
 }
