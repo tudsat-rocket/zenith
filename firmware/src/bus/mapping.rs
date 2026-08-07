@@ -46,8 +46,8 @@ pub const VALVE_ID_MAP: ValveMap<IoAddr> = ValveMap::new([
 
 // TODO: change this map construction
 pub const BINARY_OUTPUT_ID_MAP: BinaryOutputMap<IoAddr> = BinaryOutputMap::new([
-    IoAddr::new(7, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Igniter1,
-    IoAddr::new(7, HC_OUTPUT_STORE_IDX, HCO3), // BinaryOutputId::Igniter2,
+    IoAddr::new(7, HC_OUTPUT_STORE_IDX, HCO3), // BinaryOutputId::Igniter1,
+    IoAddr::new(7, HC_OUTPUT_STORE_IDX, HCO4), // BinaryOutputId::Igniter2,
     IoAddr::new(2, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Camera1,
     IoAddr::new(2, HC_OUTPUT_STORE_IDX, HCO3), // BinaryOutputId::Camera2,
     IoAddr::new(3, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Camera3,
