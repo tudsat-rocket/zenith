@@ -71,9 +71,9 @@ pub const PRESS_SENSOR_ID_MAP: PressureSensorMap<SensorAddr> = PressureSensorMap
     SensorAddr::from_sensor_idx(5, 1).unwrap(), // PressSensId::PReg1
     SensorAddr::from_sensor_idx(5, 2).unwrap(), // PressSensId::PReg2
     SensorAddr::from_sensor_idx(5, 3).unwrap(), // PressSensId::OxTankUpper
-    SensorAddr::from_sensor_idx(6, 1).unwrap(), // PressSensId::OxTankLower
-    SensorAddr::from_sensor_idx(6, 0).unwrap(), // PressSensId::CombustionChamber
+    SensorAddr::from_sensor_idx(6, 0).unwrap(), // PressSensId::OxTankLower
+    SensorAddr::from_sensor_idx(6, 3).unwrap(), // PressSensId::CombustionChamber
     // TODO: external io board
     SensorAddr::from_sensor_idx(8, 0).unwrap(), // PressSensId::ExternalPressurant
-    SensorAddr::from_sensor_idx(8, 0).unwrap(), // PressSensId::ExternalOxidizer
+    SensorAddr::from_sensor_idx(6, 1).unwrap(), // PressSensId::ExternalOxidizer
 ]);

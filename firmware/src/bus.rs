@@ -188,11 +188,6 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
                         image.temp_sens[id] = Some(DataWithTime::new(value, time));
                     }
                     SensorReading::Pressure(id, value) => {
-                        defmt::info!(
-                            "pressure sensor injest with id: {}, value: {}",
-                            id as u8,
-                            value
-                        );
                         image.press_sens[id] = Some(DataWithTime::new(value, time));
                     }
                 }
@@ -239,7 +234,9 @@ pub fn can_msg_to_frame(msg: &CanMessage) -> embassy_stm32::can::Frame {
 /// Generate a message for writing to a data to an IO Board.
 /// Following CanOpen sdo request initiate download.
 pub fn sdo_write_msg(data: &heapless::Vec<u8, 4>, addr: &IoAddr) -> CanMessage {
-    let n = data.len() as u8; // data size
+    // `n` counts the *unused* bytes of the 4-byte expedited payload, so the server reads the
+    // size as 4 - n. Sending the data length instead makes a 1-byte write look like 3 bytes.
+    let n = 4 - data.len() as u8;
     let e = true; // expedited transfer, single packet transfer only
     let s = true; // data size specified in n
     let sdo = SdoRequest::InitiateDownload {
