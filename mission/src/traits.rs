@@ -15,7 +15,12 @@ pub struct AdcData {
     pub fc_current: i32,
     pub recovery_voltage: u16,
     pub recovery_current: i32,
-    pub temperature: i32,
+    /// MCU die temperature in millidegrees Celsius, or `None` when the factory
+    /// calibration could not be read and the raw count cannot be turned into a
+    /// temperature. Millidegrees rather than the raw ADC count it used to be, so
+    /// that everything downstream — telemetry, the vehicle bus — gets a number
+    /// that means something on its own.
+    pub temperature_milli_c: Option<i32>,
 }
 
 #[derive(Clone, Default)]

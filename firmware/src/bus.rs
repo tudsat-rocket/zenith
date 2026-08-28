@@ -15,14 +15,15 @@ use embassy_time::{Duration, Instant};
 use embedded_can::Id;
 
 use heapless::Vec;
-use iocan_proto::{TpdoFrame, TpdoKind, decode_pdo};
+use iocan_proto::{TEMPERATURE_INVALID, TpdoFrame, TpdoKind, decode_pdo};
 use num_traits::float::Float;
 use zencan_common::{CanId, CanMessage, sdo::SdoRequest};
 
 use rapid_dialect::rapid::enums::{ValveId, valve_id};
 
 use mission::bus::{
-    Bus, BusDataError, BusInputImage, BusOutputImage, DataWithTime, IoAddr, ValveState,
+    Bus, BusDataError, BusInputImage, BusOutputImage, DataWithTime, FcTemperature, IoAddr,
+    ValveState,
 };
 use mission::inventory::{BinaryOutputId, BinaryOutputMap, InventoryId, ValveMap};
 
@@ -38,6 +39,21 @@ mod pdo_mapping;
 pub const VERY_FRESH_DURATION: Duration = Duration::from_millis(50);
 pub const BINARY_OUTPUT_MESSAGE_INTERVAL: Duration = Duration::from_millis(500);
 pub const VALVE_MESSAGE_INTERVAL: Duration = Duration::from_millis(500);
+/// Matches the IO boards' own default period for this frame (0x3040 sub 19), so
+/// every temperature on the bus arrives at the same rate whoever sent it.
+///
+/// Strictly periodic, unlike the valve and output messages above: those go out
+/// the moment their state changes, but a temperature in millidegrees changes on
+/// essentially every tick, and this loop ticks at 1 kHz.
+pub const TEMPERATURE_MESSAGE_INTERVAL: Duration = Duration::from_millis(1000);
+
+/// The flight computer's own node id on the vehicle bus.
+///
+/// The IO boards' `master_node_id` (0x3000) defaults to 1 and no node in
+/// `zenith_mapping` overrides it, so this is already the address they expect
+/// their master to be at. The IO boards themselves are 2..=8, so nothing
+/// collides.
+pub const FC_NODE_ID: u8 = 1;
 
 pub struct BusHandler {
     pub input: BusInputImage,
@@ -45,6 +61,7 @@ pub struct BusHandler {
     pub can: (CanTxPublisher, CanRxSubscriber),
     last_binary_output_messages: BinaryOutputMap<Option<Instant>>,
     last_valve_messages: ValveMap<Option<Instant>>,
+    last_temperature_message: Option<Instant>,
 }
 
 impl BusHandler {
@@ -55,6 +72,7 @@ impl BusHandler {
             can: (can_tx_pub, can_rx_sub),
             last_binary_output_messages: BinaryOutputMap::splat(None),
             last_valve_messages: ValveMap::splat(None),
+            last_temperature_message: None,
         }
     }
 }
@@ -143,6 +161,19 @@ impl Bus for BusHandler {
             self.last_valve_messages[i] = Some(now);
         }
 
+        let temperature_due = self
+            .last_temperature_message
+            .map(|t| now.saturating_duration_since(t) > TEMPERATURE_MESSAGE_INTERVAL)
+            .unwrap_or(true);
+        if temperature_due {
+            let frame = temperature_frame(outputs.temperature);
+            if self.can.0.try_publish(frame).is_err() {
+                // Can't log here, too noisy.
+                self.can.0.publish_immediate(frame);
+            }
+            self.last_temperature_message = Some(now);
+        }
+
         self.outputs_last = outputs;
     }
 }
@@ -209,8 +240,41 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
         | TpdoFrame::I2cScan { .. }
         | TpdoFrame::RailVoltage(_)
         | TpdoFrame::RailCurrent(_)
+        // The IO boards' own board/die temperatures. Nothing in the input image
+        // holds them yet — they are node health rather than vehicle state, and
+        // `TemperatureSensorMap` is indexed by tank sensors — so they are
+        // dropped here rather than being given a home they do not fit.
+        | TpdoFrame::Temperature { .. }
         | TpdoFrame::Status { .. } => (),
     }
+}
+
+/// Build the flight computer's own temperature broadcast.
+///
+/// Deliberately the same [`TpdoKind::Temperature`] frame an IO board sends, from
+/// [`FC_NODE_ID`], so anything already listening to the bus — the ground station,
+/// a logger — reads the flight computer's temperature with the code it already
+/// has for every other node, rather than needing a special case for the one
+/// board that is not an IO board.
+///
+/// The two slots keep the meaning they have on an IO board as closely as this
+/// hardware allows: `board` is ambient next to the electronics (a barometer die
+/// here, a thermistor there) and `mcu` is the processor. A channel with no
+/// reading sends [`TEMPERATURE_INVALID`] rather than a plausible zero.
+fn temperature_frame(temperature: FcTemperature) -> Frame {
+    use embassy_stm32::can::frame::Header;
+    use embedded_can::StandardId;
+
+    let payload = TpdoFrame::Temperature {
+        board_milli_c: temperature.baro_milli_c.unwrap_or(TEMPERATURE_INVALID),
+        mcu_milli_c: temperature.mcu_milli_c.unwrap_or(TEMPERATURE_INVALID),
+    }
+    .encode();
+
+    let cob_id = TpdoKind::Temperature.cob_id(FC_NODE_ID);
+    let header = Header::new(Id::Standard(StandardId::new(cob_id).unwrap()), 8, false);
+
+    Frame::new(header, &payload).unwrap()
 }
 
 // technically const

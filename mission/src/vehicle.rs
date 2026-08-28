@@ -5,7 +5,7 @@ use rapid_dialect::rapid::enums::ValveId;
 
 use state_estimator::StateEstimator;
 
-use crate::bus::{Bus, BusInputImage, BusOutputImage};
+use crate::bus::{Bus, BusInputImage, BusOutputImage, FcTemperature, celsius_to_milli_c};
 use crate::flight_logic::FlightLogic;
 use crate::inventory::BinaryOutputId;
 use crate::mavlink::VehicleSnapshot;
@@ -102,6 +102,19 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             && (self.time - self.mode_entered_at).0 < self.propulsion_params.igniter_on_time;
         self.bus_outputs.binary_output[BinaryOutputId::Igniter1] = igniting;
         self.bus_outputs.binary_output[BinaryOutputId::Igniter2] = igniting;
+
+        // Report our own temperature on the bus alongside everything else, the way each IO
+        // board reports its. `baro1` is the barometer the state estimator already flies on, so
+        // it is the one whose health is worth watching; it stands in for the board thermistor
+        // an IO board has and this board does not.
+        self.bus_outputs.temperature = FcTemperature {
+            baro_milli_c: self.readings.baro1.temperature.map(celsius_to_milli_c),
+            mcu_milli_c: self
+                .readings
+                .power
+                .as_ref()
+                .and_then(|adc| adc.temperature_milli_c),
+        };
 
         // Determine the intended state of all valves and push it out on the vehicle bus.
         self.bus_outputs.valve = self.valves.resolve(self.time, &self.propulsion_params);
