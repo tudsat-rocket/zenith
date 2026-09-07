@@ -22,7 +22,11 @@ use defmt::*;
 
 const BARO_MEDIAN_FILTER_LENGTH: usize = 20;
 
-#[derive(PartialEq, Clone, Copy)]
+/// Highest pressure, in 0.01mbar, that we expect to see from an MS5607 that is
+/// (incorrectly) evaluated as an MS5611, which halves the reported value.
+const MS5607_MAX_PRESSURE: i32 = 54_000;
+
+#[derive(PartialEq, Clone, Copy, defmt::Format)]
 pub enum MS56Variant {
     MS5607,
     MS5611,
@@ -68,9 +72,9 @@ pub struct MS56<SPI: SpiDevice<u8>> {
 }
 
 impl<SPI: SpiDevice<u8>> MS56<SPI> {
-    pub async fn init(variant: MS56Variant, spi: SPI) -> Result<Self, SPI::Error> {
+    pub async fn init(spi: SPI) -> Result<Self, SPI::Error> {
         let mut baro = Self {
-            variant,
+            variant: MS56Variant::MS5611, // fallback if detection fails
             spi,
             calibration_data: None,
             read_temp: true,
@@ -106,12 +110,36 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
             .map(MS56CalibrationData::valid)
             .unwrap_or(false)
         {
-            info!("MS56xx initialized");
+            baro.detect_variant().await?;
+            info!("MS56xx initialized ({})", baro.variant);
         } else {
             error!("Failed to initialize MS56xx");
         }
 
         Ok(baro)
+    }
+
+    /// Distinguishes the two variants by taking a sample. Since we evaluate it
+    /// as an MS5611, an MS5607 will report roughly half the true pressure.
+    async fn detect_variant(&mut self) -> Result<(), SPI::Error> {
+        for _i in 0..3 {
+            for read_temp in [true, false] {
+                self.read_temp = read_temp;
+                self.start_next_conversion().await?;
+                Timer::after(Duration::from_millis(1)).await;
+                self.read_sensor_data().await?;
+            }
+
+            if let Some(pressure) = self.pressure {
+                if pressure <= MS5607_MAX_PRESSURE {
+                    self.variant = MS56Variant::MS5607;
+                }
+                return Ok(());
+            }
+        }
+
+        error!("Failed to detect MS56xx variant, assuming {}", self.variant);
+        Ok(())
     }
 
     async fn command(
@@ -179,18 +207,38 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
             let mut sens = ((cal.pressure_sensitivity as i64) << 15)
                 + (((cal.temp_coef_pressure_sensitivity as i64) * (dt as i64)) >> 8);
 
-            // second order temp compensation
+            // Second order temp compensation. Like OFF and SENS above, the
+            // MS5607 coefficients are halved compared to its datasheet, since
+            // we calculate at the MS5611's scale and shift once less below.
             if temp < 2000 {
                 let t2 = ((dt as i64) * (dt as i64)) >> 31;
                 let temp_offset = temp - 2000;
-                let mut off2 = (5 * temp_offset * temp_offset) >> 1;
-                let mut sens2 = off2 >> 1;
+                let (mut off2, mut sens2) = match self.variant {
+                    MS56Variant::MS5607 => (
+                        (61 * temp_offset * temp_offset) >> 5,
+                        temp_offset * temp_offset,
+                    ),
+                    MS56Variant::MS5611 => {
+                        let off2 = (5 * temp_offset * temp_offset) >> 1;
+                        (off2, off2 >> 1)
+                    }
+                };
 
                 if temp < -1500 {
                     // brrrr
                     let temp_offset = temp + 1500;
-                    off2 += 7 * temp_offset * temp_offset;
-                    sens2 += (11 * temp_offset * temp_offset) >> 1;
+                    let (off2_extra, sens2_extra) = match self.variant {
+                        MS56Variant::MS5607 => (
+                            (15 * temp_offset * temp_offset) >> 1,
+                            4 * temp_offset * temp_offset,
+                        ),
+                        MS56Variant::MS5611 => (
+                            7 * temp_offset * temp_offset,
+                            (11 * temp_offset * temp_offset) >> 1,
+                        ),
+                    };
+                    off2 += off2_extra;
+                    sens2 += sens2_extra;
                 }
 
                 temp -= t2;

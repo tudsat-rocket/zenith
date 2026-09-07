@@ -182,7 +182,7 @@ pub async fn init() -> Board {
     let mag = LIS3MDL::init(SpiDevice::new(spi1, spi1_cs_mag))
         .await
         .unwrap();
-    let baro1 = MS56::init(MS56Variant::MS5607, SpiDevice::new(spi1, spi1_cs_baro1))
+    let baro1 = MS56::init(SpiDevice::new(spi1, spi1_cs_baro1))
         .await
         .unwrap();
     let baro2 = LPS22::init(SpiDevice::new(spi2, spi2_cs_baro2))
