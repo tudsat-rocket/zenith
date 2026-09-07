@@ -18,6 +18,13 @@ pub mod protocols;
 /// default, so zenith is node 1 on CAN and component 1 on MAVLink.
 pub const SELF_COMPONENT_ID: u8 = 0x01;
 
+/// Maximum length of a tune name accepted via `PLAY_TUNE_V2`.
+///
+/// We do not parse tune notation (yet), we only accept the names of the sounds
+/// the firmware already knows, so this is far shorter than the 248 characters
+/// the MAVLink message provides.
+pub const TUNE_NAME_LEN: usize = 24;
+
 /// One message on its way out, plus the MAVLink component it speaks for.
 ///
 /// Almost everything zenith sends is its own; the exception is the heartbeat per IO board node,
@@ -83,6 +90,9 @@ pub enum UplinkCommand {
         first: u16,
         mask: u32,
     },
+    /// Play one of the firmware's built-in sounds by name, or stop the buzzer
+    /// if the name is empty.
+    PlayTune(heapless::String<TUNE_NAME_LEN>),
 }
 
 impl UplinkCommand {
@@ -94,6 +104,7 @@ impl UplinkCommand {
             Self::RequestAvailableModes(_)
             | Self::RequestCanForwarding
             | Self::SetParam { .. }
+            | Self::PlayTune(_)
             | Self::RequestParams { .. } => None,
         }
     }

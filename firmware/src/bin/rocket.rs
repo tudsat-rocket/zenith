@@ -11,7 +11,7 @@ use embassy_stm32::interrupt::{InterruptExt, Priority};
 use embassy_stm32::peripherals::*;
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_sync::pubsub::PubSubChannel;
-use embassy_time::{Duration, Instant, Ticker};
+use embassy_time::{Duration, Instant, Ticker, Timer};
 use static_cell::StaticCell;
 
 use firmware::bus::BusHandler;
@@ -163,6 +163,24 @@ pub async fn main_loop(
                 UplinkCommand::SetParam { id, raw } => {
                     vehicle.set_param(id, raw).await;
                     MavResult::Accepted
+                }
+                UplinkCommand::PlayTune(name) => {
+                    if alerts.alert_active() {
+                        // The ground must not be able to silence the pad hazard
+                        // warning or the landing beacon.
+                        defmt::warn!("Ignoring tune request while a buzzer alert is active");
+                        MavResult::TemporarilyRejected
+                    } else if name.is_empty() {
+                        // We take an empty tune to mean "stop the buzzer".
+                        buzzer::request_stop();
+                        MavResult::Accepted
+                    } else if let Some(sound) = buzzer::Sound::from_name(&name) {
+                        buzzer::request_sound(sound);
+                        MavResult::Accepted
+                    } else {
+                        defmt::warn!("Unknown tune {}", name.as_str());
+                        MavResult::Denied
+                    }
                 }
                 _ => MavResult::Unsupported,
             };
