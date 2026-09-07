@@ -11,7 +11,7 @@ use embassy_stm32::interrupt::{InterruptExt, Priority};
 use embassy_stm32::peripherals::*;
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_sync::pubsub::PubSubChannel;
-use embassy_time::{Duration, Instant, Ticker, Timer};
+use embassy_time::{Duration, Instant, Ticker};
 use static_cell::StaticCell;
 
 use firmware::bus::BusHandler;
@@ -106,13 +106,6 @@ async fn init(low_priority_spawner: Spawner) {
         .spawn(main_loop(vehicle, links, board.iwdg))
         .unwrap();
     buzzer::request_sound(buzzer::Sound::StartupTech);
-
-    Timer::after(Duration::from_secs(5)).await;
-    buzzer::request_sound(buzzer::Sound::Mario);
-
-    //Timer::after(Duration::from_secs(10)).await;
-
-    //buzzer::request_stop();
 }
 
 #[embassy_executor::task]
