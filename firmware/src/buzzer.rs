@@ -37,7 +37,7 @@ use sounds::mario::MARIO;
 
 /// Duty cycle of the PWM signal, in percent. A buzzer is loudest at 50%, this
 /// trades some volume for a lower current draw.
-const VOLUME_PERCENT: u8 = 30;
+const VOLUME_PERCENT: u8 = 80;
 
 static STARTUP_TECH: [Note; 6] = [
     Note::new(E, 4, 100),
@@ -104,37 +104,6 @@ static LANDED: [Note; 4] = [
     Note::pause(1300),
 ];
 
-static IGNITION: [Note; 28] = [
-    Note::new(C, 4, 1000),
-    Note::pause(10),
-    Note::new(C, 4, 1000),
-    Note::pause(10),
-    Note::new(C, 4, 1000),
-    Note::pause(10),
-    Note::new(C, 4, 500),
-    Note::pause(10),
-    Note::new(C, 4, 500),
-    Note::pause(10),
-    Note::new(C, 4, 500),
-    Note::pause(10),
-    Note::new(C, 4, 250),
-    Note::pause(10),
-    Note::new(C, 4, 250),
-    Note::pause(10),
-    Note::new(C, 4, 250),
-    Note::pause(10),
-    Note::new(C, 4, 125),
-    Note::pause(10),
-    Note::new(C, 4, 125),
-    Note::pause(10),
-    Note::new(C, 4, 125),
-    Note::pause(10),
-    Note::new(C, 4, 125),
-    Note::pause(10),
-    Note::new(C, 4, 10000),
-    Note::pause(10),
-];
-
 #[derive(Clone, Copy, PartialEq, Eq, Format)]
 pub enum Sound {
     StartupTech,
@@ -143,20 +112,18 @@ pub enum Sound {
     ModeChange,
     Pressurized,
     Landed,
-    Ignition,
     Mario,
 }
 
 impl Sound {
     /// The sounds that can be requested by name, e.g. over `PLAY_TUNE_V2`.
-    const NAMED: [(&'static str, Sound); 8] = [
+    const NAMED: [(&'static str, Sound); 7] = [
         ("startup", Sound::StartupTech),
         ("battery_low", Sound::BatteryLow),
         ("battery_extreme_low", Sound::BatteryExtremeLow),
         ("mode_change", Sound::ModeChange),
         ("pressurized", Sound::Pressurized),
         ("landed", Sound::Landed),
-        ("ignition", Sound::Ignition),
         ("mario", Sound::Mario),
     ];
 
@@ -177,7 +144,6 @@ fn get_song_notes(sound: Sound) -> &'static [Note] {
         Sound::ModeChange => &MODE_CHANGE,
         Sound::Pressurized => &PRESSURIZED,
         Sound::Landed => &LANDED,
-        Sound::Ignition => &IGNITION,
         Sound::Mario => &MARIO,
     }
 }
