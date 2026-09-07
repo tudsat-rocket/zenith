@@ -13,7 +13,9 @@
 //! A one-shot temporarily takes over from the alert loop; once it has finished
 //! playing, the loop resumes on its own.
 //!
-//! Which sound is played when is not decided here, but in [`alerts`].
+//! Which sound is played when is not decided here, but in [`alerts`]. Sounds
+//! can additionally be triggered from the ground by name via `PLAY_TUNE_V2`,
+//! see [`Sound::from_name`] for the names.
 
 use defmt::*;
 use embassy_executor::Spawner;
@@ -143,6 +145,28 @@ pub enum Sound {
     Landed,
     Ignition,
     Mario,
+}
+
+impl Sound {
+    /// The sounds that can be requested by name, e.g. over `PLAY_TUNE_V2`.
+    const NAMED: [(&'static str, Sound); 8] = [
+        ("startup", Sound::StartupTech),
+        ("battery_low", Sound::BatteryLow),
+        ("battery_extreme_low", Sound::BatteryExtremeLow),
+        ("mode_change", Sound::ModeChange),
+        ("pressurized", Sound::Pressurized),
+        ("landed", Sound::Landed),
+        ("ignition", Sound::Ignition),
+        ("mario", Sound::Mario),
+    ];
+
+    /// Look a sound up by name, ignoring case.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::NAMED
+            .iter()
+            .find(|(known, _)| known.eq_ignore_ascii_case(name))
+            .map(|(_, sound)| *sound)
+    }
 }
 
 fn get_song_notes(sound: Sound) -> &'static [Note] {

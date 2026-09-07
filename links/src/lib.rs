@@ -11,13 +11,26 @@ use rapid_dialect::{FlightMode, Rapid, ValveCommand};
 
 pub mod protocols;
 
+/// Maximum length of a tune name accepted via `PLAY_TUNE_V2`.
+///
+/// We do not parse tune notation (yet), we only accept the names of the sounds
+/// the firmware already knows, so this is far shorter than the 248 characters
+/// the MAVLink message provides.
+pub const TUNE_NAME_LEN: usize = 24;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum UplinkCommand {
     SetFlightMode(FlightMode),
     RequestAvailableModes(usize),
     RequestCanForwarding,
     CommandValve(ValveId, ValveCommand),
-    SetParam { id: u16, raw: u32 },
+    SetParam {
+        id: u16,
+        raw: u32,
+    },
+    /// Play one of the firmware's built-in sounds by name, or stop the buzzer
+    /// if the name is empty.
+    PlayTune(heapless::String<TUNE_NAME_LEN>),
 }
 
 pub const DOWNLINK_N: usize = 32;

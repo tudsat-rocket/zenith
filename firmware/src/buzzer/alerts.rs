@@ -120,6 +120,14 @@ impl Alerts {
         request_sound(Sound::ModeChange);
     }
 
+    /// Whether a continuous alert is currently sounding.
+    ///
+    /// Used to keep lower-priority sounds, e.g. a tune requested from the
+    /// ground, from silencing the hazard warning or the landing beacon.
+    pub fn alert_active(&self) -> bool {
+        self.alert_loop.is_some()
+    }
+
     fn set_alert_loop(&mut self, sound: Option<Sound>) {
         if sound != self.alert_loop {
             self.alert_loop = sound;

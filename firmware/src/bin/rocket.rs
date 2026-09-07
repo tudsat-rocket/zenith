@@ -126,6 +126,20 @@ pub async fn main_loop(
                 UplinkCommand::SetParam { id, raw } => {
                     vehicle.set_param(id, raw).await;
                 }
+                UplinkCommand::PlayTune(name) => {
+                    if alerts.alert_active() {
+                        // The ground must not be able to silence the pad hazard
+                        // warning or the landing beacon.
+                        defmt::warn!("Ignoring tune request while a buzzer alert is active");
+                    } else if name.is_empty() {
+                        // We take an empty tune to mean "stop the buzzer".
+                        buzzer::request_stop();
+                    } else if let Some(sound) = buzzer::Sound::from_name(&name) {
+                        buzzer::request_sound(sound);
+                    } else {
+                        defmt::warn!("Unknown tune {}", name.as_str());
+                    }
+                }
                 _ => {}
             }
         }
