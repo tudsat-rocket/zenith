@@ -95,7 +95,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.outputs
             .set_recovery_armed(self.mode >= FM::DetectLaunch);
         self.outputs.set_drogue(self.mode == FM::DeployDrogue);
-        self.outputs.set_main(self.mode == FM::DeployMain);
+        self.outputs.set_main(self.main_output_high());
 
         // The igniters are energized for the first PROP_IGNTR_TIME milliseconds of Ignition.
         let igniting = self.mode == FM::Ignite
@@ -108,6 +108,33 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.bus.set_output_image(self.bus_outputs);
 
         self.time += 1;
+    }
+
+    /// Main is fired as a pulse train timed from entry into `DeployMain`:
+    /// `REC_MAIN_PULSES` pulses of `REC_MAIN_ON_T` ms, separated by gaps of
+    /// `REC_MAIN_GAP_T` ms. The output stays low once the train is done, and the
+    /// train is cut short if the vehicle leaves `DeployMain` while it is running.
+    fn main_output_high(&self) -> bool {
+        if self.mode != FlightMode::DeployMain {
+            return false;
+        }
+
+        // Both halves are operator-settable, so the pulse period is saturated and
+        // clamped to at least one tick to keep the arithmetic below defined.
+        let period = self
+            .recovery_params
+            .main_on_time
+            .saturating_add(self.recovery_params.main_pulse_gap)
+            .max(1);
+
+        let t = (self.time - self.mode_entered_at).0;
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "period is clamped to >= 1, so neither division can divide by zero"
+        )]
+        let (pulse, t_in_pulse) = (t / period, t % period);
+
+        pulse < self.recovery_params.main_pulses && t_in_pulse < self.recovery_params.main_on_time
     }
 
     pub fn mode(&self) -> FlightMode {

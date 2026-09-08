@@ -4,11 +4,14 @@
 //! - Armed state does not auto-advance to Burn without the sim providing
 //!   thrust;
 //! - neither output is ever high while the vehicle is pre-recovery (Idle,
-//!   Armed, Burn, Coast).
+//!   Armed, Burn, Coast);
+//! - the main output fires as a pulse train, with the widths and pulse count
+//!   the `REC_MAIN_*` params ask for.
 
 mod common;
 
 use common::{Harness, block_on};
+use mission::Params;
 use rapid_dialect::FlightMode;
 
 const MAX_TICKS: u32 = 400_000;
@@ -99,5 +102,94 @@ fn outputs_silent_before_drogue_phase() {
             result.is_ok(),
             "vehicle never reached DeployDrogue within {MAX_TICKS} ticks"
         );
+    });
+}
+
+#[test]
+fn main_output_fires_a_two_pulse_train() {
+    block_on(async {
+        let mut h = Harness::new(None).await;
+        h.arm();
+
+        // Sample the main output on every tick from the moment DeployMain is
+        // entered, so the samples are a contiguous picture of the train.
+        let mut samples: Vec<bool> = Vec::new();
+
+        let result = h
+            .run_until(MAX_TICKS, |h| {
+                if h.mode() == FlightMode::DeployMain {
+                    samples.push(h.main_active());
+                }
+                h.mode() == FlightMode::Landed
+            })
+            .await;
+
+        assert!(result.is_ok(), "flight did not reach Landed");
+
+        // Run-length encode into (level, length) so the pulse train is easy to
+        // assert on.
+        let mut runs: Vec<(bool, u32)> = Vec::new();
+        for level in samples {
+            match runs.last_mut() {
+                Some((last, count)) if *last == level => *count += 1,
+                _ => runs.push((level, 1)),
+            }
+        }
+
+        let params = Params::default().recovery;
+        let on = params.main_on_time;
+        let gap = params.main_pulse_gap;
+
+        assert_eq!(
+            runs.len(),
+            4,
+            "expected high/low/high/low, got {} runs: {:?}",
+            runs.len(),
+            runs
+        );
+        assert_eq!(runs[0], (true, on), "first pulse width, runs: {runs:?}");
+        assert_eq!(runs[1], (false, gap), "inter-pulse gap, runs: {runs:?}");
+        assert_eq!(runs[2], (true, on), "second pulse width, runs: {runs:?}");
+        assert!(
+            !runs[3].0,
+            "main output did not stay low after the train, runs: {runs:?}"
+        );
+    });
+}
+
+#[test]
+fn main_output_train_is_configurable() {
+    block_on(async {
+        let mut params = Params::default();
+        params.recovery.main_on_time = 200;
+        params.recovery.main_pulse_gap = 300;
+        params.recovery.main_pulses = 3;
+
+        let mut h = Harness::new(Some(params)).await;
+        h.arm();
+
+        let mut high_ticks = 0u32;
+        let mut edges = 0u32;
+        let mut was_high = false;
+
+        let result = h
+            .run_until(MAX_TICKS, |h| {
+                if h.mode() == FlightMode::DeployMain {
+                    let high = h.main_active();
+                    if high {
+                        high_ticks += 1;
+                    }
+                    if high && !was_high {
+                        edges += 1;
+                    }
+                    was_high = high;
+                }
+                h.mode() == FlightMode::Landed
+            })
+            .await;
+
+        assert!(result.is_ok(), "flight did not reach Landed");
+        assert_eq!(edges, 3, "expected 3 pulses");
+        assert_eq!(high_ticks, 3 * 200, "total energized time");
     });
 }
