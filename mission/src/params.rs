@@ -56,6 +56,16 @@ pub struct StateMachineParams {
     /// Time (ms) to exceed LODEC_ACC in order to detect liftoff
     #[param(id = 0x0206, name = "LODEC_T", default = 50)]
     pub liftoff_detection_time: u32,
+    /// Time (ms) the main output is high within each firing pulse
+    #[param(id = 0x0207, name = "MAIN_ON_T", default = 500)]
+    pub main_on_time: u32,
+    /// Time (ms) the main output is low between firing pulses
+    #[param(id = 0x0208, name = "MAIN_GAP_T", default = 500)]
+    pub main_pulse_gap: u32,
+    /// Number of main firing pulses. The whole train must fit inside the time the
+    /// vehicle spends in `DeployMain`, which can be as short as 3 seconds.
+    #[param(id = 0x0209, name = "MAIN_PULSES", default = 2)]
+    pub main_pulses: u32,
 }
 
 /// Ignition sequence parameters, exposed over MAVLink as `PROP_*`.
@@ -326,6 +336,8 @@ mod tests {
         assert_eq!(s.state_machine.main_deploy_altitude, 400.0);
         assert_eq!(s.state_machine.min_time_to_drogue, 1000);
         assert_eq!(s.misc.buzzer_volume, 50);
+        assert_eq!(s.state_machine.main_on_time, 500);
+        assert_eq!(s.state_machine.main_pulses, 2);
     }
 
     #[test]
