@@ -37,7 +37,7 @@ use sounds::mario::MARIO;
 
 /// Duty cycle of the PWM signal, in percent. A buzzer is loudest at 50%, this
 /// trades some volume for a lower current draw.
-const VOLUME_PERCENT: u8 = 5;
+const VOLUME_PERCENT: u8 = 80;
 
 static STARTUP_TECH: [Note; 6] = [
     Note::new(E, 4, 100),
@@ -117,7 +117,7 @@ pub enum Sound {
 
 impl Sound {
     /// The sounds that can be requested by name, e.g. over `PLAY_TUNE_V2`.
-    const NAMED: [(&'static str, Sound); 8] = [
+    const NAMED: [(&'static str, Sound); 7] = [
         ("startup", Sound::StartupTech),
         ("battery_low", Sound::BatteryLow),
         ("battery_extreme_low", Sound::BatteryExtremeLow),
