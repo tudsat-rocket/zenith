@@ -21,6 +21,7 @@ pub struct Params {
     pub state_estimator: StateEstimatorParams,
     pub recovery: RecoveryParams,
     pub propulsion: PropulsionParams,
+    pub failsafe: FailsafeParams,
 }
 
 /// Recovery / parachute deployment parameters, exposed over MAVLink as `REC_*`.
@@ -48,6 +49,20 @@ pub struct PropulsionParams {
     /// Delay (ms) after ignition mode is entered after which main valve is opened
     #[param(id = 0x0301, name = "MAIN_DELAY", default = 700)]
     pub main_valve_delay: u32,
+}
+
+/// Uplink-loss failsafe parameters, exposed over MAVLink as `FS_*`.
+///
+/// The timeouts are measured from boot, so the failsafe survives reboots.
+#[derive(Debug, Clone, macros::ParameterGroup)]
+#[param_group(prefix = "FS")]
+pub struct FailsafeParams {
+    /// Time (ms) without ground station contact after which the vehicle returns to Idle. 0 disables.
+    #[param(id = 0x0400, name = "UPLINK_IDLE", default = 10_000)]
+    pub uplink_idle_timeout: u32,
+    /// Time (ms) without ground station contact after which the vehicle vents. 0 disables.
+    #[param(id = 0x0401, name = "UPLINK_VENT", default = 120_000)]
+    pub uplink_vent_timeout: u32,
 }
 
 /// Live mirror of the current [`Params`] for the MAVLink param protocol tasks. Starts empty (the

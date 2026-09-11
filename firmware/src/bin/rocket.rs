@@ -88,6 +88,10 @@ pub async fn main_loop(
 ) -> ! {
     let mut ticker = Ticker::every(Duration::from_micros(1000));
     loop {
+        if links::take_uplink_activity() {
+            vehicle.note_uplink();
+        }
+
         vehicle.tick().await;
 
         // TODO: this belongs somewhere else

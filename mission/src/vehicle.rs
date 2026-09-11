@@ -10,7 +10,7 @@ use crate::flight_logic::FlightLogic;
 use crate::inventory::BinaryOutputId;
 use crate::leds::LedState;
 use crate::mavlink::VehicleSnapshot;
-use crate::params::{Params, PropulsionParams, RecoveryParams};
+use crate::params::{FailsafeParams, Params, PropulsionParams, RecoveryParams};
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
 use crate::valves::{ValveCommand, ValveController, ValveError};
 
@@ -22,6 +22,7 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     flight_logic: FlightLogic,
     recovery_params: RecoveryParams,
     propulsion_params: PropulsionParams,
+    failsafe_params: FailsafeParams,
     pub sensors: S,
     pub outputs: O,
     pub storage: F,
@@ -51,6 +52,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             flight_logic: FlightLogic::default(),
             recovery_params: params.recovery,
             propulsion_params: params.propulsion,
+            failsafe_params: params.failsafe,
             sensors,
             outputs,
             storage,
@@ -88,6 +90,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             self.mode,
             &self.state_estimator,
             &self.recovery_params,
+            &self.failsafe_params,
         ) {
             self.set_mode(new_mode);
         }
@@ -138,6 +141,10 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         }
     }
 
+    pub fn note_uplink(&mut self) {
+        self.flight_logic.note_uplink(self.time);
+    }
+
     pub fn try_command_valve(
         &mut self,
         valve: ValveId,
@@ -160,6 +167,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             state_estimator: self.state_estimator.params().clone(),
             recovery: self.recovery_params.clone(),
             propulsion: self.propulsion_params.clone(),
+            failsafe: self.failsafe_params.clone(),
         };
 
         params.set(descriptor.id, value);
@@ -167,6 +175,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         log::info!("Applying param {} (id {id:#x})", descriptor.name);
         self.recovery_params = params.recovery;
         self.propulsion_params = params.propulsion;
+        self.failsafe_params = params.failsafe;
         self.state_estimator.update_params(params.state_estimator);
 
         self.storage.write_param(descriptor.id, value);
