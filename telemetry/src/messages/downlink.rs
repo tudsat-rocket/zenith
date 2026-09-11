@@ -31,6 +31,28 @@ use crate::messages::UPLINK_PACKET_SIZE;
 pub const DOWNLINK_PACKET_SIZE: usize = 16;
 const DOWNLINK_PAYLOAD_SIZE: usize = DOWNLINK_PACKET_SIZE - 4;
 
+/// Serializes an [`f16`] as its fixed-width bit pattern, for `#[serde(with = ...)]`.
+///
+/// Postcard varint-encodes anything wider than a byte, including the `u16` behind an `f16`, which
+/// would make the length of a payload depend on the values in it. Our packets are a fixed size, so
+/// a payload that only fits for small values is a payload that overflows in flight.
+mod f16_le {
+    use half::f16;
+    use serde::{Deserializer, Serializer};
+
+    #[allow(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "signature is fixed by serde's `with` contract"
+    )]
+    pub fn serialize<S: Serializer>(value: &f16, serializer: S) -> Result<S::Ok, S::Error> {
+        postcard::fixint::le::serialize(&value.to_bits(), serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f16, D::Error> {
+        postcard::fixint::le::deserialize(deserializer).map(f16::from_bits)
+    }
+}
+
 /// Stuff the telemetry receiver can just "keep in mind" based on previously received messages.
 /// These are used to enrich received data, especially when values can reasonably be converted or
 /// reconstructed from other messages, such as conversion between different altitude reference
@@ -207,14 +229,17 @@ pub struct HeartbeatMessage {
     /// (taken from LOCAL_POSITION_NED.z, but up-positive)
     /// these are the least-significant 16 bits, with one more in mode_and_altitude, giving
     /// us a range of -300.0-12807.2 meters.
+    #[serde(with = "postcard::fixint::le")]
     altitude_local: u16,
     /// 8 bits of roll  (-180 - +180 deg, in 1.41deg)
     /// 8 bits of pitch ( -90 -  +90 deg, in 0.70deg)
     /// 8 bits of yaw   (-180 - +180 deg, in 1.41deg)
     euler_angles: (i8, i8, i8),
+    #[serde(with = "f16_le")]
     vertical_speed: f16, // TODO
-    ground_speed: f16,   // TODO
-                         // TODO: throttle or vertical acceleration
+    #[serde(with = "f16_le")]
+    ground_speed: f16, // TODO
+                       // TODO: throttle or vertical acceleration
 }
 
 impl DownlinkTelemetryMessage for HeartbeatMessage {
@@ -319,6 +344,7 @@ impl DownlinkTelemetryMessage for HeartbeatMessage {
 pub struct StatusMessage {
     /// The left-most 15 bits of the time are already contained in every packet, so we just add 16
     /// more here, for a maximum of 2^31 milliseconds, or ~25days.
+    #[serde(with = "postcard::fixint::le")]
     absolute_time: u16,
     load: u8,
     uplink_packet_loss: u8,
@@ -591,3 +617,86 @@ impl DownlinkTelemetryMessage for StatusMessage {
 //     type Input = ();
 //     type Output = ();
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encoded_len<M: Serialize>(msg: &M) -> Option<usize> {
+        let mut buf = [0x00; DOWNLINK_PAYLOAD_SIZE];
+        postcard::to_slice(msg, &mut buf)
+            .map(|used| used.len())
+            .ok()
+    }
+
+    /// Every field is fixed-width, so a payload that fits on the bench fits in flight too. A
+    /// field that goes back to varint encoding shows up here rather than as a failed `encode` at
+    /// altitude.
+    #[test]
+    fn heartbeat_payloads_have_a_constant_length() {
+        const LEN: usize = 11;
+
+        for (altitude_local, speed) in [(0, 0.0), (u16::MAX, -300.0), (16384, 999.0)] {
+            let msg = HeartbeatMessage {
+                mav_state_profile_and_armed: u8::MAX,
+                mode_and_altitude: u8::MAX,
+                altitude_local,
+                euler_angles: (i8::MIN, i8::MAX, -1),
+                vertical_speed: f16::from_f32(speed),
+                ground_speed: f16::from_f32(speed),
+            };
+
+            assert_eq!(encoded_len(&msg), Some(LEN), "altitude {altitude_local}");
+        }
+
+        assert!(LEN <= DOWNLINK_PAYLOAD_SIZE);
+    }
+
+    #[test]
+    fn status_payloads_have_a_constant_length() {
+        const LEN: usize = 6;
+
+        for absolute_time in [0, u16::MAX] {
+            let msg = StatusMessage {
+                absolute_time,
+                load: u8::MAX,
+                uplink_packet_loss: u8::MAX,
+                uplink_rssi: u8::MAX,
+                uplink_noise: u8::MAX,
+            };
+
+            assert_eq!(encoded_len(&msg), Some(LEN), "time {absolute_time}");
+        }
+
+        assert!(LEN <= DOWNLINK_PAYLOAD_SIZE);
+    }
+
+    /// Trailing zero padding in the fixed-size payload must not confuse the decoder.
+    #[test]
+    fn heartbeat_round_trips_through_a_padded_payload() {
+        let msg = HeartbeatMessage {
+            mav_state_profile_and_armed: 0b1010_1011,
+            mode_and_altitude: 0b0011_0101,
+            altitude_local: 40_000,
+            euler_angles: (-100, 50, 120),
+            vertical_speed: f16::from_f32(-123.5),
+            ground_speed: f16::from_f32(67.25),
+        };
+
+        let Ok(payload) = msg.serialize() else {
+            assert!(false, "payload did not fit");
+            return;
+        };
+
+        let decoded: Result<HeartbeatMessage, _> = postcard::from_bytes(&payload);
+        let Ok(decoded) = decoded else {
+            assert!(false, "padded payload failed to decode");
+            return;
+        };
+
+        assert_eq!(decoded.altitude_local, 40_000);
+        assert_eq!(decoded.euler_angles, (-100, 50, 120));
+        assert_eq!(decoded.vertical_speed, f16::from_f32(-123.5));
+        assert_eq!(decoded.ground_speed, f16::from_f32(67.25));
+    }
+}
