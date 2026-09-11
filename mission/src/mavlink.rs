@@ -23,7 +23,7 @@ use state_estimator::StateEstimator;
 use crate::TelemetryLink;
 use crate::bus::{BusInputImage, BusOutputImage};
 use crate::inventory::{InventoryId, TankId, ValveId};
-use crate::params::RecoveryParams;
+use crate::params::StateMachineParams;
 use crate::schedule::downlink_schedule;
 use crate::traits::SensorReadings;
 
@@ -32,7 +32,7 @@ use crate::traits::SensorReadings;
 pub struct VehicleSnapshot<'a> {
     pub time: Wrapping<u32>,
     pub mode: FlightMode,
-    pub recovery_params: &'a RecoveryParams,
+    pub state_machine_params: &'a StateMachineParams,
     pub readings: &'a SensorReadings,
     pub state_estimator: &'a StateEstimator,
     pub input_image: &'a BusInputImage,

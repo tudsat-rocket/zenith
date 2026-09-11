@@ -5,7 +5,7 @@
 #![cfg(not(feature = "hybrid"))]
 
 use common::{Harness, block_on};
-use mission::{Params, RecoveryParams};
+use mission::{Params, StateMachineParams};
 use rapid_dialect::rapid::enums::MavProtocolCapability;
 use rapid_dialect::{FlightMode, Rapid};
 
@@ -35,9 +35,9 @@ async fn estimator_altitude_at_main_deploy(h: &mut Harness) -> f32 {
 fn main_deploys_at_configured_altitude() {
     block_on(async {
         let params = Params {
-            recovery: RecoveryParams {
+            state_machine: StateMachineParams {
                 main_deploy_altitude: 200.0,
-                ..RecoveryParams::default()
+                ..StateMachineParams::default()
             },
             ..Params::default()
         };
@@ -88,7 +88,7 @@ fn set_param_hot_applies_and_persists() {
         // Exact comparison is the point: the value round-trips as the f32 bits that were sent.
         #[allow(clippy::float_cmp, reason = "asserting a bit-exact round-trip")]
         {
-            assert_eq!(stored.recovery.main_deploy_altitude, 200.0);
+            assert_eq!(stored.state_machine.main_deploy_altitude, 200.0);
         }
 
         // And the live vehicle now deploys main at the new altitude.

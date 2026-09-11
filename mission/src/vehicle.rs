@@ -10,7 +10,7 @@ use crate::flight_logic::FlightLogic;
 use crate::inventory::BinaryOutputId;
 use crate::leds::LedState;
 use crate::mavlink::VehicleSnapshot;
-use crate::params::{Params, PropulsionParams, RecoveryParams};
+use crate::params::{Params, PropulsionParams, StateMachineParams};
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
 use crate::valves::{ValveCommand, ValveController, ValveError};
 
@@ -20,7 +20,7 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     /// Vehicle time at which the current mode was entered.
     mode_entered_at: Wrapping<u32>,
     flight_logic: FlightLogic,
-    recovery_params: RecoveryParams,
+    state_machine_params: StateMachineParams,
     propulsion_params: PropulsionParams,
     pub sensors: S,
     pub outputs: O,
@@ -49,7 +49,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             mode: FlightMode::default(),
             mode_entered_at: Wrapping(0),
             flight_logic: FlightLogic::default(),
-            recovery_params: params.recovery,
+            state_machine_params: params.state_machine,
             propulsion_params: params.propulsion,
             sensors,
             outputs,
@@ -87,7 +87,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             self.time,
             self.mode,
             &self.state_estimator,
-            &self.recovery_params,
+            &self.state_machine_params,
         ) {
             self.set_mode(new_mode);
         }
@@ -158,14 +158,14 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
 
         let mut params = Params {
             state_estimator: self.state_estimator.params().clone(),
-            recovery: self.recovery_params.clone(),
+            state_machine: self.state_machine_params.clone(),
             propulsion: self.propulsion_params.clone(),
         };
 
         params.set(descriptor.id, value);
 
         log::info!("Applying param {} (id {id:#x})", descriptor.name);
-        self.recovery_params = params.recovery;
+        self.state_machine_params = params.state_machine;
         self.propulsion_params = params.propulsion;
         self.state_estimator.update_params(params.state_estimator);
 
@@ -176,7 +176,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         VehicleSnapshot {
             time: self.time,
             mode: self.mode,
-            recovery_params: &self.recovery_params,
+            state_machine_params: &self.state_machine_params,
             readings: &self.readings,
             input_image: &self.bus_inputs,
             state_estimator: &self.state_estimator,

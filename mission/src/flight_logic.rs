@@ -3,7 +3,7 @@ use core::num::Wrapping;
 use rapid_dialect::FlightMode;
 use state_estimator::{GRAVITY, StateEstimator};
 
-use crate::RecoveryParams;
+use crate::StateMachineParams;
 
 /// Automatic flight mode transitions based on state estimator data.
 ///
@@ -36,7 +36,7 @@ impl FlightLogic {
         time: Wrapping<u32>,
         mode: FlightMode,
         estimator: &StateEstimator,
-        params: &RecoveryParams,
+        params: &StateMachineParams,
     ) -> Option<FlightMode> {
         let t_in_mode = (time - self.mode_time).0;
         let t_since_takeoff = (time - self.takeoff_time).0;

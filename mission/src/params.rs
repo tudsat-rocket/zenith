@@ -19,14 +19,14 @@ pub use params::{ParamDescriptor, ParamId, ParamType, ParamValue, ParameterField
 #[derive(Debug, Default, Clone, macros::ParameterGroups)]
 pub struct Params {
     pub state_estimator: StateEstimatorParams,
-    pub recovery: RecoveryParams,
+    pub state_machine: StateMachineParams,
     pub propulsion: PropulsionParams,
 }
 
-/// Recovery / parachute deployment parameters, exposed over MAVLink as `REC_*`.
+/// State machine parameters, exposed over MAVLink as `SM_*`.
 #[derive(Debug, Clone, macros::ParameterGroup)]
-#[param_group(prefix = "REC")]
-pub struct RecoveryParams {
+#[param_group(prefix = "SM")]
+pub struct StateMachineParams {
     /// Altitude AGL (meters) at which to deploy the main parachute
     #[param(id = 0x0200, name = "MAIN_ALT", default = 400.0)]
     pub main_deploy_altitude: f32,
@@ -207,8 +207,8 @@ mod tests {
         let s = Params::default();
         assert_eq!(s.state_estimator.mahony_kp, 0.1);
         assert_eq!(s.state_estimator.std_dev_barometer_transsonic, 5000.0);
-        assert_eq!(s.recovery.main_deploy_altitude, 400.0);
-        assert_eq!(s.recovery.min_time_to_drogue, 1000);
+        assert_eq!(s.state_machine.main_deploy_altitude, 400.0);
+        assert_eq!(s.state_machine.min_time_to_drogue, 1000);
     }
 
     #[test]
@@ -219,8 +219,8 @@ mod tests {
         assert!(s.set(ParamId::new(0x0200), ParamValue::F32(250.0)));
         assert!(s.set(ParamId::new(0x0201), ParamValue::U32(1500)));
         assert_eq!(s.state_estimator.mahony_kp, 0.25);
-        assert_eq!(s.recovery.main_deploy_altitude, 250.0);
-        assert_eq!(s.recovery.min_time_to_drogue, 1500);
+        assert_eq!(s.state_machine.main_deploy_altitude, 250.0);
+        assert_eq!(s.state_machine.min_time_to_drogue, 1500);
         assert_eq!(s.get(ParamId::new(0x0100)), Some(ParamValue::F32(0.25)));
         assert_eq!(s.get(ParamId::new(0x0200)), Some(ParamValue::F32(250.0)));
         // Unknown id and wrong-type set are rejected.
@@ -234,8 +234,8 @@ mod tests {
         let mut s = Params::default();
         s.apply_raw(0x0200, 275.0f32.to_bits());
         s.apply_raw(0x0202, 7000);
-        assert_eq!(s.recovery.main_deploy_altitude, 275.0);
-        assert_eq!(s.recovery.min_time_to_main, 7000);
+        assert_eq!(s.state_machine.main_deploy_altitude, 275.0);
+        assert_eq!(s.state_machine.min_time_to_main, 7000);
         s.apply_raw(0xffff, 123); // ignored
     }
 
