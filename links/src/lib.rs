@@ -1,5 +1,7 @@
 #![no_std]
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber};
 
@@ -57,3 +59,16 @@ pub type InterfaceCommandSubscriber = Subscriber<
     COMMAND_SUBS,
     COMMAND_PUBS,
 >;
+
+/// Set by every link that hears from a ground station and taken by the main loop each tick.
+static UPLINK_ACTIVITY: AtomicBool = AtomicBool::new(false);
+
+/// Reports ground station traffic, on any link
+pub fn note_uplink_activity() {
+    UPLINK_ACTIVITY.store(true, Ordering::Relaxed);
+}
+
+/// Whether any link heard from a ground station since the last call, clearing the flag.
+pub fn take_uplink_activity() -> bool {
+    UPLINK_ACTIVITY.swap(false, Ordering::Relaxed)
+}

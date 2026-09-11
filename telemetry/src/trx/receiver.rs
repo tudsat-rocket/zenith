@@ -370,6 +370,8 @@ impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessa
                 }
             };
 
+            links::note_uplink_activity();
+
             if seq == last_seq {
                 defmt::warn!("Discarding duplicate message.");
                 continue;

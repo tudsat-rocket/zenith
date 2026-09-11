@@ -77,6 +77,10 @@ async fn main_loop(mut vehicle: Vehicle, mut links: Links, sim: SharedSimulation
             s.tick();
         }
 
+        if links::take_uplink_activity() {
+            vehicle.note_uplink();
+        }
+
         vehicle.tick().await;
 
         if let Some(cmd) = links.try_recv_command() {

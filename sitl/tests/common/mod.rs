@@ -24,6 +24,7 @@ pub type Vehicle = MissionVehicle<StdSensors, StdOutputs, MemoryStorage, SitlBus
 pub struct Harness {
     pub vehicle: Vehicle,
     pub sim: SharedSimulation,
+    uplink_connected: bool,
 }
 
 /// Collects what the vehicle puts on the downlink, for asserting on telemetry contents.
@@ -59,7 +60,15 @@ impl Harness {
             MissionVehicle::new(sensors, outputs, storage, bus).await
         };
 
-        Self { vehicle, sim }
+        Self {
+            vehicle,
+            sim,
+            uplink_connected: true,
+        }
+    }
+
+    pub fn set_uplink(&mut self, connected: bool) {
+        self.uplink_connected = connected;
     }
 
     pub fn arm(&mut self) {
@@ -114,10 +123,18 @@ impl Harness {
         s.tick();
     }
 
+    /// One 1ms step of sim and vehicle, mirroring the order of the sitl main loop.
+    async fn tick(&mut self) {
+        self.tick_sim();
+        if self.uplink_connected {
+            self.vehicle.note_uplink();
+        }
+        self.vehicle.tick().await;
+    }
+
     pub async fn run_ticks(&mut self, n: u32) {
         for _ in 0..n {
-            self.tick_sim();
-            self.vehicle.tick().await;
+            self.tick().await;
         }
     }
 
@@ -128,8 +145,7 @@ impl Harness {
 
         for _ in 0..n {
             let mut link = CapturedLink::default();
-            self.tick_sim();
-            self.vehicle.tick().await;
+            self.tick().await;
             self.vehicle.snapshot().send_telemetry(&mut link);
             per_tick.push(link.messages);
         }
@@ -157,8 +173,7 @@ impl Harness {
         }
 
         for i in 1..=max_ticks {
-            self.tick_sim();
-            self.vehicle.tick().await;
+            self.tick().await;
             if pred(self) {
                 return Ok(i);
             }
