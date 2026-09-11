@@ -7,6 +7,7 @@ use params::{ParamId, ParamValue};
 use state_estimator::GpsDatum;
 
 use crate::Params;
+use crate::leds::LedState;
 
 #[derive(Clone, Default)]
 pub struct AdcData {
@@ -63,6 +64,7 @@ pub trait Outputs {
     fn set_recovery_armed(&mut self, armed: bool);
     fn set_drogue(&mut self, high: bool);
     fn set_main(&mut self, high: bool);
+    fn set_leds(&mut self, leds: LedState);
 }
 
 pub trait TelemetryLink {

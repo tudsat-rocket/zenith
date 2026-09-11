@@ -4,6 +4,7 @@
 pub mod bus;
 pub mod flight_logic;
 pub mod inventory;
+pub mod leds;
 mod mavlink;
 pub mod params;
 mod schedule;

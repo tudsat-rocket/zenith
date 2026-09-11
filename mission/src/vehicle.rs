@@ -8,6 +8,7 @@ use state_estimator::StateEstimator;
 use crate::bus::{Bus, BusInputImage, BusOutputImage};
 use crate::flight_logic::FlightLogic;
 use crate::inventory::BinaryOutputId;
+use crate::leds::LedState;
 use crate::mavlink::VehicleSnapshot;
 use crate::params::{Params, PropulsionParams, RecoveryParams};
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
@@ -91,11 +92,13 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             self.set_mode(new_mode);
         }
 
-        // Set our on-board recovery outputs based on flight mode.
+        // Set our on-board recovery outputs and LEDs based on flight mode.
         self.outputs
             .set_recovery_armed(self.mode >= FM::DetectLaunch);
         self.outputs.set_drogue(self.mode == FM::DeployDrogue);
         self.outputs.set_main(self.mode == FM::DeployMain);
+        self.outputs
+            .set_leds(LedState::for_mode(self.mode, self.time.0));
 
         // The igniters are energized for the first PROP_IGNTR_TIME milliseconds of Ignition.
         let igniting = self.mode == FM::Ignite

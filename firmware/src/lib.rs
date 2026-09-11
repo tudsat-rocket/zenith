@@ -18,6 +18,7 @@ use lora_phy::iv::GenericSx126xInterfaceVariant;
 use lora_phy::sx126x::{Sx126x, Sx1262};
 
 use mission::bus::Bus;
+use mission::leds::LedState;
 use mission::{BaroReading, Outputs, SensorReadings, Sensors};
 
 use sensors::*;
@@ -148,5 +149,11 @@ impl Outputs for BoardOutputs {
     fn set_main(&mut self, high: bool) {
         self.recovery_lows.2.set_level(high.into());
         self.recovery_lows.3.set_level(high.into());
+    }
+
+    fn set_leds(&mut self, leds: LedState) {
+        self.leds.0.set_level((!leds.red).into());
+        self.leds.1.set_level((!leds.yellow).into());
+        self.leds.2.set_level((!leds.green).into());
     }
 }
