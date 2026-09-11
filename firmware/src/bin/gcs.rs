@@ -195,8 +195,7 @@ async fn join_uplink(
                     continue;
                 }
             },
-            //(None, Some(_)) => UplinkMessage::Heartbeat(()),
-            (None, Some(_)) => continue,
+            (None, Some(_)) => UplinkMessage::Heartbeat(()),
             (None, None) => {
                 continue;
             }
