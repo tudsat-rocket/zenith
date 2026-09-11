@@ -279,6 +279,7 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
                     ticker.reset();
                     time = t;
 
+                    context.advance(t);
                     msg.unpack(&mut self.sender, &mut context).await;
 
                     connection_sender.anysend(Some((last_packet, t))).await;

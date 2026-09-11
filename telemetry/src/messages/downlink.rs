@@ -76,6 +76,9 @@ pub struct ConnectionContext {
 }
 
 impl ConnectionContext {
+    /// The packet time covers bits 5..15 of the time since boot, so it wraps this often.
+    const TIME_WRAP_MS: u32 = 1 << 15;
+
     pub fn init(time: u16) -> Self {
         Self {
             time: time as u32,
@@ -84,6 +87,22 @@ impl ConnectionContext {
             rx_noise: None,
             rx_packet_loss: None,
         }
+    }
+
+    /// Extend the coarse time of a freshly received packet into our absolute time estimate, by
+    /// counting the wraps we have seen since the start of the connection. Must be called for
+    /// every received packet, before unpacking it.
+    pub fn advance(&mut self, packet_time: u16) {
+        let wraps = self.time >> 15;
+        let extended = wraps
+            .saturating_mul(Self::TIME_WRAP_MS)
+            .saturating_add(u32::from(packet_time));
+
+        self.time = if extended < self.time {
+            extended.saturating_add(Self::TIME_WRAP_MS)
+        } else {
+            extended
+        };
     }
 }
 
@@ -698,5 +717,26 @@ mod tests {
         assert_eq!(decoded.euler_angles, (-100, 50, 120));
         assert_eq!(decoded.vertical_speed, f16::from_f32(-123.5));
         assert_eq!(decoded.ground_speed, f16::from_f32(67.25));
+    }
+
+    /// The coarse packet time wraps every 32.768s; the receiver's estimate must not.
+    #[test]
+    fn absolute_time_survives_the_packet_time_wrapping() {
+        let mut context = ConnectionContext::init(32_000);
+        assert_eq!(context.time, 32_000);
+
+        context.advance(32_700);
+        assert_eq!(context.time, 32_700);
+
+        // Wrapped once.
+        context.advance(100);
+        assert_eq!(context.time, 32_868);
+
+        context.advance(32_000);
+        assert_eq!(context.time, 64_768);
+
+        // And again.
+        context.advance(500);
+        assert_eq!(context.time, 66_036);
     }
 }
