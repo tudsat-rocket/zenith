@@ -10,14 +10,35 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::watch::Sender;
 use embassy_time::{Duration, Instant, Timer};
 
-use rapid_dialect::rapid::enums::{MavCmd, MavResult, ValveId};
-use rapid_dialect::rapid::messages::{AvailableModes, CommandAck};
+use rapid_dialect::rapid::enums::{MavCmd, MavResult, TuneFormat, ValveId};
+use rapid_dialect::rapid::messages::{AvailableModes, CommandAck, SupportedTunes};
 use rapid_dialect::{FlightMode, Rapid, ValveCommand};
 
 use crate::protocols::link_quality::LinkQuality;
 use crate::{
-    InterfaceCommandPublisher, InterfaceRxSubscriber, InterfaceTxPublisher, UplinkCommand,
+    InterfaceCommandPublisher, InterfaceRxSubscriber, InterfaceTxPublisher, TUNE_NAME_LEN,
+    UplinkCommand,
 };
+
+/// The tune format we advertise in `SUPPORTED_TUNES`.
+///
+/// The field is documented as a bitfield, but `TUNE_FORMAT` is not declared as
+/// a bitmask in the dialect, so it is generated as a plain enum and we can only
+/// name a single format. `TUNE_FORMAT_QBASIC1_1` happens to be bit 0, so the
+/// encoded value is a valid bitfield either way.
+const SUPPORTED_TUNE_FORMAT: TuneFormat = TuneFormat::Qbasic11;
+
+/// Read the NUL-terminated tune out of a `PLAY_TUNE_V2` message.
+///
+/// Returns `None` if it is not valid UTF-8 or is longer than a tune name can
+/// be, which - until actual tune notation is supported - means it cannot name
+/// one of the firmware's sounds.
+fn tune_name(tune: &[u8; 248]) -> Option<heapless::String<TUNE_NAME_LEN>> {
+    let end = tune.iter().position(|b| *b == 0).unwrap_or(tune.len());
+    let name = core::str::from_utf8(tune.get(..end)?).ok()?.trim();
+
+    heapless::String::try_from(name).ok()
+}
 
 #[allow(clippy::too_many_lines, reason = "TODO")]
 // Packet-loss tracking below reorders sequence numbers with a bounded lookback:
@@ -84,22 +105,32 @@ pub async fn run(
                     }
                     MavCmd::RequestMessage => {
                         log::debug!("commands: RequestMessage id={}", cmd.param1 as u32);
-                        let cmd = match cmd.param1 as u32 {
+                        match cmd.param1 as u32 {
                             AvailableModes::ID => {
                                 log::info!(
                                     "commands: RequestMessage for AvailableModes (index={})",
                                     cmd.param2 as usize
                                 );
-                                Some(UplinkCommand::RequestAvailableModes(cmd.param2 as usize))
+                                cmd_tx
+                                    .publish(UplinkCommand::RequestAvailableModes(
+                                        cmd.param2 as usize,
+                                    ))
+                                    .await;
+                                MavResult::Accepted
                             }
-                            _ => None,
-                        };
-
-                        if let Some(cmd) = cmd {
-                            cmd_tx.publish(cmd).await;
-                            MavResult::Accepted
-                        } else {
-                            MavResult::Denied
+                            SupportedTunes::ID => {
+                                // A single message, so unlike AVAILABLE_MODES it is
+                                // answered here instead of via the command channel.
+                                log::info!("commands: RequestMessage for SupportedTunes");
+                                tx.publish(Rapid::SupportedTunes(SupportedTunes {
+                                    target_system: frame.system_id(),
+                                    target_component: frame.component_id(),
+                                    format: SUPPORTED_TUNE_FORMAT,
+                                }))
+                                .await;
+                                MavResult::Accepted
+                            }
+                            _ => MavResult::Denied,
                         }
                     }
                     MavCmd::PreflightRebootShutdown => match cmd.param1 as u32 {
@@ -168,6 +199,25 @@ pub async fn run(
                 };
 
                 let _ = tx.publish(Rapid::CommandAck(ack)).await;
+            }
+            Rapid::PlayTuneV2(msg)
+                if msg.target_system == system_id && msg.target_component == component_id =>
+            {
+                // PLAY_TUNE_V2 is a message, not a command, so there is nothing to
+                // acknowledge - a tune we cannot make sense of is just logged.
+                if msg.format != SUPPORTED_TUNE_FORMAT {
+                    log::warn!("play_tune: unexpected tune format {:?}", msg.format);
+                }
+
+                match tune_name(&msg.tune) {
+                    Some(name) => {
+                        log::info!("play_tune: requested tune {:?}", name.as_str());
+                        cmd_tx.publish(UplinkCommand::PlayTune(name)).await;
+                    }
+                    None => log::warn!(
+                        "play_tune: tune is not the name of a known sound, and tune notation is not supported yet"
+                    ),
+                }
             }
             _ => {}
         }
