@@ -3,7 +3,7 @@
 use core::marker::PhantomData;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_time::{Delay, Duration, Instant, Ticker, Timer, with_deadline};
+use embassy_time::{Delay, Duration, Instant, Timer, with_deadline};
 
 use lora_phy::mod_params::{ModulationParams, PacketParams, PacketStatus, RadioError};
 use lora_phy::mod_traits::{IrqState, RadioKind};
@@ -264,11 +264,8 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
         let mut context = ConnectionContext::init(time);
         initial_msg.unpack(&mut self.sender, &mut context).await;
 
-        // If we ever momentarily lose connection for a few packets, we need to be able to keep up with
-        // the hopping sequence, so we use this ticker. The ticker is reset for every received message
-        // to avoid this ticker drifting apart from the one driving transmissions on the vehicle side.
         let timeout = Duration::from_millis(DOWNLINK_MESSAGE_INTERVAL_MS as u64);
-        let mut ticker = Ticker::every(timeout);
+        let mut deadline = Instant::now() + timeout;
 
         let mut packet_history: heapless::Deque<(Instant, u16), 128> = heapless::Deque::new();
 
@@ -278,8 +275,6 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
                 return;
             }
 
-            let t = Instant::now();
-            let deadline = t + timeout;
             let next_time = time.wrapping_add(DOWNLINK_MESSAGE_INTERVAL_MS as u16);
 
             match self.receive_slot_until(next_time, deadline).await {
@@ -297,7 +292,7 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
                     Timer::after(Duration::from_millis(1)).await;
 
                     last_packet = Instant::now();
-                    ticker.reset();
+                    deadline = last_packet + timeout;
                     time = t;
 
                     context.advance(t);
@@ -324,11 +319,14 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
                 }
                 Ok(None) => {
                     defmt::warn!("Missed packet.");
+                    deadline += timeout;
                     time = next_time;
                 }
                 Err(e) => {
                     defmt::warn!("Failed receiving packet: {:?}.", defmt::Debug2Format(&e));
-                    ticker.next().await;
+                    // Sit out the rest of the slot.
+                    Timer::at(deadline).await;
+                    deadline += timeout;
                     time = next_time;
                 }
             }
