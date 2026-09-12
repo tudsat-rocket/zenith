@@ -366,9 +366,9 @@ pub async fn init() -> Board {
     let buzzer_pwm_channel = Channel::Ch3;
     let recovery_high = Output::new(p.PE13, Level::Low, Speed::Low);
     let recovery_lows = (
-        Output::new(p.PC9, Level::Low, Speed::Low),
-        Output::new(p.PC8, Level::Low, Speed::Low),
         Output::new(p.PC7, Level::Low, Speed::Low),
+        Output::new(p.PC8, Level::Low, Speed::Low),
+        Output::new(p.PC9, Level::Low, Speed::Low),
         Output::new(p.PC6, Level::Low, Speed::Low),
     );
     //let load_outputs = LOAD_OUTPUTS.init(embassy_sync::blocking_mutex::Mutex::new(load_outputs));
