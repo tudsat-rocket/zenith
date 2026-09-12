@@ -27,7 +27,7 @@ use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG, FREQUENC
 use telemetry::messages::TelemetryMessage;
 use telemetry::messages::UplinkMessage;
 use telemetry::messages::{DOWNLINK_PACKET_SIZE, DownlinkMessage};
-use telemetry::trx::receiver::HoppingReceiver;
+use telemetry::trx::receiver::{HoppingReceiver, UplinkStats};
 use telemetry::trx::transmitter::HoppingTransmitter;
 
 use crate::LoraTransceiver;
@@ -45,7 +45,10 @@ pub static DOWNLINK: StaticCell<Channel<CriticalSectionRawMutex, (u16, DownlinkM
 pub static UPLINK: StaticCell<Channel<CriticalSectionRawMutex, UplinkCommand, 5>> =
     StaticCell::new();
 
-static UPLINK_STATS: Watch<CriticalSectionRawMutex, (i8, i8, f32), 3> = Watch::new();
+/// How long an uplink statistic stays current (the ground station heartbeats at roughly 2 Hz)
+const UPLINK_STATS_TIMEOUT: Duration = Duration::from_millis(2000);
+
+static UPLINK_STATS: Watch<CriticalSectionRawMutex, UplinkStats, 3> = Watch::new();
 static TIME: Watch<CriticalSectionRawMutex, (Instant, u16), 3> = Watch::new();
 
 pub struct LoraHandle {
@@ -93,12 +96,19 @@ impl LoraHandle {
 
         self.time_sender.send((Instant::now(), t as u16));
 
-        let (rssi, snr, packet_loss) = UPLINK_STATS.try_get().unwrap_or_default();
-        let uplink = RadioStatus {
-            remrssi: rssi as u8,
-            remnoise: rssi.saturating_sub(snr) as u8,
-            fixed: (packet_loss * 100.0) as u16,
-            ..Default::default()
+        let uplink = match UPLINK_STATS.try_get() {
+            Some(stats) if stats.measured_at.elapsed() < UPLINK_STATS_TIMEOUT => RadioStatus {
+                remrssi: stats.rssi as u8,
+                remnoise: stats.rssi.saturating_sub(stats.snr) as u8,
+                fixed: (stats.packet_loss * 100.0) as u16,
+                ..Default::default()
+            },
+            _ => RadioStatus {
+                remrssi: u8::MAX,
+                remnoise: u8::MAX,
+                fixed: 100,
+                ..Default::default()
+            },
         };
 
         let Some(msg) = DownlinkMessage::for_tick(t, &vehicle.snapshot(), uplink) else {
@@ -127,7 +137,7 @@ async fn run_uplink(
         UplinkMessage,
         Sender<'static, CriticalSectionRawMutex, UplinkCommand, 5>,
     >,
-    stat_sender: embassy_sync::watch::Sender<'static, CriticalSectionRawMutex, (i8, i8, f32), 3>,
+    stat_sender: embassy_sync::watch::Sender<'static, CriticalSectionRawMutex, UplinkStats, 3>,
     time_receiver: embassy_sync::watch::Receiver<
         'static,
         CriticalSectionRawMutex,

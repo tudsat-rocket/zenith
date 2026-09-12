@@ -12,6 +12,9 @@ use crate::{TelemetryError, UplinkCommand, messages::TelemetryMessage};
 pub const UPLINK_PACKET_SIZE: usize = 16;
 const UPLINK_PAYLOAD_SIZE: usize = UPLINK_PACKET_SIZE - 10;
 
+/// Sequence numbers occupy just 11 bits of the packet header.
+pub const UPLINK_SEQ_MODULO: u16 = 1 << 11;
+
 #[derive(Debug, Clone)]
 pub enum UplinkMessage {
     Heartbeat(()),
@@ -266,6 +269,22 @@ mod tests {
             lengths.iter().all(|l| *l == UPLINK_PAYLOAD_SIZE),
             "{lengths:?} should all be {UPLINK_PAYLOAD_SIZE}"
         );
+    }
+
+    /// The sequence number is 11 bits on the wire, so a receiver comparing two of them has to
+    /// reduce the difference modulo [`UPLINK_SEQ_MODULO`] - on a `u16` it would otherwise read the
+    /// rollover as tens of thousands of lost packets. Pin that the header layout agrees with the
+    /// constant that math depends on.
+    #[test]
+    fn sequence_numbers_wrap_at_the_modulo() {
+        for seq in 0..(UPLINK_SEQ_MODULO.wrapping_mul(3)) {
+            let packet = UplinkMessage::Heartbeat(())
+                .encode(seq, &KEY)
+                .expect("message did not fit its packet");
+            let (decoded, _) = UplinkMessage::decode(packet, &KEY).expect("packet did not decode");
+
+            assert_eq!(decoded, seq % UPLINK_SEQ_MODULO, "seq {seq}");
+        }
     }
 
     #[test]

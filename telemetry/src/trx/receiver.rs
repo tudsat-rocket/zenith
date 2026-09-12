@@ -16,7 +16,8 @@ use utils::anychannel::AnySender;
 
 use crate::config::{FREQUENCIES, LinkConfig, SEQUENCE_LENGTH};
 use crate::messages::{
-    ConnectionContext, DOWNLINK_PACKET_SIZE, DownlinkMessage, TelemetryMessage, UplinkMessage,
+    ConnectionContext, DOWNLINK_PACKET_SIZE, DownlinkMessage, TelemetryMessage, UPLINK_SEQ_MODULO,
+    UplinkMessage,
 };
 use crate::trx::MAX_CONSECUTIVE_ERRORS;
 use crate::{DOWNLINK_MESSAGE_INTERVAL_MS, UplinkCommand};
@@ -31,6 +32,15 @@ impl From<RadioError> for ReceiveError {
     fn from(value: RadioError) -> Self {
         Self::Radio(value)
     }
+}
+
+/// What the uplink receiver knows about the state of the link.
+#[derive(Clone, Copy)]
+pub struct UplinkStats {
+    pub measured_at: Instant,
+    pub rssi: i8,
+    pub snr: i8,
+    pub packet_loss: f32,
 }
 
 pub struct HoppingReceiver<RK: RadioKind, M: TelemetryMessage, S: AnySender<M::Output>> {
@@ -320,7 +330,7 @@ impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessa
         clippy::arithmetic_side_effects,
         reason = "bounded packet-loss counting and hop-timing math"
     )]
-    pub async fn run_uplink<STATS: AnySender<(i8, i8, f32)>>(
+    pub async fn run_uplink<STATS: AnySender<UplinkStats>>(
         mut self,
         mut stat_sender: STATS,
         mut time_receiver: embassy_sync::watch::Receiver<
@@ -384,6 +394,9 @@ impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessa
                 let _ = packet_history.pop_front();
             }
 
+            if packet_history.is_full() {
+                let _ = packet_history.pop_front();
+            }
             let _ = packet_history.push_back((Instant::now(), seq));
 
             let lost_packets = packet_history
@@ -392,17 +405,24 @@ impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessa
                     if let Some(last) = last_seq
                         && last != *seq
                     {
-                        total += (seq.wrapping_sub(last) - 1) as u32;
+                        total += u32::from(
+                            (seq.wrapping_sub(last) % UPLINK_SEQ_MODULO).saturating_sub(1),
+                        );
                     }
                     last_seq = Some(*seq);
                     (total, last_seq)
                 })
                 .0 as f32;
 
-            let packet_loss = lost_packets / (lost_packets + packet_history.iter().count() as f32);
+            let packet_loss = lost_packets / (lost_packets + packet_history.len() as f32);
 
             stat_sender
-                .anysend(((status.rssi as i8), (status.snr as i8), packet_loss))
+                .anysend(UplinkStats {
+                    measured_at: Instant::now(),
+                    rssi: status.rssi as i8,
+                    snr: status.snr as i8,
+                    packet_loss,
+                })
                 .await;
 
             last_seq = seq;
