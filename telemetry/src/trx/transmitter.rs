@@ -171,7 +171,6 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage)>> HoppingTransmitter<RK,
                 // This means our clock is running slightly late, so we'll have to apply some extra
                 // tolerance to our end-of-hop checks.
                 let current_t = last_t.wrapping_add(last_instant.elapsed().as_millis() as u16);
-                let frequency = self.config.frequency(current_t);
 
                 // If we're close to the end of an uplink frequency hopping slot, we delay our
                 // transmission so its reception does not get interrupted by the hop.
@@ -182,6 +181,12 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage)>> HoppingTransmitter<RK,
                 } else if time_in_hopping_interval < 10 {
                     Timer::after(Duration::from_millis(10 - time_in_hopping_interval)).await;
                 }
+
+                // The end-of-hop delay above deliberately puts us in the *next* slot, so the
+                // frequency has to come from the clock as it is after the delay, not before it.
+                let frequency = self
+                    .config
+                    .frequency(last_t.wrapping_add(last_instant.elapsed().as_millis() as u16));
 
                 for _i in 0..num_transmissions {
                     // If we're close to another downlink message, we also delay our transmission, so
