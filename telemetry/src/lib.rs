@@ -155,9 +155,10 @@
 //! ```
 //!
 //!   - time: time since boot and/or message counter, depending on your point of view.
-//!     Time is encoded as 11bits of time in 16*ms (time_in_ms >> 4). Since we assume our message
-//!     interval to be a multiple of 16ms (see below), so we can recover full time in ms by
-//!     assuming 4 bits of zeros, and the value should cleanly overflow every 32.8 seconds.
+//!     Time is encoded as 11 bits of time in 32*ms (time_in_ms >> 5). Since our message interval
+//!     is a multiple of 32ms (see below), we can recover full time in ms by assuming 5 bits of
+//!     zeros, and the value cleanly overflows every 65.5 seconds. In order to get absolute time,
+//!     The higher bits can occasionally be sent in a specific message.
 //!
 //!   - message identifier: allows identifying the content of the message payload.
 //!     Since we have just 5 bits for this, we are limited to just 32 possible downlink messages.

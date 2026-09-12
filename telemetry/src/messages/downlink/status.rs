@@ -44,8 +44,7 @@ pub struct StatusMessage {
     uplink_packet_loss: u8,
     uplink_rssi: u8,
     uplink_noise: u8,
-    /// The left-most 15 bits of the time are already contained in every packet, so we just add 16
-    /// more here, for a maximum of 2^31 milliseconds, or ~25days.
+    /// The bits above the time bits in the header, which together give us the full time since boot.
     #[serde(with = "postcard::fixint::le")]
     absolute_time: u16,
     reserved: u8,
@@ -75,7 +74,7 @@ impl DownlinkTelemetryMessage for StatusMessage {
             ),
             battery_voltage,
             load: (sys_status.load / 10) as u8,
-            absolute_time: (snapshot.time.0 >> 15) as u16,
+            absolute_time: (snapshot.time.0 >> ConnectionContext::PACKET_TIME_BITS) as u16,
             uplink_packet_loss: radio_status.fixed as u8,
             uplink_rssi: radio_status.remrssi,
             uplink_noise: radio_status.remnoise,
@@ -84,6 +83,8 @@ impl DownlinkTelemetryMessage for StatusMessage {
     }
 
     fn unpack(self, context: &mut ConnectionContext) -> Self::Output {
+        context.anchor_time(self.absolute_time);
+
         let present = TELEMETERED_SENSORS
             .into_iter()
             .fold(MavSysStatusSensor::empty(), |acc, s| acc | s);
@@ -119,9 +120,9 @@ impl DownlinkTelemetryMessage for StatusMessage {
             txbuf: 100,
         };
 
-        // TODO
         let system_time = SystemTime {
-            ..Default::default()
+            time_boot_ms: context.time,
+            time_unix_usec: 0,
         };
 
         (sys_status, radio_status, system_time)
@@ -167,11 +168,42 @@ mod tests {
     use super::super::tests::{SnapshotParts, through_packet};
     use super::*;
 
+    use core::num::Wrapping;
+
     use mission::AdcData;
     use mission::SensorReadings;
     use rapid_dialect::rapid::messages::SysStatus;
 
     use crate::messages::DownlinkMessage;
+
+    /// A receiver that starts listening mid-flight has only the low bits of the time, and no way
+    /// to know how many wraps it missed, until one of these turns up with the rest.
+    #[test]
+    fn a_status_packet_anchors_the_time_since_boot() {
+        const BOOT_MS: u32 = 10 * 60 * 1000;
+
+        let parts = SnapshotParts {
+            time: Wrapping(BOOT_MS),
+            ..Default::default()
+        };
+
+        let msg = DownlinkMessage::Status(StatusMessage::pack((
+            &parts.snapshot(),
+            RadioStatus::default(),
+        )));
+        let DownlinkMessage::Status(decoded) = through_packet(msg) else {
+            panic!("decoded as the wrong message")
+        };
+
+        // What the header alone gave the receiver when it acquired: the low bits, nothing more.
+        let mut context = ConnectionContext::init(BOOT_MS as u16);
+        assert_ne!(context.time, BOOT_MS);
+
+        let (_, _, system_time) = decoded.unpack(&mut context);
+
+        assert_eq!(context.time, BOOT_MS);
+        assert_eq!(system_time.time_boot_ms, BOOT_MS);
+    }
 
     /// The LUT is a hand-picked subset, so a sensor bit that `mission` starts reporting would
     /// otherwise be dropped on the RF link and nowhere else. `present` is exactly the set the

@@ -28,6 +28,11 @@ pub use status::StatusMessage;
 pub const DOWNLINK_PACKET_SIZE: usize = 16;
 const DOWNLINK_PAYLOAD_SIZE: usize = DOWNLINK_PACKET_SIZE - 4;
 
+/// Resolution of the packet time in the header, which starts at bit 5.
+const PACKET_TIME_MS: u32 = 32;
+
+const _: () = assert!(DOWNLINK_MESSAGE_INTERVAL_MS % PACKET_TIME_MS == 0);
+
 const UNKNOWN: u8 = u8::MAX;
 const FULL_SCALE: f32 = (u8::MAX - 1) as f32;
 
@@ -57,8 +62,12 @@ pub struct ConnectionContext {
 }
 
 impl ConnectionContext {
-    /// The packet time covers bits 5..15 of the time since boot, so it wraps this often.
-    const TIME_WRAP_MS: u32 = 1 << 15;
+    /// Bits of the time since boot the packet header carries, counted from zero. The low five of
+    /// them are always clear, since every packet sits on on a message interval.
+    pub(crate) const PACKET_TIME_BITS: u32 = 16;
+
+    /// How often the packet time wraps.
+    const TIME_WRAP_MS: u32 = 1 << Self::PACKET_TIME_BITS;
 
     pub fn init(time: u16) -> Self {
         Self {
@@ -74,7 +83,7 @@ impl ConnectionContext {
     /// counting the wraps we have seen since the start of the connection. Must be called for
     /// every received packet, before unpacking it.
     pub fn advance(&mut self, packet_time: u16) {
-        let wraps = self.time >> 15;
+        let wraps = self.time >> Self::PACKET_TIME_BITS;
         let extended = wraps
             .saturating_mul(Self::TIME_WRAP_MS)
             .saturating_add(u32::from(packet_time));
@@ -84,6 +93,14 @@ impl ConnectionContext {
         } else {
             extended
         };
+    }
+
+    /// Re-anchor the absolute time using the bits above the packet time.
+    pub fn anchor_time(&mut self, above_packet_time: u16) {
+        let packet_time = self.time % Self::TIME_WRAP_MS;
+        self.time = u32::from(above_packet_time)
+            .saturating_mul(Self::TIME_WRAP_MS)
+            .saturating_add(packet_time);
     }
 }
 
@@ -158,7 +175,7 @@ impl TelemetryMessage for DownlinkMessage {
         };
 
         let mut buffer = [0x00; DOWNLINK_PACKET_SIZE];
-        buffer[0] = (time >> 7) as u8;
+        buffer[0] = (time >> 8) as u8;
         buffer[1] = (time & 0b1110_0000) as u8 | (id & 0b11111);
         buffer[2..(DOWNLINK_PACKET_SIZE - 2)].copy_from_slice(&payload);
 
@@ -189,7 +206,7 @@ impl TelemetryMessage for DownlinkMessage {
             return Err(TelemetryError::HmacMismatch);
         }
 
-        let time = ((buffer[0] as u16) << 7) | (buffer[1] as u16 & 0b1110_0000);
+        let time = ((buffer[0] as u16) << 8) | (buffer[1] as u16 & 0b1110_0000);
         let payload = &buffer[2..(DOWNLINK_PACKET_SIZE - 2)];
 
         let msg_id = buffer[1] & 0b11111;
@@ -382,25 +399,46 @@ pub(crate) mod tests {
             .1
     }
 
-    /// The coarse packet time wraps every 32.768s; the receiver's estimate must not.
+    /// The coarse packet time wraps every 65.536s; the receiver's estimate must not.
     #[test]
     fn absolute_time_survives_the_packet_time_wrapping() {
         let mut context = ConnectionContext::init(32_000);
         assert_eq!(context.time, 32_000);
 
-        context.advance(32_700);
-        assert_eq!(context.time, 32_700);
+        context.advance(65_500);
+        assert_eq!(context.time, 65_500);
 
         // Wrapped once.
         context.advance(100);
-        assert_eq!(context.time, 32_868);
+        assert_eq!(context.time, 65_636);
 
         context.advance(32_000);
-        assert_eq!(context.time, 64_768);
+        assert_eq!(context.time, 97_536);
 
         // And again.
         context.advance(500);
-        assert_eq!(context.time, 66_036);
+        assert_eq!(context.time, 131_572);
+    }
+
+    /// Eleven bits of header, and the message interval keeps the low five at zero, so every time a
+    /// packet can carry has to come back exactly. Overlapping the two header bytes cost a bit and
+    /// halved the wrap period, which this would have caught above 32.768s.
+    #[test]
+    fn the_packet_time_survives_the_header() {
+        const KEY: [u8; 16] = [0x42; 16];
+
+        let parts = SnapshotParts::default();
+
+        for time in (0..=u16::MAX).step_by(DOWNLINK_MESSAGE_INTERVAL_MS as usize) {
+            let msg = DownlinkMessage::Heartbeat(HeartbeatMessage::pack(&parts.snapshot()));
+            let packet = msg
+                .encode(time, &KEY)
+                .expect("message did not fit its packet");
+            let (recovered, _) =
+                DownlinkMessage::decode(packet, &KEY).expect("packet did not decode");
+
+            assert_eq!(recovered, time);
+        }
     }
 
     #[test]
