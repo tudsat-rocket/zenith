@@ -8,6 +8,7 @@ edition = "2024"
 [dependencies]
 utils = { workspace = true }
 links = { workspace = true }
+mission = { workspace = true }
 rapid-dialect = { workspace = true }
 
 defmt = { workspace = true }
@@ -30,3 +31,7 @@ siphasher = "1.0.1"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+state_estimator = { workspace = true }
+nalgebra = { workspace = true }

@@ -22,7 +22,7 @@ use embassy_sync::{channel::Channel, pubsub::PubSubChannel};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 
 use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG};
-use telemetry::messages::{DownlinkMessage, SetFlightModeMessage, UplinkMessage};
+use telemetry::messages::{DownlinkMessage, SetFlightModeMessage, SetValveMessage, UplinkMessage};
 use telemetry::trx::receiver::HoppingReceiver;
 use telemetry::trx::transmitter::HoppingTransmitter;
 
@@ -186,6 +186,9 @@ async fn join_uplink(
             (Some(command), _) => match command {
                 UplinkCommand::SetFlightMode(fm) => {
                     UplinkMessage::SetFlightMode(SetFlightModeMessage { mode: fm as u8 })
+                }
+                UplinkCommand::CommandValve(valve, cmd) => {
+                    UplinkMessage::SetValve(SetValveMessage::new(valve, cmd))
                 }
                 unsupported => {
                     defmt::warn!(

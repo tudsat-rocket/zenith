@@ -1,35 +1,50 @@
-#![allow(unused_imports)]
-#![allow(dead_code)]
-
-use core::cmp::Ord;
-use core::f32::consts::PI;
 use core::hash::Hasher;
 
-use rapid_dialect::Rapid;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-// Once f16 is in core (currently nightly), we can retire this crate.
-use half::f16;
-
-use rapid_dialect::rapid::enums::{
-    MavAutopilot, MavModeFlag, MavState, MavSysStatusSensor, MavType,
-};
-use rapid_dialect::rapid::messages::{
-    Altitude, Attitude, BatteryInfo, BatteryStatus, GlobalPositionInt, GpsRawInt, GpsStatus,
-    Heartbeat, LocalPositionNed, LocalPositionNedCov, RadioStatus, ScaledPressure, ScaledPressure2,
-    ScaledPressure3, SysStatus, SystemTime, VfrHud,
-};
+use mission::mavlink::VehicleSnapshot;
+use rapid_dialect::Rapid;
+use rapid_dialect::rapid::messages::RadioStatus;
 use siphasher::sip::SipHasher;
 use utils::anychannel::AnySender;
 
+use crate::DOWNLINK_MESSAGE_INTERVAL_MS;
 use crate::TelemetryError;
-use crate::config::NUM_FREQUENCIES;
 use crate::messages::TelemetryMessage;
-use crate::messages::UPLINK_PACKET_SIZE;
+
+mod components;
+mod gps;
+mod heartbeat;
+mod pressures;
+mod sensors;
+mod status;
+
+pub use components::ComponentsMessage;
+pub use gps::GpsMessage;
+pub use heartbeat::HeartbeatMessage;
+pub use pressures::PressuresMessage;
+pub use sensors::SensorsMessage;
+pub use status::StatusMessage;
 
 pub const DOWNLINK_PACKET_SIZE: usize = 16;
 const DOWNLINK_PAYLOAD_SIZE: usize = DOWNLINK_PACKET_SIZE - 4;
+
+/// Resolution of the packet time in the header, which starts at bit 5.
+const PACKET_TIME_MS: u32 = 32;
+
+const _: () = assert!(DOWNLINK_MESSAGE_INTERVAL_MS % PACKET_TIME_MS == 0);
+
+/// The bits of the vehicle's clock a packet header carries.
+pub const DOWNLINK_TIME_MASK: u16 = !(PACKET_TIME_MS as u16 - 1);
+
+const _: () = assert!(ConnectionContext::PACKET_TIME_BITS == u16::BITS);
+
+const UNKNOWN: u8 = u8::MAX;
+const FULL_SCALE: f32 = (u8::MAX - 1) as f32;
+
+const TEMPERATURE_OFFSET_C: f32 = 60.0;
+const TEMPERATURE_CODES_PER_C: f32 = 2.0;
 
 /// Stuff the telemetry receiver can just "keep in mind" based on previously received messages.
 /// These are used to enrich received data, especially when values can reasonably be converted or
@@ -42,6 +57,9 @@ pub struct ConnectionContext {
     pub time: u32,
     /// The last received ground altitude in meters above sea-level, if known
     pub altitude_ground_asl: Option<f32>,
+    /// The last received altitude above ground level, if known.
+    /// Used to enrich messages that carry a position but no altitude of their own.
+    pub altitude_agl: Option<f32>,
     /// Received signal strength indicator (RSSI) of downlink packets received.
     /// Used to enrich RADIO_STATUS messages with ground-side information.
     pub rx_rssi: Option<u8>,
@@ -54,14 +72,46 @@ pub struct ConnectionContext {
 }
 
 impl ConnectionContext {
+    /// Bits of the time since boot the packet header carries, counted from zero. The low five of
+    /// them are always clear, since every packet sits on on a message interval.
+    pub(crate) const PACKET_TIME_BITS: u32 = 16;
+
+    /// How often the packet time wraps.
+    const TIME_WRAP_MS: u32 = 1 << Self::PACKET_TIME_BITS;
+
     pub fn init(time: u16) -> Self {
         Self {
             time: time as u32,
             altitude_ground_asl: None,
+            altitude_agl: None,
             rx_rssi: None,
             rx_noise: None,
             rx_packet_loss: None,
         }
+    }
+
+    /// Extend the coarse time of a freshly received packet into our absolute time estimate, by
+    /// counting the wraps we have seen since the start of the connection. Must be called for
+    /// every received packet, before unpacking it.
+    pub fn advance(&mut self, packet_time: u16) {
+        let wraps = self.time >> Self::PACKET_TIME_BITS;
+        let extended = wraps
+            .saturating_mul(Self::TIME_WRAP_MS)
+            .saturating_add(u32::from(packet_time));
+
+        self.time = if extended < self.time {
+            extended.saturating_add(Self::TIME_WRAP_MS)
+        } else {
+            extended
+        };
+    }
+
+    /// Re-anchor the absolute time using the bits above the packet time.
+    pub fn anchor_time(&mut self, above_packet_time: u16) {
+        let packet_time = self.time % Self::TIME_WRAP_MS;
+        self.time = u32::from(above_packet_time)
+            .saturating_mul(Self::TIME_WRAP_MS)
+            .saturating_add(packet_time);
     }
 }
 
@@ -69,15 +119,53 @@ impl ConnectionContext {
 pub enum DownlinkMessage {
     Heartbeat(HeartbeatMessage),
     Status(StatusMessage),
-    //GlobalPosition(()),
-    //GpsRaw(GpsMessage),
-    //Battery(BatteryMessage),
-    //Diagnostics(DiagnosticsMessage),
-    //Barometers(BarometersMessage),
-    //PressureVesselsMessage(PressureVesselsMessage),
-    //Actuators(ActuatorsMessage),
-    //StateEstimator(StateEstimatorMessage),
-    //Components(ComponentsMessage),
+    Pressures(PressuresMessage),
+    Components(ComponentsMessage),
+    Sensors(SensorsMessage),
+    Gps(GpsMessage),
+}
+
+impl DownlinkMessage {
+    /// How many packets the pattern in [`Self::for_tick`] repeats over. One cycle is
+    /// `SLOT_COUNT * DOWNLINK_MESSAGE_INTERVAL_MS`, or 512 ms.
+    const SLOT_COUNT: u32 = 16;
+
+    /// Which message goes out on this tick of the vehicle's main loop, or `None` on the ticks
+    /// between packets. The RF counterpart of `VehicleSnapshot::send_telemetry`, which decides the
+    /// same thing for the full-bandwidth links.
+    ///
+    /// Unlike that schedule the interval is fixed by the protocol rather than chosen per message:
+    /// the receiver has to know when to expect a packet in order to follow the hopping sequence,
+    /// and it infers packet loss from the packets that fail to arrive, so we leave no gaps.
+    ///
+    /// The pattern itself is fixed for now, may be dynamic based on flight mode later.
+    pub fn for_tick(
+        time_ms: u32,
+        snapshot: &VehicleSnapshot<'_>,
+        uplink: RadioStatus,
+    ) -> Option<Self> {
+        if time_ms % DOWNLINK_MESSAGE_INTERVAL_MS != 0 {
+            return None;
+        }
+
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "DOWNLINK_MESSAGE_INTERVAL_MS and SLOT_COUNT are nonzero constants"
+        )]
+        let slot = (time_ms / DOWNLINK_MESSAGE_INTERVAL_MS) % Self::SLOT_COUNT;
+
+        // The four packed messages repeat over each half of the cycle, so the GPS slot is paid
+        // for out of the heartbeat's share alone.
+        Some(match slot {
+            1 | 9 => Self::Pressures(PressuresMessage::pack(snapshot)),
+            3 | 11 => Self::Components(ComponentsMessage::pack(snapshot)),
+            5 | 13 => Self::Status(StatusMessage::pack((snapshot, uplink))),
+            7 | 15 => Self::Sensors(SensorsMessage::pack(snapshot)),
+            14 => Self::Gps(GpsMessage::pack(snapshot)),
+            // Every remaining slot, so the heartbeat keeps most of the link to itself.
+            _ => Self::Heartbeat(HeartbeatMessage::pack(snapshot)),
+        })
+    }
 }
 
 impl TelemetryMessage for DownlinkMessage {
@@ -95,10 +183,14 @@ impl TelemetryMessage for DownlinkMessage {
         let (id, payload) = match self {
             Self::Heartbeat(inner) => (HeartbeatMessage::ID, inner.serialize()?),
             Self::Status(inner) => (StatusMessage::ID, inner.serialize()?),
+            Self::Pressures(inner) => (PressuresMessage::ID, inner.serialize()?),
+            Self::Components(inner) => (ComponentsMessage::ID, inner.serialize()?),
+            Self::Sensors(inner) => (SensorsMessage::ID, inner.serialize()?),
+            Self::Gps(inner) => (GpsMessage::ID, inner.serialize()?),
         };
 
         let mut buffer = [0x00; DOWNLINK_PACKET_SIZE];
-        buffer[0] = (time >> 7) as u8;
+        buffer[0] = (time >> 8) as u8;
         buffer[1] = (time & 0b1110_0000) as u8 | (id & 0b11111);
         buffer[2..(DOWNLINK_PACKET_SIZE - 2)].copy_from_slice(&payload);
 
@@ -129,13 +221,17 @@ impl TelemetryMessage for DownlinkMessage {
             return Err(TelemetryError::HmacMismatch);
         }
 
-        let time = ((buffer[0] as u16) << 7) | (buffer[1] as u16 & 0b1110_0000);
+        let time = ((buffer[0] as u16) << 8) | (buffer[1] as u16 & 0b1110_0000);
         let payload = &buffer[2..(DOWNLINK_PACKET_SIZE - 2)];
 
         let msg_id = buffer[1] & 0b11111;
         let msg = match msg_id {
             HeartbeatMessage::ID => DownlinkMessage::Heartbeat(postcard::from_bytes(payload)?),
             StatusMessage::ID => DownlinkMessage::Status(postcard::from_bytes(payload)?),
+            PressuresMessage::ID => DownlinkMessage::Pressures(postcard::from_bytes(payload)?),
+            ComponentsMessage::ID => DownlinkMessage::Components(postcard::from_bytes(payload)?),
+            SensorsMessage::ID => DownlinkMessage::Sensors(postcard::from_bytes(payload)?),
+            GpsMessage::ID => DownlinkMessage::Gps(postcard::from_bytes(payload)?),
             id => {
                 return Err(TelemetryError::UnknownMessageId(id));
             }
@@ -164,6 +260,26 @@ impl TelemetryMessage for DownlinkMessage {
                 sender.anysend(Rapid::RadioStatus(radio)).await;
                 sender.anysend(Rapid::SystemTime(time)).await;
             }
+            Self::Pressures(inner) => {
+                for vessel in inner.unpack(context) {
+                    sender.anysend(Rapid::PressureVessel(vessel)).await;
+                }
+            }
+            Self::Components(inner) => {
+                for valve in inner.unpack(context) {
+                    sender.anysend(Rapid::Valve(valve)).await;
+                }
+            }
+            Self::Sensors(inner) => {
+                let (imu, pressure) = inner.unpack(context);
+                sender.anysend(Rapid::ScaledImu(imu)).await;
+                sender.anysend(Rapid::ScaledPressure(pressure)).await;
+            }
+            Self::Gps(inner) => {
+                let (raw, global) = inner.unpack(context);
+                sender.anysend(Rapid::GpsRawInt(raw)).await;
+                sender.anysend(Rapid::GlobalPositionInt(global)).await;
+            }
         }
     }
 }
@@ -171,7 +287,7 @@ impl TelemetryMessage for DownlinkMessage {
 pub trait DownlinkTelemetryMessage: Sized + Serialize + DeserializeOwned {
     const ID: u8;
 
-    type Input;
+    type Input<'a>;
     type Output;
 
     fn serialize(self) -> Result<[u8; DOWNLINK_PAYLOAD_SIZE], postcard::Error> {
@@ -180,414 +296,294 @@ pub trait DownlinkTelemetryMessage: Sized + Serialize + DeserializeOwned {
         Ok(buf)
     }
 
-    fn pack(input: Self::Input) -> Self;
+    fn pack(input: Self::Input<'_>) -> Self;
     fn unpack(self, context: &mut ConnectionContext) -> Self::Output;
 }
 
-/// The most important message, expected to be transmitted by every system fairly regularly.
-///
-/// Contains mode, attitude, altitude and velocity information.
-///
-/// Can be built from HEARTBEAT, LOCAL_POSITION_NED & ATTITUDE messages.
-///
-/// ALTITUDE and VFR_HUD can be partially reconstructed by the receiver.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HeartbeatMessage {
-    /// 3 bits of MAV_STATE (uninit variant omitted),
-    /// 3 bits of profile ID,
-    /// 1 bit for the SAFETY_ARMED flag
-    mav_state_profile_and_armed: u8,
-    /// 6 bits of mode ID
-    ///     these don't correspond to any MAVLink mode enum value, the receiver is aware of
-    ///     the necessary mode metadata using the vehicle profile.
-    /// 1 bit reserved?
-    /// 1 more bit for altitude_local
-    mode_and_altitude: u8,
-    /// altitude in local coordinate system above origin in (m+300)/10
-    /// (taken from LOCAL_POSITION_NED.z, but up-positive)
-    /// these are the least-significant 16 bits, with one more in mode_and_altitude, giving
-    /// us a range of -300.0-12807.2 meters.
-    altitude_local: u16,
-    /// 8 bits of roll  (-180 - +180 deg, in 1.41deg)
-    /// 8 bits of pitch ( -90 -  +90 deg, in 0.70deg)
-    /// 8 bits of yaw   (-180 - +180 deg, in 1.41deg)
-    euler_angles: (i8, i8, i8),
-    vertical_speed: f16, // TODO
-    ground_speed: f16,   // TODO
-                         // TODO: throttle or vertical acceleration
+/// Scales a reading against the full-scale range of the sensor that produced it. Sensor ranges on
+/// this vehicle span two orders of magnitude, so one shared scale would be useless at one end.
+fn pack_full_scale(value: Option<f32>, full_scale: f32) -> u8 {
+    match value.filter(|v| v.is_finite()) {
+        Some(v) => (v / full_scale * FULL_SCALE).clamp(0.0, FULL_SCALE) as u8,
+        None => UNKNOWN,
+    }
 }
 
-impl DownlinkTelemetryMessage for HeartbeatMessage {
-    const ID: u8 = 0x01;
-    type Input = (Heartbeat, LocalPositionNed, Attitude);
-    type Output = (Heartbeat, LocalPositionNed, Attitude, Altitude, VfrHud);
+fn unpack_full_scale(code: u8, full_scale: f32) -> Option<f32> {
+    (code != UNKNOWN).then(|| f32::from(code) / FULL_SCALE * full_scale)
+}
 
-    fn pack((heartbeat, local_position, attitude): Self::Input) -> Self {
-        #[allow(
-            clippy::arithmetic_side_effects,
-            reason = "u8::max(_, 1) is >= 1, so -1 cannot underflow"
-        )]
-        let mav_state = u8::max(heartbeat.system_status as u8, 1) - 1;
-        let profile = 0x01; // TODO
-        let armed = heartbeat.base_mode.contains(MavModeFlag::SAFETY_ARMED) as u8;
-        let mav_state_profile_and_armed = ((mav_state & 0b111) << 5) | (profile << 1) | (armed);
-
-        let mode = heartbeat.custom_mode; // TODO
-        let alt = (local_position.z * -10.0 + 3000.0) as u32;
-        let mode_and_altitude = ((mode << 2) | ((alt >> 16) & 0b1)) as u8;
-
-        let roll = (attitude.roll * (i8::MAX as f32) / PI) as i8;
-        let pitch = (attitude.pitch * (i8::MAX as f32) / PI) as i8;
-        let yaw = (attitude.yaw * (i8::MAX as f32) / PI) as i8;
-
-        Self {
-            mav_state_profile_and_armed,
-            mode_and_altitude,
-            euler_angles: (roll, pitch, yaw),
-            altitude_local: alt as u16,
-            vertical_speed: f16::from_f32(0.0),
-            ground_speed: f16::from_f32(0.0),
+/// Packs a temperature into -60.0 - +67.0 C at 0.5 C.
+fn pack_temperature(celsius: Option<f32>) -> u8 {
+    match celsius.filter(|v| v.is_finite()) {
+        Some(c) => {
+            ((c + TEMPERATURE_OFFSET_C) * TEMPERATURE_CODES_PER_C).clamp(0.0, FULL_SCALE) as u8
         }
+        None => UNKNOWN,
     }
+}
+
+fn unpack_temperature(code: u8) -> Option<f32> {
+    (code != UNKNOWN).then(|| f32::from(code) / TEMPERATURE_CODES_PER_C - TEMPERATURE_OFFSET_C)
+}
+
+/// Serializes an [`half::f16`] as its fixed-width bit pattern, for `#[serde(with = ...)]`.
+///
+/// Postcard varint-encodes anything wider than a byte, including the `u16` behind an `f16`, which
+/// would make the length of a payload depend on the values in it. Our packets are a fixed size, so
+/// a payload that only fits for small values is a payload that overflows in flight.
+mod f16_le {
+    use half::f16;
+    use serde::{Deserializer, Serializer};
 
     #[allow(
-        clippy::similar_names,
-        reason = "address complaints to the english language"
+        clippy::trivially_copy_pass_by_ref,
+        reason = "signature is fixed by serde's `with` contract"
     )]
-    fn unpack(self, context: &mut ConnectionContext) -> Self::Output {
-        let heartbeat = Heartbeat {
-            type_: MavType::Rocket,                            // TODO
-            autopilot: MavAutopilot::Generic,                  // TODO
-            system_status: MavState::Active,                   // TODO
-            base_mode: MavModeFlag::empty(),                   // TODO
-            custom_mode: (self.mode_and_altitude >> 2) as u32, // TODO
-            mavlink_version: 2,
-        };
+    pub fn serialize<S: Serializer>(value: &f16, serializer: S) -> Result<S::Ok, S::Error> {
+        postcard::fixint::le::serialize(&value.to_bits(), serializer)
+    }
 
-        // TODO
-        let alt = (((self.mode_and_altitude & 0b1) as u32) << 16) | self.altitude_local as u32;
-
-        let local_position = LocalPositionNed {
-            time_boot_ms: context.time,
-            z: ((alt as f32) - 3000.0) / -10.0,
-            vx: 0.0,
-            vy: 0.0,
-            vz: 0.0,
-            ..Default::default()
-        };
-
-        // TODO
-        let (roll, pitch, yaw) = self.euler_angles;
-        let attitude = Attitude {
-            time_boot_ms: context.time,
-            roll: (roll as f32) / ((i8::MAX as f32) / PI),
-            pitch: (pitch as f32) / ((i8::MAX as f32) / PI),
-            yaw: (yaw as f32) / ((i8::MAX as f32) / PI),
-            ..Default::default()
-        };
-
-        // TODO
-        #[allow(
-            clippy::arithmetic_side_effects,
-            reason = "u32 time widened to u64 before *1000, cannot overflow"
-        )]
-        let altitude = Altitude {
-            time_usec: (context.time as u64) * 1000,
-            altitude_monotonic: 0.0,
-            altitude_amsl: 0.0,
-            altitude_local: 0.0,
-            altitude_relative: 0.0,
-            altitude_terrain: 0.0,
-            bottom_clearance: 0.0,
-        };
-
-        // TODO
-        let vfr_hud = VfrHud {
-            alt: 0.0,
-            climb: 0.0,
-            throttle: 0,
-            heading: 0,
-            airspeed: 0.0,
-            groundspeed: 0.0,
-        };
-
-        (heartbeat, local_position, attitude, altitude, vfr_hud)
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f16, D::Error> {
+        postcard::fixint::le::deserialize(deserializer).map(f16::from_bits)
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct StatusMessage {
-    /// The left-most 15 bits of the time are already contained in every packet, so we just add 16
-    /// more here, for a maximum of 2^31 milliseconds, or ~25days.
-    absolute_time: u16,
-    load: u8,
-    uplink_packet_loss: u8,
-    uplink_rssi: u8,
-    uplink_noise: u8,
-    // TODO: sys_status errors
-    // TODO: altitude of origin/ground?
-    // TODO: log size / available storage?
-}
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
 
-impl DownlinkTelemetryMessage for StatusMessage {
-    const ID: u8 = 0x02;
-    type Input = (SysStatus, RadioStatus, SystemTime);
-    type Output = (SysStatus, RadioStatus, SystemTime);
+    use core::num::Wrapping;
 
-    fn pack((sys_status, radio_status, system_time): Self::Input) -> Self {
-        Self {
-            load: (sys_status.load / 10) as u8,
-            absolute_time: (system_time.time_boot_ms >> 15) as u16,
-            uplink_packet_loss: radio_status.fixed as u8,
-            uplink_rssi: radio_status.remrssi,
-            uplink_noise: radio_status.remnoise,
+    use mission::bus::{BusInputImage, BusOutputImage};
+    use mission::{SensorReadings, StateMachineParams};
+    use rapid_dialect::FlightMode;
+    use state_estimator::{StateEstimator, StateEstimatorParams};
+
+    /// Everything a [`VehicleSnapshot`] borrows, owned, so tests can build one without a
+    /// `mission::Vehicle` and the four hardware traits it is generic over.
+    pub(crate) struct SnapshotParts {
+        pub time: Wrapping<u32>,
+        pub mode: FlightMode,
+        pub params: StateMachineParams,
+        pub readings: SensorReadings,
+        pub estimator: StateEstimator,
+        pub inputs: BusInputImage,
+        pub outputs: BusOutputImage,
+    }
+
+    impl Default for SnapshotParts {
+        fn default() -> Self {
+            Self {
+                time: Wrapping(0),
+                mode: FlightMode::Idle,
+                params: StateMachineParams::default(),
+                readings: SensorReadings::default(),
+                estimator: StateEstimator::new(1000.0, StateEstimatorParams::default()),
+                inputs: BusInputImage::default(),
+                outputs: BusOutputImage::default(),
+            }
         }
     }
 
-    fn unpack(self, context: &mut ConnectionContext) -> Self::Output {
-        let sys_status = SysStatus {
-            // widen before scaling: u8 * 10 overflows in u8 for load > 25
-            load: u16::from(self.load).saturating_mul(10),
-            ..Default::default()
-        };
+    impl SnapshotParts {
+        pub(crate) fn snapshot(&self) -> VehicleSnapshot<'_> {
+            VehicleSnapshot {
+                time: self.time,
+                mode: self.mode,
+                state_machine_params: &self.params,
+                readings: &self.readings,
+                state_estimator: &self.estimator,
+                input_image: &self.inputs,
+                output_image: &self.outputs,
+            }
+        }
+    }
 
-        let radio_status = RadioStatus {
-            rssi: context.rx_rssi.unwrap_or(u8::MAX),
-            remrssi: self.uplink_rssi,
-            noise: context.rx_noise.unwrap_or(u8::MAX),
-            remnoise: self.uplink_noise,
-            // we abuse the rxerrors and fixed fields for packet loss
-            rxerrors: context.rx_packet_loss.unwrap_or_default(),
-            fixed: self.uplink_packet_loss as u16,
-            txbuf: 100,
-        };
+    pub(crate) fn encoded_len<M: Serialize>(msg: &M) -> usize {
+        let mut buf = [0x00; DOWNLINK_PAYLOAD_SIZE];
+        postcard::to_slice(msg, &mut buf)
+            .expect("message did not fit its payload")
+            .len()
+    }
 
-        // TODO
-        let system_time = SystemTime {
-            ..Default::default()
-        };
+    /// Round-trips a message through a whole packet, so tests assert on what the receiver actually
+    /// recovers rather than on the struct the vehicle built.
+    pub(crate) fn through_packet(msg: DownlinkMessage) -> DownlinkMessage {
+        const KEY: [u8; 16] = [0x42; 16];
 
-        (sys_status, radio_status, system_time)
+        let packet = msg
+            .encode(1234, &KEY)
+            .expect("message did not fit its packet");
+        DownlinkMessage::decode(packet, &KEY)
+            .expect("packet did not decode")
+            .1
+    }
+
+    /// A receiver compares the time a packet claims against the slot it tuned for, so the mask it
+    /// builds that expectation with has to match what a packet actually carries.
+    #[test]
+    fn the_time_mask_matches_what_a_packet_carries() {
+        let parts = SnapshotParts::default();
+        let snapshot = parts.snapshot();
+
+        for time in (0..=u16::MAX).step_by(DOWNLINK_MESSAGE_INTERVAL_MS as usize) {
+            let packet = DownlinkMessage::Heartbeat(HeartbeatMessage::pack(&snapshot))
+                .encode(time, &[0x42; 16])
+                .expect("message did not fit its packet");
+            let (decoded, _) =
+                DownlinkMessage::decode(packet, &[0x42; 16]).expect("packet did not decode");
+
+            assert_eq!(decoded, time & DOWNLINK_TIME_MASK, "time {time}");
+        }
+    }
+
+    /// The coarse packet time wraps every 65.536s; the receiver's estimate must not.
+    #[test]
+    fn absolute_time_survives_the_packet_time_wrapping() {
+        let mut context = ConnectionContext::init(32_000);
+        assert_eq!(context.time, 32_000);
+
+        context.advance(65_500);
+        assert_eq!(context.time, 65_500);
+
+        // Wrapped once.
+        context.advance(100);
+        assert_eq!(context.time, 65_636);
+
+        context.advance(32_000);
+        assert_eq!(context.time, 97_536);
+
+        // And again.
+        context.advance(500);
+        assert_eq!(context.time, 131_572);
+    }
+
+    /// Eleven bits of header, and the message interval keeps the low five at zero, so every time a
+    /// packet can carry has to come back exactly. Overlapping the two header bytes cost a bit and
+    /// halved the wrap period, which this would have caught above 32.768s.
+    #[test]
+    fn the_packet_time_survives_the_header() {
+        const KEY: [u8; 16] = [0x42; 16];
+
+        let parts = SnapshotParts::default();
+
+        for time in (0..=u16::MAX).step_by(DOWNLINK_MESSAGE_INTERVAL_MS as usize) {
+            let msg = DownlinkMessage::Heartbeat(HeartbeatMessage::pack(&parts.snapshot()));
+            let packet = msg
+                .encode(time, &KEY)
+                .expect("message did not fit its packet");
+            let (recovered, _) =
+                DownlinkMessage::decode(packet, &KEY).expect("packet did not decode");
+
+            assert_eq!(recovered, time);
+        }
+    }
+
+    #[test]
+    fn full_scale_scaling_round_trips_within_one_code() {
+        for full_scale in [2.0, 55.0, 60.0, 300.0] {
+            for fraction in [0.0, 0.01, 0.5, 0.99, 1.0] {
+                let value = full_scale * fraction;
+                let recovered =
+                    unpack_full_scale(pack_full_scale(Some(value), full_scale), full_scale)
+                        .expect("a finite reading came back as unknown");
+                assert!(
+                    (recovered - value).abs() <= full_scale / FULL_SCALE,
+                    "{value} of {full_scale} came back as {recovered}"
+                );
+            }
+        }
+
+        assert_eq!(unpack_full_scale(pack_full_scale(None, 55.0), 55.0), None);
+        assert_eq!(
+            unpack_full_scale(pack_full_scale(Some(f32::NAN), 55.0), 55.0),
+            None
+        );
+        // Over-range saturates rather than wrapping into a plausible low reading.
+        assert_eq!(pack_full_scale(Some(1000.0), 55.0), u8::MAX - 1);
+        assert_eq!(pack_full_scale(Some(-1000.0), 55.0), 0);
+    }
+
+    #[test]
+    fn temperature_scaling_round_trips_within_half_a_degree() {
+        for celsius in [-60.0, -30.0, 0.0, 20.0, 36.4, 67.0] {
+            let recovered = unpack_temperature(pack_temperature(Some(celsius)))
+                .expect("a finite temperature came back as unknown");
+            assert!(
+                (recovered - celsius).abs() <= 0.5,
+                "{celsius} C came back as {recovered}"
+            );
+        }
+
+        assert_eq!(unpack_temperature(pack_temperature(None)), None);
+    }
+
+    /// One packet per interval, no gaps, and the slot pattern the module documents.
+    #[test]
+    fn the_slot_pattern_repeats_and_leaves_no_gaps() {
+        let parts = SnapshotParts::default();
+        let snapshot = parts.snapshot();
+
+        let mut built = 0;
+        for time_ms in 0..(DownlinkMessage::SLOT_COUNT * DOWNLINK_MESSAGE_INTERVAL_MS * 2) {
+            let Some(msg) = DownlinkMessage::for_tick(time_ms, &snapshot, RadioStatus::default())
+            else {
+                continue;
+            };
+            built += 1;
+
+            let slot = (time_ms / DOWNLINK_MESSAGE_INTERVAL_MS) % DownlinkMessage::SLOT_COUNT;
+            let expected = match slot {
+                1 | 9 => PressuresMessage::ID,
+                3 | 11 => ComponentsMessage::ID,
+                5 | 13 => StatusMessage::ID,
+                7 | 15 => SensorsMessage::ID,
+                14 => GpsMessage::ID,
+                _ => HeartbeatMessage::ID,
+            };
+
+            let packet = msg
+                .encode(time_ms as u16, &[0x42; 16])
+                .expect("message did not fit its packet");
+            assert_eq!(packet[1] & 0b11111, expected, "slot {slot} at {time_ms} ms");
+        }
+
+        assert_eq!(built, DownlinkMessage::SLOT_COUNT * 2);
+    }
+
+    /// Every payload has to be the same length whatever the vehicle put in it: the packet is a
+    /// fixed size, so a value-dependent length is a packet that overflows in flight rather than on
+    /// the bench. This is what catches a field that lost its `fixint` annotation.
+    #[test]
+    fn no_payload_length_depends_on_its_values() {
+        fn lengths(parts: &SnapshotParts) -> [usize; 6] {
+            let s = parts.snapshot();
+            [
+                encoded_len(&HeartbeatMessage::pack(&s)),
+                encoded_len(&StatusMessage::pack((&s, RadioStatus::default()))),
+                encoded_len(&PressuresMessage::pack(&s)),
+                encoded_len(&ComponentsMessage::pack(&s)),
+                encoded_len(&SensorsMessage::pack(&s)),
+                encoded_len(&GpsMessage::pack(&s)),
+            ]
+        }
+
+        let mut parts = SnapshotParts::default();
+        let empty = lengths(&parts);
+
+        // Every reading present and large, which is where varints would have grown.
+        parts.readings = sensors::tests::saturated_readings();
+        parts.inputs = pressures::tests::saturated_inputs();
+        parts.outputs = components::tests::saturated_outputs();
+        parts.estimator = heartbeat::tests::flying_estimator();
+        // After the readings, which the line above replaces wholesale.
+        parts.readings.gps = Some(gps::tests::saturated_gps());
+        let full = lengths(&parts);
+
+        assert_eq!(empty, full, "a payload length depends on the values in it");
+        for len in full {
+            assert!(len <= DOWNLINK_PAYLOAD_SIZE);
+        }
     }
 }
-
-// /// TODO
-// #[derive(Debug, Serialize, Deserialize)]
-// pub struct GpsMessage {
-//     fix_type: u8,
-//     latitude: i32,
-//     longitude: i32,
-//     altitude: i32,
-//     eph: u8,
-//     epv: u8,
-//     satellites_visible: u8,
-// }
-//
-// impl DownlinkTelemetryMessage for GpsMessage {
-//     const ID: u8 = 0x03;
-//     type Input = GpsRawInt;
-//     type Output = GpsRawInt;
-//
-//     fn pack(input: Self::Input) -> Self {
-//         Self {
-//             fix_type: input.fix_type as u8,
-//             latitude: input.lat,
-//             longitude: input.lon,
-//             altitude: input.alt,
-//             eph: input.eph as u8, // TODO
-//             epv: input.epv as u8, // TODO
-//             satellites_visible: input.satellites_visible,
-//         }
-//     }
-//
-//     fn unpack<PROFILE>(self, context: &mut ConnectionContext) -> Self::Output {
-//         GpsRawInt {
-//             time_usec: 0,                                // TODO
-//             fix_type: self.fix_type.try_into().unwrap(), // TODO
-//             lat: self.latitude,
-//             lon: self.longitude,
-//             alt: self.altitude,
-//             eph: self.eph as u16,
-//             epv: self.epv as u16,
-//             vel: u16::MAX,
-//             cog: u16::MAX,
-//             satellites_visible: self.satellites_visible,
-//             ..Default::default()
-//         }
-//     }
-// }
-//
-// /// TODO
-// #[derive(Debug, Serialize, Deserialize)]
-// pub struct BatteryMessage {
-//     /// Determines the IDs of the batteries contained in this message:
-//     ///     0: 0&1,  1: 2&3,  etc.
-//     id_block: u8,
-//     /// reserved for charging states or errors
-//     reserved_for_states_or_modes: [u8; 2],
-//     temperature: [u8; 2],
-//     voltage: [u16; 2],
-//     current: [u16; 2],
-//     current_consumed: [u16; 2],
-// }
-
-// impl DownlinkTelemetryMessage for BatteryMessage {
-//     const ID: u8 = 0x04;
-//     type Input = (BatteryStatus, Option<BatteryStatus>);
-//     type Output = (
-//         BatteryStatus,
-//         BatteryInfo,
-//         Option<BatteryStatus>,
-//         Option<BatteryInfo>,
-//     );
-// }
-//
-// /// TODO
-// pub struct DiagnosticsMessage {
-//     time_since_boot_ms: u32,
-//     // sensor health
-//     gyro_healthy: bool,
-//     accel_healthy: bool,
-//     mag_healthy: bool,
-//     absolute_pressure_healthy: bool,
-//     differential_pressure_healthy: bool,
-//     gps_healthy: bool,
-//     other_positioning_healthy: bool,
-//     battery_healthy: bool,
-//     // subsystems / outputs / other checks
-//     prearm_check: bool,
-//     ahrs_healthy: bool,
-//     rc_link_healthy: bool,
-//     propulsion_healthy: bool,
-//     recovery_system_healthy: bool,
-//     proximity_or_obstacle: bool,
-//     geofence_or_terrain: bool,
-//     motors_reversed: bool,
-//     // error counts
-//     load: u16,
-//     drop_rate_comm: u8,
-//     communication_errors: u8,
-//     errors_count1: u8,
-//     errors_count2: u8,
-//     errors_count3: u8,
-//     remote_rssi: (), // TODO
-//     remote_snr: (),
-// }
-//
-// impl DownlinkTelemetryMessage for DiagnosticsMessage {
-//     const ID: u8 = 0x05;
-//     type Input = (SysStatus, RadioStatus);
-//     type Output = (SysStatus, RadioStatus);
-//
-//     fn pack((sys_status, radio_status): Self::Input) -> Self {
-//         Self {
-//             load: sys_status.load,
-//             drop_rate_comm: sys_status.drop_rate_comm,
-//         }
-//     }
-//
-//     fn unpack<PROFILE>(self) -> Self::Output {
-//         let sys_status = SysStatus {
-//             onboard_control_sensors_present: MavSysStatusSensor::empty(),
-//             onboard_control_sensors_enabled: MavSysStatusSensor::empty(),
-//             onboard_control_sensors_health: MavSysStatusSensor::empty(),
-//             load: self.load,
-//             voltage_battery: u16::MAX,
-//             current_battery: -1,
-//             battery_remaining: -1,
-//             drop_rate_comm: self.drop_rate_comm,
-//             errors_comm: 0,
-//             errors_count1: 0,
-//             errors_count2: 0,
-//             errors_count3: 0,
-//             errors_count4: 0,
-//             ..Default::default()
-//         };
-//
-//         let radio_status = RadioStatus {
-//             ..Default::default()
-//         };
-//
-//         (sys_status, radio_status)
-//     }
-// }
-//
-// /// TODO
-// pub struct BarometersMessage {
-//     pressures: [f32; 3],
-//     temperatures: [u8; 3],
-//     // TODO
-// }
-//
-// impl DownlinkTelemetryMessage for BarometersMessage {
-//     const ID: u8 = 0x06;
-//     type Input = (
-//         ScaledPressure,
-//         Option<ScaledPressure2>,
-//         Option<ScaledPressure3>,
-//     );
-//     type Output = (
-//         ScaledPressure,
-//         Option<ScaledPressure2>,
-//         Option<ScaledPressure3>,
-//     );
-// }
-//
-// // 0x06 reserved for imu message
-//
-// /// TODO
-// pub struct PressureVesselsMessage {
-//     id_block: u8,
-//     pressure1: [u16; 2],
-//     pressure2: [u16; 2],
-//     temperature1: [u8; 2],
-//     temperature2: [u8; 2],
-//     fill_level: [u8; 2],
-// }
-//
-// impl DownlinkTelemetryMessage for PressureVesselsMessage {
-//     const ID: u8 = 0xff; // TODO
-//     type Input = ();
-//     type Output = ();
-// }
-//
-// /// TODO
-// pub struct ActuatorsMessage {
-//     id_block: u8,
-//     actuators: [u8; 8],
-// }
-//
-// impl DownlinkTelemetryMessage for PressureVesselsMessage {
-//     const ID: u8 = 0xff; // TODO
-//     type Input = (GlobalPositionInt, GpsStatus);
-//     type Output = (GlobalPositionInt, GpsStatus);
-// }
-//
-// /// TODO
-// pub struct StateEstimatorMessage {
-//     position_xy: (f16, f16),
-//     acceleration: (f16, f16, f16),
-//     position_variance: f16,
-//     horizontal_velocity_variance: f16,
-//     vertical_velocity_variance: f16,
-// }
-//
-// impl DownlinkTelemetryMessage for StateEstimatorMessage {
-//     const ID: u8 = 0xff; // TODO
-//     type Input = LocalPositionNedCov;
-//     type Output = LocalPositionNedCov;
-// }
-//
-// /// TODO
-// pub struct ComponentsMessage {
-//     id_block: u8,
-//     modes: [u8; 4],
-//     flags_or_errors: [u8; 4],
-//     // TODO
-// }
-//
-// impl DownlinkTelemetryMessage for ComponentsMessage {
-//     const ID: u8 = 0xff; // TODO
-//     type Input = ();
-//     type Output = ();
-// }

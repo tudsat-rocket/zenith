@@ -3,7 +3,7 @@
 use core::marker::PhantomData;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_time::{Delay, Duration, Instant, Ticker, Timer, with_deadline};
+use embassy_time::{Delay, Duration, Instant, Timer, with_deadline};
 
 use lora_phy::mod_params::{ModulationParams, PacketParams, PacketStatus, RadioError};
 use lora_phy::mod_traits::{IrqState, RadioKind};
@@ -14,9 +14,10 @@ use rapid_dialect::rapid::messages::RadioStatus;
 
 use utils::anychannel::AnySender;
 
-use crate::config::{FREQUENCIES, LinkConfig, SEQUENCE_LENGTH};
+use crate::config::LinkConfig;
 use crate::messages::{
-    ConnectionContext, DOWNLINK_PACKET_SIZE, DownlinkMessage, TelemetryMessage, UplinkMessage,
+    ConnectionContext, DOWNLINK_PACKET_SIZE, DOWNLINK_TIME_MASK, DownlinkMessage, TelemetryMessage,
+    UPLINK_SEQ_MODULO, UplinkMessage,
 };
 use crate::trx::MAX_CONSECUTIVE_ERRORS;
 use crate::{DOWNLINK_MESSAGE_INTERVAL_MS, UplinkCommand};
@@ -31,6 +32,15 @@ impl From<RadioError> for ReceiveError {
     fn from(value: RadioError) -> Self {
         Self::Radio(value)
     }
+}
+
+/// What the uplink receiver knows about the state of the link.
+#[derive(Clone, Copy)]
+pub struct UplinkStats {
+    pub measured_at: Instant,
+    pub rssi: i8,
+    pub snr: i8,
+    pub packet_loss: f32,
 }
 
 pub struct HoppingReceiver<RK: RadioKind, M: TelemetryMessage, S: AnySender<M::Output>> {
@@ -159,8 +169,9 @@ impl<RK: RadioKind, M: TelemetryMessage, S: AnySender<M::Output>> HoppingReceive
 
 impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S> {
     const CONNECTION_LOST_TIMEOUT_MS: u64 = 2000;
-    const SWEEP_DURATION_PER_FREQUENCY_MS: u64 =
-        (SEQUENCE_LENGTH as u64) * (DOWNLINK_MESSAGE_INTERVAL_MS as u64);
+
+    /// How many worst-case gaps in the hopping sequence to spend on one channel before moving on.
+    const SWEEP_GAPS_PER_FREQUENCY: u64 = 3;
 
     #[allow(
         clippy::arithmetic_side_effects,
@@ -171,17 +182,29 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
         mut connection_sender: CONN,
     ) -> ! {
         let mut consecutive_errors = 0;
+        let channels = self.config.channels();
+
+        let timeout = Duration::from_millis(
+            Self::SWEEP_GAPS_PER_FREQUENCY
+                * (self.config.max_hop_gap() as u64)
+                * (DOWNLINK_MESSAGE_INTERVAL_MS as u64),
+        );
+        defmt::info!("Sweep dwell: {} ms per channel.", timeout.as_millis());
 
         loop {
             defmt::info!("Sweeping downlink frequencies");
 
-            for f in FREQUENCIES.iter().cycle() {
+            for f in channels.iter().cycle() {
                 defmt::info!("Listening on {}.", f);
 
-                let timeout = Duration::from_millis(Self::SWEEP_DURATION_PER_FREQUENCY_MS);
                 let deadline = Instant::now() + timeout;
 
                 match self.receive_until(*f, deadline).await {
+                    // A packet that claims an unexpected time is almost certainly not valid.
+                    Ok(Some((time, ..))) if self.config.frequency(time) != *f => {
+                        defmt::warn!("Ignoring packet claiming a time from another channel.");
+                        consecutive_errors = 0;
+                    }
                     Ok(Some((time, msg, _status))) => {
                         consecutive_errors = 0;
 
@@ -248,11 +271,8 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
         let mut context = ConnectionContext::init(time);
         initial_msg.unpack(&mut self.sender, &mut context).await;
 
-        // If we ever momentarily lose connection for a few packets, we need to be able to keep up with
-        // the hopping sequence, so we use this ticker. The ticker is reset for every received message
-        // to avoid this ticker drifting apart from the one driving transmissions on the vehicle side.
         let timeout = Duration::from_millis(DOWNLINK_MESSAGE_INTERVAL_MS as u64);
-        let mut ticker = Ticker::every(timeout);
+        let mut deadline = Instant::now() + timeout;
 
         let mut packet_history: heapless::Deque<(Instant, u16), 128> = heapless::Deque::new();
 
@@ -262,11 +282,14 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
                 return;
             }
 
-            let t = Instant::now();
-            let deadline = t + timeout;
             let next_time = time.wrapping_add(DOWNLINK_MESSAGE_INTERVAL_MS as u16);
 
             match self.receive_slot_until(next_time, deadline).await {
+                // The packet has to carry the time of the slot we tuned for, and accepting a
+                // packet with a garbled time could mess up our hop following.
+                Ok(Some((t, ..))) if t != next_time & DOWNLINK_TIME_MASK => {
+                    defmt::warn!("Discarding packet from outside the expected slot.");
+                }
                 Ok(Some((t, msg, status))) => {
                     // Since we just received a packet, if we reset all our timers right away, and
                     // wait for a full interval exactly on the next round, we might occasionally
@@ -276,9 +299,10 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
                     Timer::after(Duration::from_millis(1)).await;
 
                     last_packet = Instant::now();
-                    ticker.reset();
+                    deadline = last_packet + timeout;
                     time = t;
 
+                    context.advance(t);
                     msg.unpack(&mut self.sender, &mut context).await;
 
                     connection_sender.anysend(Some((last_packet, t))).await;
@@ -302,11 +326,14 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
                 }
                 Ok(None) => {
                     defmt::warn!("Missed packet.");
+                    deadline += timeout;
                     time = next_time;
                 }
                 Err(e) => {
                     defmt::warn!("Failed receiving packet: {:?}.", defmt::Debug2Format(&e));
-                    ticker.next().await;
+                    // Sit out the rest of the slot.
+                    Timer::at(deadline).await;
+                    deadline += timeout;
                     time = next_time;
                 }
             }
@@ -319,7 +346,7 @@ impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessa
         clippy::arithmetic_side_effects,
         reason = "bounded packet-loss counting and hop-timing math"
     )]
-    pub async fn run_uplink<STATS: AnySender<(i8, i8, f32)>>(
+    pub async fn run_uplink<STATS: AnySender<UplinkStats>>(
         mut self,
         mut stat_sender: STATS,
         mut time_receiver: embassy_sync::watch::Receiver<
@@ -383,6 +410,9 @@ impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessa
                 let _ = packet_history.pop_front();
             }
 
+            if packet_history.is_full() {
+                let _ = packet_history.pop_front();
+            }
             let _ = packet_history.push_back((Instant::now(), seq));
 
             let lost_packets = packet_history
@@ -391,17 +421,24 @@ impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessa
                     if let Some(last) = last_seq
                         && last != *seq
                     {
-                        total += (seq.wrapping_sub(last) - 1) as u32;
+                        total += u32::from(
+                            (seq.wrapping_sub(last) % UPLINK_SEQ_MODULO).saturating_sub(1),
+                        );
                     }
                     last_seq = Some(*seq);
                     (total, last_seq)
                 })
                 .0 as f32;
 
-            let packet_loss = lost_packets / (lost_packets + packet_history.iter().count() as f32);
+            let packet_loss = lost_packets / (lost_packets + packet_history.len() as f32);
 
             stat_sender
-                .anysend(((status.rssi as i8), (status.snr as i8), packet_loss))
+                .anysend(UplinkStats {
+                    measured_at: Instant::now(),
+                    rssi: status.rssi as i8,
+                    snr: status.snr as i8,
+                    packet_loss,
+                })
                 .await;
 
             last_seq = seq;
@@ -416,6 +453,13 @@ impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessa
                         continue;
                     };
                     UplinkCommand::SetFlightMode(mode)
+                }
+                UplinkMessage::SetValve(inner) => {
+                    let Some((valve, command)) = inner.command() else {
+                        defmt::warn!("Discarding uplink command for an unknown valve.");
+                        continue;
+                    };
+                    UplinkCommand::CommandValve(valve, command)
                 }
             };
 
