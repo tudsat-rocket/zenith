@@ -46,13 +46,11 @@ impl VehicleSnapshot<'_> {
     /// At most one message goes out per tick, the phases coming from [`crate::schedule`].
     pub fn send_telemetry(&self, link: &mut impl TelemetryLink) {
         downlink_schedule! { self.time.0, self, link:
-            every 50 ms => Attitude, ScaledImu;
-            every 100 ms =>
-                LocalPositionNed, VfrHud, ScaledImu2, ScaledImu3,
+            every 100 ms => Attitude, VfrHud, ScaledImu, ScaledImu2, ScaledImu3;
+            every 200 ms => BatteryStatus, LocalPositionNed,
                 ScaledPressure, ScaledPressure2, ScaledPressure3;
-            every 200 ms => BatteryStatus;
             every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt;
-            every 1000 ms => RocketInfo, AutopilotVersion;
+            every 2000 ms => RocketInfo, AutopilotVersion;
             // One message per component
             every 200 ms => PressureVessel[TankId::ALL], Valve[ValveId::ALL];
         }

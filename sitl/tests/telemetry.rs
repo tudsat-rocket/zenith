@@ -48,22 +48,22 @@ fn every_message_goes_out_at_its_intended_rate() {
         let sent: Vec<&Rapid> = per_tick.iter().flatten().collect();
 
         assert_rates! { sent,
-            Attitude every 50,
-            ScaledImu every 50,
-            LocalPositionNed every 100,
+            Attitude every 100,
             VfrHud every 100,
+            ScaledImu every 100,
             ScaledImu2 every 100,
             ScaledImu3 every 100,
-            ScaledPressure every 100,
-            ScaledPressure2 every 100,
-            ScaledPressure3 every 100,
             BatteryStatus every 200,
+            LocalPositionNed every 200,
+            ScaledPressure every 200,
+            ScaledPressure2 every 200,
+            ScaledPressure3 every 200,
             Heartbeat every 500,
             SysStatus every 500,
             GlobalPositionInt every 500,
             GpsRawInt every 500,
-            RocketInfo every 1000,
-            AutopilotVersion every 1000,
+            RocketInfo every 2000,
+            AutopilotVersion every 2000,
         }
 
         // The instance messages take one slot each, so a single component can silently drop out
