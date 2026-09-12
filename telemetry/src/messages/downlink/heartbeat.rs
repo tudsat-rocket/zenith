@@ -130,7 +130,10 @@ impl DownlinkTelemetryMessage for HeartbeatMessage {
 
         let altitude_code =
             (u32::from(self.mode_and_altitude & 0b1) << 16) | u32::from(self.altitude_local);
+
         let altitude_agl = (altitude_code as f32) / ALTITUDE_CODES_PER_M - ALTITUDE_OFFSET_M;
+        context.altitude_agl = Some(altitude_agl);
+
         // The packet carries AGL; the ground's own altitude has to come from somewhere else.
         let altitude_amsl = context
             .altitude_ground_asl
@@ -228,6 +231,7 @@ pub(crate) mod tests {
         estimator.kalman.x[4] = -300.0;
         estimator.kalman.x[5] = 500.0;
         estimator.orientation = Some(UnitQuaternion::from_euler_angles(0.4, -0.8, 2.0));
+        estimator.altitude_ground = 2500.0;
         estimator
     }
 
@@ -404,7 +408,7 @@ pub(crate) mod tests {
         assert_eq!(altitude.bottom_clearance, BOTTOM_CLEARANCE_UNKNOWN);
     }
 
-    /// Nothing populates the ground altitude yet, but the reconstruction hangs off it.
+    /// The ground altitude arrives on [`super::super::GpsMessage`]; every AMSL hangs off it.
     #[test]
     fn a_known_ground_altitude_turns_agl_into_amsl() {
         let mut parts = SnapshotParts::default();

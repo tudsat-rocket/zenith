@@ -14,12 +14,14 @@ use crate::TelemetryError;
 use crate::messages::TelemetryMessage;
 
 mod components;
+mod gps;
 mod heartbeat;
 mod pressures;
 mod sensors;
 mod status;
 
 pub use components::ComponentsMessage;
+pub use gps::GpsMessage;
 pub use heartbeat::HeartbeatMessage;
 pub use pressures::PressuresMessage;
 pub use sensors::SensorsMessage;
@@ -55,6 +57,9 @@ pub struct ConnectionContext {
     pub time: u32,
     /// The last received ground altitude in meters above sea-level, if known
     pub altitude_ground_asl: Option<f32>,
+    /// The last received altitude above ground level, if known.
+    /// Used to enrich messages that carry a position but no altitude of their own.
+    pub altitude_agl: Option<f32>,
     /// Received signal strength indicator (RSSI) of downlink packets received.
     /// Used to enrich RADIO_STATUS messages with ground-side information.
     pub rx_rssi: Option<u8>,
@@ -78,6 +83,7 @@ impl ConnectionContext {
         Self {
             time: time as u32,
             altitude_ground_asl: None,
+            altitude_agl: None,
             rx_rssi: None,
             rx_noise: None,
             rx_packet_loss: None,
@@ -116,13 +122,13 @@ pub enum DownlinkMessage {
     Pressures(PressuresMessage),
     Components(ComponentsMessage),
     Sensors(SensorsMessage),
-    // 0x06 is reserved for a GPS message.
+    Gps(GpsMessage),
 }
 
 impl DownlinkMessage {
     /// How many packets the pattern in [`Self::for_tick`] repeats over. One cycle is
-    /// `SLOT_COUNT * DOWNLINK_MESSAGE_INTERVAL_MS`, or 256 ms.
-    const SLOT_COUNT: u32 = 8;
+    /// `SLOT_COUNT * DOWNLINK_MESSAGE_INTERVAL_MS`, or 512 ms.
+    const SLOT_COUNT: u32 = 16;
 
     /// Which message goes out on this tick of the vehicle's main loop, or `None` on the ticks
     /// between packets. The RF counterpart of `VehicleSnapshot::send_telemetry`, which decides the
@@ -148,12 +154,15 @@ impl DownlinkMessage {
         )]
         let slot = (time_ms / DOWNLINK_MESSAGE_INTERVAL_MS) % Self::SLOT_COUNT;
 
+        // The four packed messages repeat over each half of the cycle, so the GPS slot is paid
+        // for out of the heartbeat's share alone.
         Some(match slot {
-            1 => Self::Pressures(PressuresMessage::pack(snapshot)),
-            3 => Self::Components(ComponentsMessage::pack(snapshot)),
-            5 => Self::Status(StatusMessage::pack((snapshot, uplink))),
-            7 => Self::Sensors(SensorsMessage::pack(snapshot)),
-            // Every other slot, so the heartbeat keeps half the link to itself.
+            1 | 9 => Self::Pressures(PressuresMessage::pack(snapshot)),
+            3 | 11 => Self::Components(ComponentsMessage::pack(snapshot)),
+            5 | 13 => Self::Status(StatusMessage::pack((snapshot, uplink))),
+            7 | 15 => Self::Sensors(SensorsMessage::pack(snapshot)),
+            14 => Self::Gps(GpsMessage::pack(snapshot)),
+            // Every remaining slot, so the heartbeat keeps most of the link to itself.
             _ => Self::Heartbeat(HeartbeatMessage::pack(snapshot)),
         })
     }
@@ -177,6 +186,7 @@ impl TelemetryMessage for DownlinkMessage {
             Self::Pressures(inner) => (PressuresMessage::ID, inner.serialize()?),
             Self::Components(inner) => (ComponentsMessage::ID, inner.serialize()?),
             Self::Sensors(inner) => (SensorsMessage::ID, inner.serialize()?),
+            Self::Gps(inner) => (GpsMessage::ID, inner.serialize()?),
         };
 
         let mut buffer = [0x00; DOWNLINK_PACKET_SIZE];
@@ -221,6 +231,7 @@ impl TelemetryMessage for DownlinkMessage {
             PressuresMessage::ID => DownlinkMessage::Pressures(postcard::from_bytes(payload)?),
             ComponentsMessage::ID => DownlinkMessage::Components(postcard::from_bytes(payload)?),
             SensorsMessage::ID => DownlinkMessage::Sensors(postcard::from_bytes(payload)?),
+            GpsMessage::ID => DownlinkMessage::Gps(postcard::from_bytes(payload)?),
             id => {
                 return Err(TelemetryError::UnknownMessageId(id));
             }
@@ -263,6 +274,11 @@ impl TelemetryMessage for DownlinkMessage {
                 let (imu, pressure) = inner.unpack(context);
                 sender.anysend(Rapid::ScaledImu(imu)).await;
                 sender.anysend(Rapid::ScaledPressure(pressure)).await;
+            }
+            Self::Gps(inner) => {
+                let (raw, global) = inner.unpack(context);
+                sender.anysend(Rapid::GpsRawInt(raw)).await;
+                sender.anysend(Rapid::GlobalPositionInt(global)).await;
             }
         }
     }
@@ -519,10 +535,11 @@ pub(crate) mod tests {
 
             let slot = (time_ms / DOWNLINK_MESSAGE_INTERVAL_MS) % DownlinkMessage::SLOT_COUNT;
             let expected = match slot {
-                1 => PressuresMessage::ID,
-                3 => ComponentsMessage::ID,
-                5 => StatusMessage::ID,
-                7 => SensorsMessage::ID,
+                1 | 9 => PressuresMessage::ID,
+                3 | 11 => ComponentsMessage::ID,
+                5 | 13 => StatusMessage::ID,
+                7 | 15 => SensorsMessage::ID,
+                14 => GpsMessage::ID,
                 _ => HeartbeatMessage::ID,
             };
 
@@ -540,7 +557,7 @@ pub(crate) mod tests {
     /// the bench. This is what catches a field that lost its `fixint` annotation.
     #[test]
     fn no_payload_length_depends_on_its_values() {
-        fn lengths(parts: &SnapshotParts) -> [usize; 5] {
+        fn lengths(parts: &SnapshotParts) -> [usize; 6] {
             let s = parts.snapshot();
             [
                 encoded_len(&HeartbeatMessage::pack(&s)),
@@ -548,6 +565,7 @@ pub(crate) mod tests {
                 encoded_len(&PressuresMessage::pack(&s)),
                 encoded_len(&ComponentsMessage::pack(&s)),
                 encoded_len(&SensorsMessage::pack(&s)),
+                encoded_len(&GpsMessage::pack(&s)),
             ]
         }
 
@@ -559,6 +577,8 @@ pub(crate) mod tests {
         parts.inputs = pressures::tests::saturated_inputs();
         parts.outputs = components::tests::saturated_outputs();
         parts.estimator = heartbeat::tests::flying_estimator();
+        // After the readings, which the line above replaces wholesale.
+        parts.readings.gps = Some(gps::tests::saturated_gps());
         let full = lengths(&parts);
 
         assert_eq!(empty, full, "a payload length depends on the values in it");

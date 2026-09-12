@@ -13,10 +13,10 @@ use mission::inventory::InventoryId;
 use rapid_dialect::Rapid;
 use rapid_dialect::rapid::enums::ValveId;
 
-/// Two full cycles of the slowest (1000 ms) interval, so every combination of phases that can
+/// Two full cycles of the slowest (2000 ms) interval, so every combination of phases that can
 /// coincide has had the chance to. Every interval in the schedule has to divide this, or the
 /// expected counts below stop being whole numbers.
-const TICKS: u32 = 2000;
+const TICKS: u32 = 4000;
 
 /// How often each message is expected on the downlink, restated independently of the schedule that
 /// implements it - a message that loses its offset or ends up on the wrong interval is otherwise
