@@ -14,7 +14,7 @@ use rapid_dialect::rapid::messages::RadioStatus;
 
 use utils::anychannel::AnySender;
 
-use crate::config::{FREQUENCIES, LinkConfig, SEQUENCE_LENGTH};
+use crate::config::{LinkConfig, SEQUENCE_LENGTH};
 use crate::messages::{
     ConnectionContext, DOWNLINK_PACKET_SIZE, DOWNLINK_TIME_MASK, DownlinkMessage, TelemetryMessage,
     UPLINK_SEQ_MODULO, UplinkMessage,
@@ -181,11 +181,12 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
         mut connection_sender: CONN,
     ) -> ! {
         let mut consecutive_errors = 0;
+        let channels = self.config.channels();
 
         loop {
             defmt::info!("Sweeping downlink frequencies");
 
-            for f in FREQUENCIES.iter().cycle() {
+            for f in channels.iter().cycle() {
                 defmt::info!("Listening on {}.", f);
 
                 let timeout = Duration::from_millis(Self::SWEEP_DURATION_PER_FREQUENCY_MS);

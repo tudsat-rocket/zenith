@@ -118,6 +118,15 @@ impl LinkConfig<'_> {
         sequence
     }
 
+    /// The frequencies this link actually uses
+    pub fn channels(&self) -> heapless::Vec<u32, NUM_FREQUENCIES> {
+        FREQUENCIES
+            .iter()
+            .zip(self.frequency_mask)
+            .filter_map(|(f, in_use)| in_use.then_some(*f))
+            .collect()
+    }
+
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "modular hop index, divisor is a nonzero const"
@@ -155,6 +164,24 @@ impl LinkConfig<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two directions divide the band up between them. An overlap would put uplink
+    /// transmissions on a channel the vehicle is trying to be heard on.
+    #[test]
+    fn the_two_directions_do_not_share_a_channel() {
+        for (down, up) in DOWNLINK_FREQUENCY_MASK
+            .into_iter()
+            .zip(UPLINK_FREQUENCY_MASK)
+        {
+            assert!(!(down && up));
+        }
+
+        let downlink = DEFAULT_DOWNLINK_CONFIG.channels();
+        let uplink = DEFAULT_UPLINK_CONFIG.channels();
+
+        assert_eq!(downlink.len() + uplink.len(), NUM_FREQUENCIES);
+        assert!(downlink.iter().all(|f| !uplink.contains(f)));
+    }
 
     /// Radio setup plus time-on-air of one uplink packet, i.e. how long a transmission occupies
     /// the ground station between two calls to [`LinkConfig::next_transmission_time`].
