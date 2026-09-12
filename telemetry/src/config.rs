@@ -39,9 +39,17 @@ const UPLINK_FREQUENCY_MASK: [bool; NUM_FREQUENCIES] = [
 /// How far into a downlink message interval a transmission should start.
 const DOWNLINK_OFFSET_MS: u16 = 1;
 
-/// How much room a transmission needs before the end of a hopping slot: its own time-on-air,
-/// plus slack for the ground station's estimate of the vehicle's clock.
-const HOP_GUARD_MS: u16 = 40;
+/// Time-on-air of one 16 byte packet at SF7, 500 kHz and CR 4/5, rounded up.
+const TIME_ON_AIR_MS: u16 = 12;
+
+/// How far behind the vehicle the ground station's estimate of its clock runs: the setup and
+/// time-on-air of the downlink packet the estimate was taken from, plus the ground station's own
+/// handling before it timestamps that packet.
+const CLOCK_LAG_MS: u16 = 16;
+
+/// How much room a transmission needs before the end of a hopping slot, measured from its start
+/// on the estimated clock: the lag against that estimate, and then its own time-on-air.
+const HOP_GUARD_MS: u16 = CLOCK_LAG_MS + TIME_ON_AIR_MS;
 
 /// Skipping a hopping slot in [`LinkConfig::next_transmission_time`] adds the remainder of that
 /// slot to a time already on the downlink grid, which lands back on the grid only if the two
@@ -150,11 +158,7 @@ mod tests {
 
     /// Radio setup plus time-on-air of one uplink packet, i.e. how long a transmission occupies
     /// the ground station between two calls to [`LinkConfig::next_transmission_time`].
-    const TRANSMISSION_MS: u16 = 15;
-
-    /// Time-on-air alone (16 bytes, SF7, 500 kHz, CR 4/5, rounded up), measured from the moment
-    /// the packet starts going out.
-    const TIME_ON_AIR_MS: u16 = 12;
+    const TRANSMISSION_MS: u16 = TIME_ON_AIR_MS + 3;
 
     #[test]
     fn transmissions_sit_on_the_downlink_grid_and_clear_of_the_next_hop() {
@@ -180,9 +184,9 @@ mod tests {
         let config = &DEFAULT_UPLINK_CONFIG;
 
         // Our clock estimate is the timestamp of the last downlink packet plus the time since it
-        // arrived, so it lags the vehicle by that packet's time-on-air and by whatever the
-        // vehicle's scheduler put in front of it. We do not know that lag, so cover a range.
-        for lag in 0..=20u16 {
+        // arrived, so it lags the vehicle. This is what [`CLOCK_LAG_MS`] has to cover: the whole
+        // scheme holds only as far as the real lag stays under it.
+        for lag in 0..=CLOCK_LAG_MS {
             for start in 0..(SEQUENCE_LENGTH as u16 * UPLINK_HOP_INTERVAL_MS as u16) {
                 let mut t = start;
 
