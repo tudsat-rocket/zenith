@@ -10,7 +10,7 @@ use crate::flight_logic::FlightLogic;
 use crate::inventory::BinaryOutputId;
 use crate::leds::LedState;
 use crate::mavlink::VehicleSnapshot;
-use crate::params::{FailsafeParams, Params, PropulsionParams, StateMachineParams};
+use crate::params::{FailsafeParams, MiscParams, Params, PropulsionParams, StateMachineParams};
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
 use crate::valves::{ValveCommand, ValveController, ValveError};
 
@@ -23,6 +23,7 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     state_machine_params: StateMachineParams,
     propulsion_params: PropulsionParams,
     failsafe_params: FailsafeParams,
+    misc_params: MiscParams,
     pub sensors: S,
     pub outputs: O,
     pub storage: F,
@@ -53,6 +54,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             state_machine_params: params.state_machine,
             propulsion_params: params.propulsion,
             failsafe_params: params.failsafe,
+            misc_params: params.misc,
             sensors,
             outputs,
             storage,
@@ -168,6 +170,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             state_machine: self.state_machine_params.clone(),
             propulsion: self.propulsion_params.clone(),
             failsafe: self.failsafe_params.clone(),
+            misc: self.misc_params.clone(),
         };
 
         params.set(descriptor.id, value);
@@ -176,9 +179,14 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.state_machine_params = params.state_machine;
         self.propulsion_params = params.propulsion;
         self.failsafe_params = params.failsafe;
+        self.misc_params = params.misc;
         self.state_estimator.update_params(params.state_estimator);
 
         self.storage.write_param(descriptor.id, value);
+    }
+
+    pub fn misc_params(&self) -> &MiscParams {
+        &self.misc_params
     }
 
     pub fn snapshot(&self) -> VehicleSnapshot<'_> {
