@@ -497,6 +497,7 @@ pub(crate) mod tests {
         parts.readings = sensors::tests::saturated_readings();
         parts.inputs = pressures::tests::saturated_inputs();
         parts.outputs = components::tests::saturated_outputs();
+        parts.estimator = heartbeat::tests::flying_estimator();
         let full = lengths(&parts);
 
         assert_eq!(empty, full, "a payload length depends on the values in it");
