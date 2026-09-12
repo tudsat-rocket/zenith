@@ -31,11 +31,27 @@ pub struct StateMachineParams {
     #[param(id = 0x0200, name = "MAIN_ALT", default = 400.0)]
     pub main_deploy_altitude: f32,
     /// Minimum time (ms) after launch before allowing drogue deployment
-    #[param(id = 0x0201, name = "MIN_T_DROGUE", default = 1000)]
+    #[param(id = 0x0201, name = "MIN_T_APOGEE", default = 1000)]
     pub min_time_to_drogue: u32,
-    /// Minimum time (ms) after drogue before allowing main deployment
-    #[param(id = 0x0202, name = "MIN_T_MAIN", default = 3000)]
+    /// Minimum delay (ms) after drogue before allowing main deployment
+    #[param(id = 0x0202, name = "DLY_MAIN", default = 3000)]
     pub min_time_to_main: u32,
+    /// Time (ms) after liftoff after which drogue is automatically deployed
+    ///
+    /// Must be larger than MAX_T_BURN.
+    #[param(id = 0x0203, name = "MAX_T_APOGEE", default = 30_000)]
+    pub max_time_to_drogue: u32,
+    /// Time limit for burn (ms), after which automatically transition to Coast
+    ///
+    /// Must be smaller than MAX_T_DROGUE.
+    #[param(id = 0x0204, name = "MAX_T_BURN", default = 15_000)]
+    pub max_time_in_burn: u32,
+    /// Acceleration (G) to be exceeded for LODEC_T in order to detect liftoff
+    #[param(id = 0x0205, name = "LODEC_ACC", default = 3.0)]
+    pub liftoff_detection_acceleration: f32,
+    /// Time (ms) to exceed LODEC_ACC in order to detect liftoff
+    #[param(id = 0x0206, name = "LODEC_T", default = 50)]
+    pub liftoff_detection_time: u32,
 }
 
 /// Ignition sequence parameters, exposed over MAVLink as `PROP_*`.

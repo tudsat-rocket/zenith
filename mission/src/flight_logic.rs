@@ -45,9 +45,8 @@ impl FlightLogic {
             // Takeoff detection: sustained high acceleration along body Z axis
             FlightMode::DetectLaunch | FlightMode::Ignite => {
                 let accel_z = estimator.acceleration_vehicle().map(|a| a.z).unwrap_or(0.0);
-                // ~3G threshold for 50ms
-                let high_accel = accel_z > 3.0 * GRAVITY;
-                self.true_since(time, high_accel, 50)
+                let high_accel = accel_z > params.liftoff_detection_acceleration * GRAVITY;
+                self.true_since(time, high_accel, params.liftoff_detection_time)
                     .then_some(FlightMode::Burn)
             }
 
@@ -55,15 +54,15 @@ impl FlightLogic {
             FlightMode::Burn => {
                 let accel_z = estimator.acceleration_vehicle().map(|a| a.z).unwrap_or(0.0);
                 let burnout = self.true_since(time, accel_z < 0.0, 50);
-                let min_exceeded = t_since_takeoff > 15_000; // safety timeout
-                (burnout || min_exceeded).then_some(FlightMode::Coast)
+                let max_exceeded = t_since_takeoff > params.max_time_in_burn;
+                (burnout || max_exceeded).then_some(FlightMode::Coast)
             }
 
             // Apogee detection: sustained negative vertical speed
             FlightMode::Coast => {
                 let falling = self.true_since(time, estimator.vertical_speed() < 0.0, 500);
                 let min_exceeded = t_since_takeoff > params.min_time_to_drogue;
-                let max_exceeded = t_since_takeoff > 30_000; // safety: 30s max coast
+                let max_exceeded = t_since_takeoff > params.max_time_to_drogue;
                 ((min_exceeded && falling) || max_exceeded).then_some(FlightMode::DeployDrogue)
             }
 
