@@ -39,7 +39,8 @@ use crate::links::interfaces::{
     InterfaceRxSubscriber, InterfaceTx, InterfaceTxPublisher, InterfaceTxSubscriber,
 };
 
-pub static DOWNLINK: StaticCell<Channel<CriticalSectionRawMutex, (u16, DownlinkMessage), 5>> =
+/// Intentionally capacity of 1 for downlink to avoid stale messages backing up.
+pub static DOWNLINK: StaticCell<Channel<CriticalSectionRawMutex, (u16, DownlinkMessage), 1>> =
     StaticCell::new();
 pub static UPLINK: StaticCell<Channel<CriticalSectionRawMutex, UplinkCommand, 5>> =
     StaticCell::new();
@@ -48,7 +49,7 @@ static UPLINK_STATS: Watch<CriticalSectionRawMutex, (i8, i8, f32), 3> = Watch::n
 static TIME: Watch<CriticalSectionRawMutex, (Instant, u16), 3> = Watch::new();
 
 pub struct LoraHandle {
-    tx: Sender<'static, CriticalSectionRawMutex, (u16, DownlinkMessage), 5>,
+    tx: Sender<'static, CriticalSectionRawMutex, (u16, DownlinkMessage), 1>,
     rx: Receiver<'static, CriticalSectionRawMutex, UplinkCommand, 5>,
     time_sender: embassy_sync::watch::Sender<'static, CriticalSectionRawMutex, (Instant, u16), 3>,
 }
@@ -113,7 +114,7 @@ async fn run_downlink(
     transmitter: HoppingTransmitter<
         LoraTransceiver,
         DownlinkMessage,
-        Receiver<'static, CriticalSectionRawMutex, (u16, DownlinkMessage), 5>,
+        Receiver<'static, CriticalSectionRawMutex, (u16, DownlinkMessage), 1>,
     >,
 ) {
     transmitter.run_downlink().await;
