@@ -114,7 +114,7 @@ impl StateEstimator {
             dt,
             params.mahony_kp,
             params.mahony_ki,
-            initial_orientation,
+            Self::ahrs_to_local().inverse() * initial_orientation,
         );
 
         let kalman = KalmanFilter {
@@ -347,7 +347,7 @@ impl StateEstimator {
                         &mag,
                     )
                     .ok()
-                    .copied();
+                    .map(|q| Self::ahrs_to_local() * q);
             }
 
             // Rotate acceleration vector to get world-space acceleration
@@ -594,5 +594,10 @@ impl StateEstimator {
             local.z,
         );
         self.gps_origin.unwrap_or_default() + offset
+    }
+
+    /// The AHRS references its horizontal axis to magnetic north, we use east-north-up.
+    fn ahrs_to_local() -> UnitQuaternion<f32> {
+        UnitQuaternion::from_axis_angle(&Vector3::z_axis(), ::core::f32::consts::FRAC_PI_2)
     }
 }
