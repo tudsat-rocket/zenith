@@ -14,7 +14,7 @@ use rapid_dialect::rapid::messages::RadioStatus;
 
 use utils::anychannel::AnySender;
 
-use crate::config::{LinkConfig, SEQUENCE_LENGTH};
+use crate::config::LinkConfig;
 use crate::messages::{
     ConnectionContext, DOWNLINK_PACKET_SIZE, DOWNLINK_TIME_MASK, DownlinkMessage, TelemetryMessage,
     UPLINK_SEQ_MODULO, UplinkMessage,
@@ -169,8 +169,9 @@ impl<RK: RadioKind, M: TelemetryMessage, S: AnySender<M::Output>> HoppingReceive
 
 impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S> {
     const CONNECTION_LOST_TIMEOUT_MS: u64 = 2000;
-    const SWEEP_DURATION_PER_FREQUENCY_MS: u64 =
-        (SEQUENCE_LENGTH as u64) * (DOWNLINK_MESSAGE_INTERVAL_MS as u64);
+
+    /// How many worst-case gaps in the hopping sequence to spend on one channel before moving on.
+    const SWEEP_GAPS_PER_FREQUENCY: u64 = 3;
 
     #[allow(
         clippy::arithmetic_side_effects,
@@ -183,13 +184,19 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
         let mut consecutive_errors = 0;
         let channels = self.config.channels();
 
+        let timeout = Duration::from_millis(
+            Self::SWEEP_GAPS_PER_FREQUENCY
+                * (self.config.max_hop_gap() as u64)
+                * (DOWNLINK_MESSAGE_INTERVAL_MS as u64),
+        );
+        defmt::info!("Sweep dwell: {} ms per channel.", timeout.as_millis());
+
         loop {
             defmt::info!("Sweeping downlink frequencies");
 
             for f in channels.iter().cycle() {
                 defmt::info!("Listening on {}.", f);
 
-                let timeout = Duration::from_millis(Self::SWEEP_DURATION_PER_FREQUENCY_MS);
                 let deadline = Instant::now() + timeout;
 
                 match self.receive_until(*f, deadline).await {

@@ -28,8 +28,11 @@ pub const FREQUENCIES: [u32; NUM_FREQUENCIES] = [
 
 pub const SEQUENCE_LENGTH: usize = 64;
 
+/// Eight channels, so [`SEQUENCE_LENGTH`] divides evenly by them.
+///
+/// Outer two channels left unoccupied so we stay in our band.
 const DOWNLINK_FREQUENCY_MASK: [bool; NUM_FREQUENCIES] = [
-    true, false, true, true, false, true, true, false, true, true, true, true, false, true,
+    false, false, true, true, false, true, true, false, true, true, true, true, false, false,
 ];
 
 const UPLINK_FREQUENCY_MASK: [bool; NUM_FREQUENCIES] = [
@@ -90,35 +93,82 @@ pub struct LinkConfig<'a> {
 }
 
 impl LinkConfig<'_> {
+    /// The hopping sequence, as channel indices into [`FREQUENCIES`].
+    ///
+    /// Built as back-to-back shuffles of the link's channels so channels don't repeat and are
+    /// evenly spread across the whole sequence.
     #[allow(
         clippy::indexing_slicing,
-        reason = "writes bounded by SEQUENCE_LENGTH / NUM_FREQUENCIES"
+        reason = "writes bounded by SEQUENCE_LENGTH, block indices by its own length"
+    )]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "the write cursor is bounded by SEQUENCE_LENGTH"
     )]
     pub fn sequence(&self) -> [usize; SEQUENCE_LENGTH] {
         let mut siphasher = SipHasher::new_with_key(&[0x00; 16]);
         siphasher.write(self.binding_phrase.as_bytes());
-        let seed = siphasher.finish();
+        let mut rng = ChaCha20Rng::seed_from_u64(siphasher.finish());
+
+        // One block, one of each channel.
+        let mut block: heapless::Vec<usize, NUM_FREQUENCIES> = (0..NUM_FREQUENCIES)
+            .filter(|i| self.frequency_mask[*i])
+            .collect();
 
         let mut sequence: [usize; SEQUENCE_LENGTH] = [0; SEQUENCE_LENGTH];
-        for (seq_i, freq_i) in (0..NUM_FREQUENCIES)
-            .filter(|i| self.frequency_mask[*i])
-            .cycle()
-            .enumerate()
-        {
-            if seq_i >= SEQUENCE_LENGTH {
-                break;
+        let mut written = 0;
+
+        while written < SEQUENCE_LENGTH {
+            block.shuffle(&mut rng);
+
+            // If the last channel of the last block matches the first of this block, swap this
+            // block's first two around to fix that.
+            if written > 0 && block.len() > 1 && block[0] == sequence[written - 1] {
+                block.swap(0, 1);
             }
 
-            sequence[seq_i] = freq_i;
+            for channel in &block {
+                if written >= SEQUENCE_LENGTH {
+                    break;
+                }
+                sequence[written] = *channel;
+                written += 1;
+            }
         }
 
-        let mut rng = ChaCha20Rng::seed_from_u64(seed);
-        sequence.shuffle(&mut rng);
+        // Same as the block seam fixing, just for the first and last channel of the sequence.
+        if SEQUENCE_LENGTH > 2 && sequence[SEQUENCE_LENGTH - 1] == sequence[0] {
+            sequence.swap(0, 1);
+        }
 
         sequence
     }
 
-    /// The frequencies this link actually uses
+    /// The most slots that can pass between two appearances of the same channel, counted around
+    /// the wrap. A receiver sweeping for a vehicle has to sit on a channel at least this long
+    /// before it can conclude it would have heard one.
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "indices and distances bounded by SEQUENCE_LENGTH"
+    )]
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "both indices are reduced modulo SEQUENCE_LENGTH"
+    )]
+    pub fn max_hop_gap(&self) -> usize {
+        let sequence = self.sequence();
+
+        (0..SEQUENCE_LENGTH)
+            .map(|i| {
+                (1..=SEQUENCE_LENGTH)
+                    .find(|d| sequence[(i + d) % SEQUENCE_LENGTH] == sequence[i])
+                    .unwrap_or(SEQUENCE_LENGTH)
+            })
+            .max()
+            .unwrap_or(SEQUENCE_LENGTH)
+    }
+
+    /// The frequencies this link actually uses.
     pub fn channels(&self) -> heapless::Vec<u32, NUM_FREQUENCIES> {
         FREQUENCIES
             .iter()
@@ -165,6 +215,119 @@ impl LinkConfig<'_> {
 mod tests {
     use super::*;
 
+    extern crate std;
+    use std::{format, string::String, vec::Vec};
+
+    /// Both links, and enough binding phrases that the properties below are claims about the
+    /// construction rather than about the one phrase we happen to ship. Nobody inspects a
+    /// generated sequence once every vehicle has its own phrase.
+    fn sequences() -> Vec<(String, [bool; NUM_FREQUENCIES], [usize; SEQUENCE_LENGTH])> {
+        let mut out = Vec::new();
+
+        for mask in [DOWNLINK_FREQUENCY_MASK, UPLINK_FREQUENCY_MASK] {
+            for i in 0..200 {
+                let binding_phrase = format!("phrase-{i}");
+                let sequence = LinkConfig {
+                    binding_phrase: &binding_phrase,
+                    frequency_mask: mask,
+                    ..DEFAULT_DOWNLINK_CONFIG
+                }
+                .sequence();
+                out.push((binding_phrase, mask, sequence));
+            }
+        }
+
+        out
+    }
+
+    fn channel_count(mask: &[bool; NUM_FREQUENCIES]) -> usize {
+        mask.iter().filter(|in_use| **in_use).count()
+    }
+
+    /// A run parks the link on one frequency for as long as it lasts, which is what the hopping
+    /// exists to avoid and what a dwell-time argument turns on. The sequence repeats, so its last
+    /// slot is adjacent to its first.
+    #[test]
+    fn no_channel_ever_follows_itself() {
+        for (phrase, _, sequence) in sequences() {
+            for i in 0..SEQUENCE_LENGTH {
+                assert_ne!(
+                    sequence[i],
+                    sequence[(i + 1) % SEQUENCE_LENGTH],
+                    "{phrase} repeats at slot {i}: {sequence:?}"
+                );
+            }
+        }
+    }
+
+    /// Both masks hold a power of two channels and [`SEQUENCE_LENGTH`] is one too, so every
+    /// channel gets exactly the same number of slots. Anything else would mean some channel
+    /// carrying more of the duty cycle than the others.
+    #[test]
+    fn every_channel_gets_the_same_share() {
+        for (phrase, mask, sequence) in sequences() {
+            let channels = channel_count(&mask);
+            assert!(
+                channels.is_power_of_two(),
+                "{channels} channels do not divide the sequence"
+            );
+            let expected = SEQUENCE_LENGTH / channels;
+
+            for (channel, _) in mask.iter().enumerate().filter(|(_, in_use)| **in_use) {
+                let slots = sequence.iter().filter(|c| **c == channel).count();
+                assert_eq!(
+                    slots, expected,
+                    "{phrase} gives channel {channel} {slots} slots"
+                );
+            }
+        }
+    }
+
+    /// A receiver sweeping for a vehicle sits on each channel for a multiple of this, so it has to
+    /// be bounded and small. One block can hold a channel's slot at its start and the next at its
+    /// end, which is the worst a block construction allows.
+    #[test]
+    fn the_gap_between_a_channels_slots_is_bounded() {
+        for (phrase, mask, _) in sequences() {
+            let config = LinkConfig {
+                binding_phrase: &phrase,
+                frequency_mask: mask,
+                ..DEFAULT_DOWNLINK_CONFIG
+            };
+
+            let bound = 2 * channel_count(&mask);
+            let gap = config.max_hop_gap();
+            assert!(
+                gap <= bound,
+                "{phrase} leaves a gap of {gap}, bound {bound}"
+            );
+        }
+    }
+
+    /// Both ends derive the sequence independently, so the construction *is* the wire protocol. A
+    /// change here does not degrade a link, it stops two radios finding each other at all - which
+    /// is worth being told about at review time rather than on a launch day with mixed firmware.
+    #[test]
+    fn the_shipped_sequence_does_not_change_by_accident() {
+        #[rustfmt::skip]
+        const DOWNLINK: [usize; SEQUENCE_LENGTH] = [
+            8, 2, 6, 5, 3, 9, 10, 11, 2, 9, 11, 10, 6, 8, 3, 5,
+            10, 8, 6, 9, 2, 3, 5, 11, 2, 10, 9, 6, 3, 8, 11, 5,
+            11, 10, 3, 5, 9, 6, 8, 2, 9, 10, 3, 5, 2, 11, 8, 6,
+            5, 9, 6, 11, 10, 8, 2, 3, 9, 3, 10, 8, 5, 2, 11, 6,
+        ];
+        #[rustfmt::skip]
+        const UPLINK: [usize; SEQUENCE_LENGTH] = [
+            1, 4, 12, 7, 1, 4, 7, 12, 7, 12, 1, 4, 12, 7, 4, 1,
+            7, 1, 4, 12, 7, 1, 4, 12, 7, 12, 4, 1, 12, 4, 7, 1,
+            12, 1, 7, 4, 7, 1, 12, 4, 7, 4, 1, 12, 1, 7, 4, 12,
+            7, 12, 4, 1, 4, 7, 1, 12, 1, 7, 4, 12, 7, 12, 1, 4,
+        ];
+
+        assert_eq!(DEFAULT_DOWNLINK_CONFIG.sequence(), DOWNLINK);
+        assert_eq!(DEFAULT_UPLINK_CONFIG.sequence(), UPLINK);
+    }
+
     /// The two directions divide the band up between them. An overlap would put uplink
     /// transmissions on a channel the vehicle is trying to be heard on.
     #[test]
@@ -179,8 +342,13 @@ mod tests {
         let downlink = DEFAULT_DOWNLINK_CONFIG.channels();
         let uplink = DEFAULT_UPLINK_CONFIG.channels();
 
-        assert_eq!(downlink.len() + uplink.len(), NUM_FREQUENCIES);
         assert!(downlink.iter().all(|f| !uplink.contains(f)));
+
+        // They do not divide it up exhaustively, though: the band's outermost two channels are in
+        // neither direction, since at 500 kHz each they reach past 863 and 870 MHz.
+        for edge in [FREQUENCIES[0], FREQUENCIES[NUM_FREQUENCIES - 1]] {
+            assert!(!downlink.contains(&edge) && !uplink.contains(&edge));
+        }
     }
 
     /// Radio setup plus time-on-air of one uplink packet, i.e. how long a transmission occupies
