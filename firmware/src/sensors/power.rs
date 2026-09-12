@@ -11,7 +11,7 @@
 use embassy_executor::Spawner;
 use embassy_stm32::adc::{Adc, AdcChannel, Instance, SampleTime, Temperature, VrefInt};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
-use embassy_time::{Duration, Ticker};
+use embassy_time::Ticker;
 
 use mission::AdcData;
 
@@ -67,13 +67,10 @@ async fn run(mut adc: BoardAdc) -> ! {
 
         let temperature = read_buffer[1] as i32;
 
-        // Battery warnings are not raised here, but by `buzzer::alerts`, based
-        // on the filtered voltage.
         let bus_main_voltage = VSENSE_DIVIDER * 3300 * (read_buffer[2] as u64) / 65536;
 
         let bus_supply_voltage = VSENSE_DIVIDER * 3300 * (read_buffer[3] as u64) / 65536;
         let fc_current = (33000 * (read_buffer[4] as u64)) / 65536;
-
         let recovery_voltage = VSENSE_DIVIDER * 3300 * (read_buffer[5] as u64) / 65536;
         let recovery_current = (33000 * (read_buffer[6] as u64)) / 65536;
 

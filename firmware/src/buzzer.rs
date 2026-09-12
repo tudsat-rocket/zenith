@@ -33,11 +33,12 @@ use Semitone::*;
 
 pub mod alerts;
 mod sounds;
+use mission::Params;
 use sounds::mario::MARIO;
 
 /// Duty cycle of the PWM signal, in percent. A buzzer is loudest at 50%, this
 /// trades some volume for a lower current draw.
-const VOLUME_PERCENT: u8 = 80;
+//const VOLUME_PERCENT: u8 = 80;
 
 static STARTUP_TECH: [Note; 6] = [
     Note::new(E, 4, 100),
@@ -182,6 +183,7 @@ async fn player(buzzer: (SimplePwm<'static, TIM2>, embassy_stm32::timer::Channel
 
     let (mut pwm, channel) = buzzer;
     let mut state = PlayerState::default();
+    let params = Params::default().misc;
 
     loop {
         let Some(playback) = state.desired() else {
@@ -198,7 +200,8 @@ async fn player(buzzer: (SimplePwm<'static, TIM2>, embassy_stm32::timer::Channel
                     // Changing the frequency changes the timer period without
                     // touching the compare register, so the duty cycle - and
                     // with it the volume - has to be set again for every note.
-                    pwm.channel(channel).set_duty_cycle_percent(VOLUME_PERCENT);
+                    pwm.channel(channel)
+                        .set_duty_cycle_percent(params.buzzer_volume);
                     pwm.channel(channel).enable();
                 } else {
                     pwm.channel(channel).disable();

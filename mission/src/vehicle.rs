@@ -9,7 +9,7 @@ use crate::bus::{Bus, BusInputImage, BusOutputImage};
 use crate::flight_logic::FlightLogic;
 use crate::inventory::BinaryOutputId;
 use crate::mavlink::VehicleSnapshot;
-use crate::params::{Params, PropulsionParams, RecoveryParams};
+use crate::params::{MiscParams, Params, PropulsionParams, RecoveryParams};
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
 use crate::valves::{ValveCommand, ValveController, ValveError};
 
@@ -21,6 +21,7 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     flight_logic: FlightLogic,
     recovery_params: RecoveryParams,
     propulsion_params: PropulsionParams,
+    misc_params: MiscParams,
     pub sensors: S,
     pub outputs: O,
     pub storage: F,
@@ -50,6 +51,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             flight_logic: FlightLogic::default(),
             recovery_params: params.recovery,
             propulsion_params: params.propulsion,
+            misc_params: params.misc,
             sensors,
             outputs,
             storage,
@@ -157,6 +159,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             state_estimator: self.state_estimator.params().clone(),
             recovery: self.recovery_params.clone(),
             propulsion: self.propulsion_params.clone(),
+            misc: self.misc_params.clone(),
         };
 
         params.set(descriptor.id, value);

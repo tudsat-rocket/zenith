@@ -21,6 +21,7 @@ pub struct Params {
     pub state_estimator: StateEstimatorParams,
     pub recovery: RecoveryParams,
     pub propulsion: PropulsionParams,
+    pub misc: MiscParams,
 }
 
 /// Recovery / parachute deployment parameters, exposed over MAVLink as `REC_*`.
@@ -48,6 +49,14 @@ pub struct PropulsionParams {
     /// Delay (ms) after ignition mode is entered after which main valve is opened
     #[param(id = 0x0301, name = "MAIN_DELAY", default = 700)]
     pub main_valve_delay: u32,
+}
+
+#[derive(Debug, Clone, macros::ParameterGroup)]
+#[param_group(prefix = "MISC")]
+pub struct MiscParams {
+    /// volume (percent) of the buzzer
+    #[param(id = 0x0400, name = "BUZZ_VOL", default = 50)]
+    pub buzzer_volume: u32,
 }
 
 /// Live mirror of the current [`Params`] for the MAVLink param protocol tasks. Starts empty (the
