@@ -33,6 +33,11 @@ const PACKET_TIME_MS: u32 = 32;
 
 const _: () = assert!(DOWNLINK_MESSAGE_INTERVAL_MS % PACKET_TIME_MS == 0);
 
+/// The bits of the vehicle's clock a packet header carries.
+pub const DOWNLINK_TIME_MASK: u16 = !(PACKET_TIME_MS as u16 - 1);
+
+const _: () = assert!(ConnectionContext::PACKET_TIME_BITS == u16::BITS);
+
 const UNKNOWN: u8 = u8::MAX;
 const FULL_SCALE: f32 = (u8::MAX - 1) as f32;
 
@@ -397,6 +402,24 @@ pub(crate) mod tests {
         DownlinkMessage::decode(packet, &KEY)
             .expect("packet did not decode")
             .1
+    }
+
+    /// A receiver compares the time a packet claims against the slot it tuned for, so the mask it
+    /// builds that expectation with has to match what a packet actually carries.
+    #[test]
+    fn the_time_mask_matches_what_a_packet_carries() {
+        let parts = SnapshotParts::default();
+        let snapshot = parts.snapshot();
+
+        for time in (0..=u16::MAX).step_by(DOWNLINK_MESSAGE_INTERVAL_MS as usize) {
+            let packet = DownlinkMessage::Heartbeat(HeartbeatMessage::pack(&snapshot))
+                .encode(time, &[0x42; 16])
+                .expect("message did not fit its packet");
+            let (decoded, _) =
+                DownlinkMessage::decode(packet, &[0x42; 16]).expect("packet did not decode");
+
+            assert_eq!(decoded, time & DOWNLINK_TIME_MASK, "time {time}");
+        }
     }
 
     /// The coarse packet time wraps every 65.536s; the receiver's estimate must not.

@@ -16,8 +16,8 @@ use utils::anychannel::AnySender;
 
 use crate::config::{FREQUENCIES, LinkConfig, SEQUENCE_LENGTH};
 use crate::messages::{
-    ConnectionContext, DOWNLINK_PACKET_SIZE, DownlinkMessage, TelemetryMessage, UPLINK_SEQ_MODULO,
-    UplinkMessage,
+    ConnectionContext, DOWNLINK_PACKET_SIZE, DOWNLINK_TIME_MASK, DownlinkMessage, TelemetryMessage,
+    UPLINK_SEQ_MODULO, UplinkMessage,
 };
 use crate::trx::MAX_CONSECUTIVE_ERRORS;
 use crate::{DOWNLINK_MESSAGE_INTERVAL_MS, UplinkCommand};
@@ -192,6 +192,11 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
                 let deadline = Instant::now() + timeout;
 
                 match self.receive_until(*f, deadline).await {
+                    // A packet that claims an unexpected time is almost certainly not valid.
+                    Ok(Some((time, ..))) if self.config.frequency(time) != *f => {
+                        defmt::warn!("Ignoring packet claiming a time from another channel.");
+                        consecutive_errors = 0;
+                    }
                     Ok(Some((time, msg, _status))) => {
                         consecutive_errors = 0;
 
@@ -277,6 +282,11 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
             let next_time = time.wrapping_add(DOWNLINK_MESSAGE_INTERVAL_MS as u16);
 
             match self.receive_slot_until(next_time, deadline).await {
+                // The packet has to carry the time of the slot we tuned for, and accepting a
+                // packet with a garbled time could mess up our hop following.
+                Ok(Some((t, ..))) if t != next_time & DOWNLINK_TIME_MASK => {
+                    defmt::warn!("Discarding packet from outside the expected slot.");
+                }
                 Ok(Some((t, msg, status))) => {
                     // Since we just received a packet, if we reset all our timers right away, and
                     // wait for a full interval exactly on the next round, we might occasionally
