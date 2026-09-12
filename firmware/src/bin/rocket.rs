@@ -88,6 +88,7 @@ async fn init(low_priority_spawner: Spawner) {
 
     // Initialize main Vehicle & Linkss structs
     let vehicle = Vehicle::new(board.sensors, board.outputs, storage, bus).await;
+    buzzer::set_volume(vehicle.misc_params().buzzer_volume);
     let links = Links::init(
         board.ethernet,
         board.seed,
@@ -155,6 +156,7 @@ pub async fn main_loop(
                 }
                 UplinkCommand::SetParam { id, raw } => {
                     vehicle.set_param(id, raw).await;
+                    buzzer::set_volume(vehicle.misc_params().buzzer_volume);
                     MavResult::Accepted
                 }
                 UplinkCommand::PlayTune(name) => {

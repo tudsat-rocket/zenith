@@ -17,6 +17,8 @@
 //! can additionally be triggered from the ground by name via `PLAY_TUNE_V2`,
 //! see [`Sound::from_name`] for the names.
 
+use core::sync::atomic::{AtomicU8, Ordering};
+
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
@@ -35,9 +37,10 @@ pub mod alerts;
 mod sounds;
 use sounds::mario::MARIO;
 
-/// Duty cycle of the PWM signal, in percent. A buzzer is loudest at 50%, this
-/// trades some volume for a lower current draw.
-const VOLUME_PERCENT: u8 = 80;
+/// Duty cycle of the PWM signal, in percent. Set from the `MISC_BUZZ_VOL`
+/// parameter via [`set_volume`]; the initial value only matters until the
+/// stored parameters have been loaded.
+static VOLUME_PERCENT: AtomicU8 = AtomicU8::new(50);
 
 static STARTUP_TECH: [Note; 6] = [
     Note::new(E, 4, 100),
@@ -198,7 +201,8 @@ async fn player(buzzer: (SimplePwm<'static, TIM2>, embassy_stm32::timer::Channel
                     // Changing the frequency changes the timer period without
                     // touching the compare register, so the duty cycle - and
                     // with it the volume - has to be set again for every note.
-                    pwm.channel(channel).set_duty_cycle_percent(VOLUME_PERCENT);
+                    pwm.channel(channel)
+                        .set_duty_cycle_percent(VOLUME_PERCENT.load(Ordering::Relaxed));
                     pwm.channel(channel).enable();
                 } else {
                     pwm.channel(channel).disable();
@@ -310,6 +314,13 @@ pub fn request_loop(sound: Option<Sound>) {
 /// Stop the one-shot and the alert loop.
 pub fn request_stop() {
     send(Command::Stop);
+}
+
+/// Set the duty cycle of the PWM signal, in percent (clamped to 100). Takes
+/// effect from the next note on.
+pub fn set_volume(percent: u32) {
+    let percent = u8::try_from(percent.min(100)).unwrap_or(100);
+    VOLUME_PERCENT.store(percent, Ordering::Relaxed);
 }
 
 fn send(command: Command) {
