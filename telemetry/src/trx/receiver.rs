@@ -418,6 +418,13 @@ impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessa
                     };
                     UplinkCommand::SetFlightMode(mode)
                 }
+                UplinkMessage::SetValve(inner) => {
+                    let Some((valve, command)) = inner.command() else {
+                        defmt::warn!("Discarding uplink command for an unknown valve.");
+                        continue;
+                    };
+                    UplinkCommand::CommandValve(valve, command)
+                }
             };
 
             self.sender.anysend(cmd).await;

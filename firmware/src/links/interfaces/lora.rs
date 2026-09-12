@@ -21,17 +21,12 @@ use lora_phy::LoRa;
 use lora_phy::mod_params::{Bandwidth, CodingRate, PacketStatus, RadioError, SpreadingFactor};
 
 use rapid_dialect::Rapid;
-use rapid_dialect::rapid::messages::{
-    Attitude, Heartbeat, LocalPositionNed, RadioStatus, SysStatus, SystemTime,
-};
+use rapid_dialect::rapid::messages::RadioStatus;
 
 use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG, FREQUENCIES, LinkConfig};
 use telemetry::messages::TelemetryMessage;
 use telemetry::messages::UplinkMessage;
-use telemetry::messages::{
-    DOWNLINK_PACKET_SIZE, DownlinkMessage, DownlinkTelemetryMessage, HeartbeatMessage,
-    StatusMessage,
-};
+use telemetry::messages::{DOWNLINK_PACKET_SIZE, DownlinkMessage};
 use telemetry::trx::receiver::HoppingReceiver;
 use telemetry::trx::transmitter::HoppingTransmitter;
 
@@ -93,57 +88,23 @@ impl LoraHandle {
     }
 
     pub fn send_telemetry_messages(&mut self, vehicle: &Vehicle) {
-        const MESSAGE_PATTERN_LENGTH: u32 = 8;
-
-        // While we can freely choose the messages we wish to send, we have to respect the message
-        // interval defined in our telemetry protocol since the timing and interval of messages has
-        // to be known by the receiver in advance.
-        //
-        // We also send a message each interval, without leaving gaps. This allows the receiver to
-        // infer packet loss and allows more chances to pick up the signal while connecting.
         let t = vehicle.time.0;
 
         self.time_sender.send((Instant::now(), t as u16));
 
-        if t % telemetry::DOWNLINK_MESSAGE_INTERVAL_MS != 0 {
-            return;
-        }
-
-        let i = t / telemetry::DOWNLINK_MESSAGE_INTERVAL_MS;
-
-        // Right now the pattern of messages we send is simply a repeating sequence of this length.
-        // In theory, we could choose the message to send dynamically based on vehicle state etc.
-        let msg = match i % MESSAGE_PATTERN_LENGTH {
-            0 | 2 | 4 | 6 => {
-                let snapshot = &vehicle.snapshot();
-                let heartbeat: Heartbeat = snapshot.into();
-                let local_position: LocalPositionNed = snapshot.into();
-                let attitude: Attitude = snapshot.into();
-
-                let inner = HeartbeatMessage::pack((heartbeat, local_position, attitude));
-                DownlinkMessage::Heartbeat(inner)
-            }
-            1 | 3 | 5 | 7 => {
-                let (rssi, snr, packet_loss) = UPLINK_STATS.try_get().unwrap_or_default();
-                let radio_status = RadioStatus {
-                    remrssi: rssi as u8,
-                    remnoise: (rssi - snr) as u8,
-                    fixed: (packet_loss * 100.0) as u16,
-                    ..Default::default()
-                };
-
-                let sys_status = SysStatus::default(); // TODO
-                let system_time = SystemTime::default(); // TODO
-
-                let inner = StatusMessage::pack((sys_status, radio_status, system_time));
-                DownlinkMessage::Status(inner)
-            }
-            MESSAGE_PATTERN_LENGTH..=u32::MAX => unreachable!(),
+        let (rssi, snr, packet_loss) = UPLINK_STATS.try_get().unwrap_or_default();
+        let uplink = RadioStatus {
+            remrssi: rssi as u8,
+            remnoise: rssi.saturating_sub(snr) as u8,
+            fixed: (packet_loss * 100.0) as u16,
+            ..Default::default()
         };
 
-        if let Err(e) = self.tx.try_send((t as u16, msg)) {
-            // defmt::error!("Failed to send downlink msg.");
-        }
+        let Some(msg) = DownlinkMessage::for_tick(t, &vehicle.snapshot(), uplink) else {
+            return;
+        };
+
+        let _ = self.tx.try_send((t as u16, msg));
     }
 }
 

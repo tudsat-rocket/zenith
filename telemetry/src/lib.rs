@@ -150,7 +150,7 @@
 //!      |        |           |         |
 //!      +--------|-----------|---------|-- 11b time
 //!               +-----------|---------|--  5b message identifier
-//!                           +---------|-- 14B message payload, depends on identifier
+//!                           +---------|-- 12B message payload, depends on identifier
 //!                                     +-- 16b HMAC calculated over everything else
 //! ```
 //!
@@ -172,7 +172,7 @@
 //!         which allows identifying the profile of vehicle. This is not something we do at the
 //!         moment.
 //!
-//!   - payload: 14 bytes of actual payload, depending on the message identifier.
+//!   - payload: 12 bytes of actual payload, depending on the message identifier.
 //!
 //!   - HMAC: 16 bits of HMAC calculated over the other 14 bytes using a key known by both the
 //!     vehicle and the receiver. This provides some integrity and authenticity protection, and it
@@ -199,16 +199,16 @@
 //! MAVLink messages on reception ("unpacking").
 //!
 //! As an example, the MAVLink HEARTBEAT message mostly contains mode information, which we can
-//! compress to way less than 14 bytes. So we combine it with some altitude and velocity
-//! information from LOCAL_POSITION_NED as well as our attitude from the ATTITUDE message.
+//! compress to way less than 12 bytes. So we combine it with some altitude information from
+//! LOCAL_POSITION_NED, our attitude from the ATTITUDE message and the speeds from VFR_HUD.
 //!
 //! The receiver may even recover more MAVLink messages than were used in the construction of the
-//! message. For instance, our combined messages of (HEARTBEAT, LOCAL_POSITION_NED, ATTITUDE) are
-//! enough to recover most of the information contained in the VFR_HUD message as well. This gives
-//! the system more compatibility with MAVLink ground stations using different messages without any
-//! additional RF bandwidth.
+//! message. For instance, the altitude that went in as LOCAL_POSITION_NED.z is enough to recover
+//! most of an ALTITUDE message as well. This gives the system more compatibility with MAVLink
+//! ground stations using different messages without any additional RF bandwidth. Fields that no
+//! longer fit come back as NaN, so a ground station can tell them apart from a real reading.
 //!
-//!   (HEARBEAT, LOCAL_POSITION_NED, ATTITUDE) -> [packet] -> (HB, L_P_N, ATT, ALTITUDE, VFR_HUD)
+//!   (HEARBEAT, L_P_N, ATTITUDE, VFR_HUD) -> [packet] -> (HB, L_P_N, ATT, ALTITUDE, VFR_HUD)
 //!
 //!
 //! # Uplink
