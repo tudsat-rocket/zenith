@@ -12,7 +12,7 @@ mod traits;
 pub mod valves;
 mod vehicle;
 
-pub use params::{Params, StateMachineParams};
+pub use params::{FailsafeParams, Params, StateMachineParams};
 pub use traits::*;
 pub use vehicle::Vehicle;
 
