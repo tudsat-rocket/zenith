@@ -24,6 +24,20 @@ Once running, the SITL binary will broadcast MAVLink packets just like the firmw
 
 In the SITL, sensor values are simulated and the rocket flies a simple simulated trajectory (ignition is 5s after entering Armed mode).
 
+### Off-nominal scenarios
+
+For operator training, the SITL can simulate failures. Each is a cargo feature and they can be combined, e.g. `just sitl-hybrid --features fault-drogue-failure,fault-downlink-loss`:
+
+| Feature | Behaviour |
+| --- | --- |
+| `fault-engine-underperformance` | Engine only reaches 55% of its nominal propellant mass flow: lower chamber pressure and thrust, longer burn, lower apogee |
+| `fault-sensor-dropout` | 1-3 random sensors (IMUs, baros, mag, GPS, power, and on hybrid builds tank pressure/temperature sensors) stop reporting at random times within 60s after arming |
+| `fault-downlink-loss` | 50% of downlink packets are lost |
+| `fault-drogue-failure` | Drogue deployment is commanded, but the chute never comes out; the vehicle falls ballistic until the main opens |
+| `fault-random` | Rolls a random combination of the above at startup, 25% of the time a fully nominal flight |
+
+The active scenario is logged at startup and stays fixed until the SITL is restarted.
+
 ## Flashing Hardware
 
 In addition to the other requirements, you need:

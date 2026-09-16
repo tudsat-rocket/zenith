@@ -16,6 +16,7 @@ use mission::inventory::{
 };
 use mission::valves::ValveCommand;
 
+use crate::simulation::faults::SimSensor;
 use crate::simulation::hybrid::fluid::{
     AMBIENT_PRESSURE, AMBIENT_TEMP, n2o_liquid_density, n2o_saturation_pressure,
 };
@@ -60,6 +61,9 @@ pub struct HybridSimulation {
     igniter_fired: bool,
     /// Current firmware flight mode
     flight_mode: FlightMode,
+    /// Achieved fraction of the nominal propellant mass flow; below 1.0 for an underperforming
+    /// engine, e.g. a partially blocked injector.
+    mass_flow_factor: f32,
 }
 
 impl Default for HybridSimulation {
@@ -84,13 +88,17 @@ impl Default for HybridSimulation {
             fuel_mass: 1.5,
             igniter_fired: false,
             flight_mode: FlightMode::Idle,
+            mass_flow_factor: 1.0,
         }
     }
 }
 
 impl HybridSimulation {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(mass_flow_factor: f32) -> Self {
+        Self {
+            mass_flow_factor,
+            ..Self::default()
+        }
     }
 
     pub fn set_flight_mode(&mut self, mode: FlightMode) {
@@ -169,7 +177,8 @@ impl HybridSimulation {
         // Drain liquid through the main valve against chamber back-pressure.
         let downstream = self.chamber_pressure.max(AMBIENT_PRESSURE);
         let main_pressure_diff = (ullage_pressure - downstream).max(0.0);
-        let delta_volume = self.main_valve.conductance() * main_pressure_diff * dt;
+        let delta_volume =
+            self.mass_flow_factor * self.main_valve.conductance() * main_pressure_diff * dt;
 
         let liquid_density = n2o_liquid_density(self.oxidizer.liquid_temp);
         let ox_mass_flow = self.oxidizer.drain_liquid(delta_volume * liquid_density) / dt;
@@ -180,7 +189,7 @@ impl HybridSimulation {
             && self.fuel_mass > 0.0;
         let c = (combustion as u32) as f32;
 
-        let fuel_mass_flow = c * FUEL_BURN_RATE;
+        let fuel_mass_flow = c * self.mass_flow_factor * FUEL_BURN_RATE;
         self.fuel_mass = (self.fuel_mass - fuel_mass_flow * dt).max(0.0);
 
         let target_pressure = c * CHAMBER_PRESSURE_PER_MASS_FLOW * (ox_mass_flow + fuel_mass_flow);
@@ -298,7 +307,13 @@ impl Bus for SitlBus {
 
         let t = (sim.physics.time * 1000.0) as u32;
 
-        let temp_sens = TemperatureSensorMap::from_fn(|_id| {
+        let temp_sens = TemperatureSensorMap::from_fn(|id| {
+            if sim
+                .faults
+                .sensor_failed(SimSensor::Temperature(id), &sim.physics)
+            {
+                return None;
+            }
             sim.hybrid
                 .tank_temperature(TankId::Oxidizer)
                 .map(|v| DataWithTime::new(v, Wrapping(t)))
@@ -310,6 +325,12 @@ impl Bus for SitlBus {
 
         let press_sens = PressureSensorMap::from_fn(|id| {
             use PressSensId as P;
+            if sim
+                .faults
+                .sensor_failed(SimSensor::Pressure(id), &sim.physics)
+            {
+                return None;
+            }
             let pressure = match id {
                 P::PressurantTank => sim.hybrid.tank_pressure(TankId::Pressurant),
                 P::OxTankUpper | P::OxTankLower => sim.hybrid.tank_pressure(TankId::Oxidizer),

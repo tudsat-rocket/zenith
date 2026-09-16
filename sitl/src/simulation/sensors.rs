@@ -16,6 +16,7 @@ use state_estimator::GpsDatum;
 
 use super::SharedSimulation;
 use super::battery::Battery;
+use super::faults::{Faults, SimSensor};
 use super::physics::{FlightPhysics, body_x_from_body_z};
 
 const MACH_M_PER_S: f32 = 343.2;
@@ -92,7 +93,12 @@ impl SensorModel {
     }
 
     /// Read all sensors from the current physics state, adding noise.
-    fn sample(&mut self, physics: &FlightPhysics, battery: &Battery) -> SensorReadings {
+    fn sample(
+        &mut self,
+        physics: &FlightPhysics,
+        battery: &Battery,
+        faults: &Faults,
+    ) -> SensorReadings {
         self.gps_time_since_update += super::physics::DT;
 
         let gyro = Some(self.gyroscope(physics));
@@ -118,20 +124,34 @@ impl SensorModel {
             temperature: 0,
         };
 
+        // A dropped-out sensor stops answering on its bus, which the drivers report as no data.
+        let alive = |sensor| !faults.sensor_failed(sensor, physics);
+        let baro_if_alive = |sensor| {
+            if alive(sensor) {
+                baro.clone()
+            } else {
+                BaroReading {
+                    pressure: None,
+                    temperature: None,
+                    altitude: None,
+                }
+            }
+        };
+
         SensorReadings {
-            imu1_gyro: gyro,
-            imu1_accel: accel,
-            imu2_gyro: gyro,
-            imu2_accel: accel,
-            imu3_gyro: gyro,
-            imu3_accel: accel,
-            highg_accel: accel,
-            mag,
-            baro1: baro.clone(),
-            baro2: baro.clone(),
-            baro3: baro,
-            power: Some(power),
-            gps,
+            imu1_gyro: gyro.filter(|_| alive(SimSensor::Imu1)),
+            imu1_accel: accel.filter(|_| alive(SimSensor::Imu1)),
+            imu2_gyro: gyro.filter(|_| alive(SimSensor::Imu2)),
+            imu2_accel: accel.filter(|_| alive(SimSensor::Imu2)),
+            imu3_gyro: gyro.filter(|_| alive(SimSensor::Imu3)),
+            imu3_accel: accel.filter(|_| alive(SimSensor::Imu3)),
+            highg_accel: accel.filter(|_| alive(SimSensor::HighG)),
+            mag: mag.filter(|_| alive(SimSensor::Mag)),
+            baro1: baro_if_alive(SimSensor::Baro1),
+            baro2: baro_if_alive(SimSensor::Baro2),
+            baro3: baro_if_alive(SimSensor::Baro3),
+            power: Some(power).filter(|_| alive(SimSensor::Power)),
+            gps: gps.filter(|_| alive(SimSensor::Gps)),
         }
     }
 
@@ -297,6 +317,7 @@ impl StdSensors {
 impl Sensors for StdSensors {
     async fn tick(&mut self) -> SensorReadings {
         let sim = self.sim.lock().unwrap();
-        self.sensor_model.sample(&sim.physics, &sim.battery)
+        self.sensor_model
+            .sample(&sim.physics, &sim.battery, &sim.faults)
     }
 }

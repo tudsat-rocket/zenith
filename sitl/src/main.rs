@@ -10,7 +10,7 @@ use mission::TelemetryLink;
 
 use networking::Links;
 use sitl::simulation::storage;
-use sitl::{RecoveryFlags, SharedSimulation, Simulation, StdOutputs, StdSensors, Vehicle};
+use sitl::{Faults, RecoveryFlags, SharedSimulation, Simulation, StdOutputs, StdSensors, Vehicle};
 
 #[cfg(feature = "hybrid")]
 use sitl::simulation::hybrid::SitlBus;
@@ -22,8 +22,13 @@ async fn main(spawner: Spawner) {
         .format_timestamp_millis()
         .init();
 
+    let faults = Faults::from_build_flags();
+    faults.log();
+    let downlink_loss_probability = faults.downlink_loss_probability();
+
     let flags = RecoveryFlags::default();
-    let sim: SharedSimulation = Arc::new(Mutex::new(Simulation::new(flags.clone())));
+    let sim: SharedSimulation =
+        Arc::new(Mutex::new(Simulation::with_faults(flags.clone(), faults)));
 
     #[cfg(not(feature = "hybrid"))]
     {
@@ -35,7 +40,7 @@ async fn main(spawner: Spawner) {
             mission::bus::NoBus,
         )
         .await;
-        let links = Links::init(spawner);
+        let links = Links::init(spawner, downlink_loss_probability);
         #[allow(
             clippy::unwrap_used,
             reason = "task spawn at sim startup; failure just aborts the sim"
@@ -53,7 +58,7 @@ async fn main(spawner: Spawner) {
             SitlBus::new(Arc::clone(&sim)),
         )
         .await;
-        let links = Links::init(spawner);
+        let links = Links::init(spawner, downlink_loss_probability);
         #[allow(
             clippy::unwrap_used,
             reason = "task spawn at sim startup; failure just aborts the sim"

@@ -7,7 +7,7 @@
 pub mod simulation;
 
 pub use simulation::{
-    MemoryStorage, RecoveryFlags, SharedSimulation, Simulation, StdOutputs, StdSensors,
+    Faults, MemoryStorage, RecoveryFlags, SharedSimulation, Simulation, StdOutputs, StdSensors,
 };
 
 #[cfg(not(feature = "hybrid"))]

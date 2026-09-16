@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use rapid_dialect::FlightMode;
 
 pub mod battery;
+pub mod faults;
 #[cfg(feature = "hybrid")]
 pub mod hybrid;
 mod outputs;
@@ -11,9 +12,10 @@ pub mod sensors;
 pub mod storage;
 
 pub use battery::Battery;
+pub use faults::Faults;
 pub use outputs::StdOutputs;
 pub use physics::RecoveryFlags;
-pub use physics::{DT, FlightPhysics};
+pub use physics::{DT, FlightPhase, FlightPhysics};
 pub use sensors::StdSensors;
 pub use storage::MemoryStorage;
 
@@ -25,17 +27,29 @@ pub struct Simulation {
     pub battery: Battery,
     #[cfg(feature = "hybrid")]
     pub hybrid: HybridSimulation,
+    pub faults: Faults,
 }
 
 pub type SharedSimulation = Arc<Mutex<Simulation>>;
 
 impl Simulation {
+    /// A simulation where everything works.
     pub fn new(flags: RecoveryFlags) -> Self {
+        Self::with_faults(flags, Faults::nominal())
+    }
+
+    /// A simulation running the given off-nominal scenario.
+    pub fn with_faults(flags: RecoveryFlags, faults: Faults) -> Self {
+        let mut physics = FlightPhysics::new(flags);
+        physics.config.mass_flow_factor = faults.mass_flow_factor();
+        physics.config.drogue_fails = faults.drogue_failure;
+
         Self {
-            physics: FlightPhysics::new(flags),
+            physics,
             battery: Battery::new(),
             #[cfg(feature = "hybrid")]
-            hybrid: HybridSimulation::new(),
+            hybrid: HybridSimulation::new(faults.mass_flow_factor()),
+            faults,
         }
     }
 
@@ -49,7 +63,7 @@ impl Simulation {
             self.battery = Battery::new();
             #[cfg(feature = "hybrid")]
             {
-                self.hybrid = HybridSimulation::new();
+                self.hybrid = HybridSimulation::new(self.faults.mass_flow_factor());
             }
         }
     }

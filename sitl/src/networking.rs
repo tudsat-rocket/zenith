@@ -51,7 +51,9 @@ pub struct Links {
 }
 
 impl Links {
-    pub fn init(spawner: Spawner) -> Self {
+    /// `downlink_loss_probability` is the chance of each outgoing packet being dropped, to
+    /// simulate a bad radio link.
+    pub fn init(spawner: Spawner, downlink_loss_probability: f64) -> Self {
         static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
 
         let tx = DOWNLINK.init(PubSubChannel::new());
@@ -84,6 +86,7 @@ impl Links {
                 socket,
                 tx.subscriber().unwrap(),
                 rx.publisher().unwrap(),
+                downlink_loss_probability,
             ))
             .unwrap();
 
@@ -153,6 +156,7 @@ async fn run_socket(
     mut socket: UdpSocket<'static>,
     mut subscriber: InterfaceTxSubscriber,
     publisher: InterfaceRxPublisher,
+    downlink_loss_probability: f64,
 ) -> ! {
     let remote_endpoint = (embassy_net::Ipv4Address::BROADCAST, 14550);
     socket.bind(14551).unwrap();
@@ -170,7 +174,12 @@ async fn run_socket(
         .await
         {
             Either::First(message) => {
+                // Framed first, so the sequence number advances and the ground station can
+                // see the gap, just like a packet lost on the radio.
                 let frame = endpoint.next_frame(&message).unwrap();
+                if rand::random::<f64>() < downlink_loss_probability {
+                    continue;
+                }
 
                 let mut transmit_buffer = [0; 1024];
                 let n = frame.serialize(&mut transmit_buffer).unwrap();

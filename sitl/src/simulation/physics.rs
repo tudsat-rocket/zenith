@@ -66,6 +66,10 @@ pub struct PhysicsConfig {
     pub wind_speed_mps: f32,
     /// Wind heading [deg]
     pub wind_heading_deg: f32,
+    /// Achieved fraction of the nominal motor mass flow, see [`crate::Faults`]
+    pub mass_flow_factor: f32,
+    /// Drogue deployment is commanded but the chute never comes out, see [`crate::Faults`]
+    pub drogue_fails: bool,
 }
 
 pub struct FlightPhysics {
@@ -93,6 +97,8 @@ pub struct FlightPhysics {
     phase_time: f32,
     /// Time at which the vehicle was armed [s]
     armed_time: Option<f32>,
+    /// Whether the failed drogue deployment was already reported
+    drogue_failure_logged: bool,
     /// Tracks state of parachutes, triggered by mission:flight_logic
     pub flags: RecoveryFlags,
     /// On hybrid builds, the `Burn`-phase thrust is derived from chamber
@@ -134,6 +140,8 @@ impl Default for PhysicsConfig {
             launch_heading_deg: 250.0, // west-southwest
             wind_speed_mps: 3.0,
             wind_heading_deg: 135.0, // blowing toward southeast
+            mass_flow_factor: 1.0,
+            drogue_fails: false,
         }
     }
 }
@@ -154,6 +162,7 @@ impl FlightPhysics {
             phase: FlightPhase::Pad,
             phase_time: 0.0,
             armed_time: None,
+            drogue_failure_logged: false,
             config,
             flags,
             mode: FlightMode::Idle,
@@ -199,6 +208,7 @@ impl FlightPhysics {
             self.phase = FlightPhase::Pad;
             self.phase_time = 0.0;
             self.armed_time = None;
+            self.drogue_failure_logged = false;
         } else if mode >= FlightMode::DetectLaunch && self.armed_time.is_none() {
             log::info!(
                 "[SIM] Vehicle armed at t={:.2}s, launching in 5s",
@@ -221,9 +231,11 @@ impl FlightPhysics {
                 FlightPhase::Burn => {
                     #[cfg(not(feature = "hybrid"))]
                     let thrust_accel = {
-                        self.mass -= (self.config.propellant_mass / self.config.burn_time) * DT;
+                        // Thrust scales with mass flow at constant exhaust velocity.
+                        let k = self.config.mass_flow_factor;
+                        self.mass -= k * (self.config.propellant_mass / self.config.burn_time) * DT;
                         self.mass = self.mass.max(self.config.dry_mass);
-                        self.config.thrust_force / self.mass
+                        k * self.config.thrust_force / self.mass
                     };
                     #[cfg(feature = "hybrid")]
                     let thrust_accel = {
@@ -274,7 +286,7 @@ impl FlightPhysics {
             }
             FlightPhase::Burn => {
                 #[cfg(not(feature = "hybrid"))]
-                if self.phase_time > self.config.burn_time {
+                if self.phase_time > self.config.burn_time / self.config.mass_flow_factor {
                     self.transition(FlightPhase::Coast);
                 }
                 #[cfg(feature = "hybrid")]
@@ -282,14 +294,12 @@ impl FlightPhysics {
                     self.transition(FlightPhase::Coast);
                 }
             }
-            FlightPhase::Coast => {
-                if self.flags.drogue.load(Ordering::Relaxed) {
-                    self.transition(FlightPhase::Drogue);
-                }
-            }
+            FlightPhase::Coast => self.tick_coast(),
             FlightPhase::Drogue => {
                 if self.flags.main.load(Ordering::Relaxed) {
                     self.transition(FlightPhase::Main);
+                } else {
+                    self.check_ground_impact();
                 }
             }
             FlightPhase::Main => {
@@ -328,6 +338,48 @@ impl FlightPhysics {
 
         self.omega_body = Vector3::new(omega_world.dot(&body_x), omega_world.dot(&body_y), 0.0);
         self.body_z = new_body_z;
+    }
+
+    fn tick_coast(&mut self) {
+        let drogue_fired = self.flags.drogue.load(Ordering::Relaxed);
+        if drogue_fired && !self.config.drogue_fails {
+            self.transition(FlightPhase::Drogue);
+            return;
+        }
+
+        if drogue_fired && !self.drogue_failure_logged {
+            log::warn!(
+                "[SIM] Drogue deployment commanded but failed (t={:.2}s, alt_agl={:.1}m)",
+                self.time,
+                self.altitude_agl(),
+            );
+            self.drogue_failure_logged = true;
+        }
+
+        // Without a drogue the main is the next thing that can open.
+        if self.config.drogue_fails && self.flags.main.load(Ordering::Relaxed) {
+            self.transition(FlightPhase::Main);
+        } else {
+            self.check_ground_impact();
+        }
+    }
+
+    /// Seconds since the vehicle was armed, if it is.
+    pub fn time_since_armed(&self) -> Option<f32> {
+        self.armed_time.map(|t| self.time - t)
+    }
+
+    /// Stop a vehicle that reaches the ground before its main chute is out.
+    fn check_ground_impact(&mut self) {
+        if self.altitude_agl() <= 0.0 && self.velocity.z < 0.0 {
+            log::warn!(
+                "[SIM] Ground impact without main parachute at {:.1}m/s",
+                self.velocity.magnitude()
+            );
+            self.position.z = self.config.ground_altitude;
+            self.velocity = Vector3::zeros();
+            self.transition(FlightPhase::Landed);
+        }
     }
 
     pub fn altitude_agl(&self) -> f32 {

@@ -11,6 +11,18 @@ path = "src/main.rs"
 default = ["hybrid"]
 hybrid = ["mission/hybrid", "links/hybrid"]
 
+# Off-nominal scenarios for operator training, see src/simulation/faults.rs. Can be combined.
+# Engine only reaches a fraction of its nominal propellant mass flow
+fault-engine-underperformance = []
+# Random sensors stop reporting data at random times after arming
+fault-sensor-dropout = []
+# Half of all downlink packets are lost
+fault-downlink-loss = []
+# Drogue deployment is commanded, but the recovery hardware fails
+fault-drogue-failure = []
+# Rolls a random combination of the above at startup, possibly none at all
+fault-random = []
+
 [dependencies]
 state_estimator = { path = "../state_estimator" }
 links = { workspace = true }

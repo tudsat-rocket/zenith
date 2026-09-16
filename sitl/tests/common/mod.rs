@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex};
 use links::UplinkCommand;
 use mission::{Params, TelemetryLink, Vehicle as MissionVehicle};
 use rapid_dialect::{FlightMode, Rapid};
-use sitl::{MemoryStorage, RecoveryFlags, SharedSimulation, Simulation, StdOutputs, StdSensors};
+use sitl::{
+    Faults, MemoryStorage, RecoveryFlags, SharedSimulation, Simulation, StdOutputs, StdSensors,
+};
 
 #[cfg(not(feature = "hybrid"))]
 use mission::bus::NoBus;
@@ -44,8 +46,13 @@ impl TelemetryLink for CapturedLink {
 
 impl Harness {
     pub async fn new(params: Option<Params>) -> Self {
+        Self::with_faults(params, Faults::nominal()).await
+    }
+
+    pub async fn with_faults(params: Option<Params>, faults: Faults) -> Self {
         let flags = RecoveryFlags::default();
-        let sim: SharedSimulation = Arc::new(Mutex::new(Simulation::new(flags.clone())));
+        let sim: SharedSimulation =
+            Arc::new(Mutex::new(Simulation::with_faults(flags.clone(), faults)));
         let sensors = StdSensors::new(Arc::clone(&sim));
         let outputs = StdOutputs::new(flags);
         let storage = MemoryStorage::new(params);
