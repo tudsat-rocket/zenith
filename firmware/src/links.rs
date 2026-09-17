@@ -6,6 +6,7 @@ use embassy_time::Delay;
 
 use lora_phy::LoRa;
 use mission::TelemetryLink;
+use rapid_dialect::FlightMode;
 
 use crate::LoraTransceiver;
 use crate::Vehicle;
@@ -61,13 +62,25 @@ impl Links {
         }
 
         if let Some(cmd) = self.ethernet.try_recv_command() {
-            return Some(cmd);
+            return Self::from_wired(cmd);
         }
 
         if let Some(cmd) = self.usb.try_recv_command() {
-            return Some(cmd);
+            return Self::from_wired(cmd);
         }
 
         None
+    }
+
+    /// Filters a command received on a wired link.
+    ///
+    /// Ignition is reachable via LoRa only.
+    fn from_wired(cmd: UplinkCommand) -> Option<UplinkCommand> {
+        if matches!(cmd, UplinkCommand::SetFlightMode(FlightMode::Ignite)) {
+            defmt::warn!("Ignoring Ignite commanded on a wired link.");
+            return None;
+        }
+
+        Some(cmd)
     }
 }
