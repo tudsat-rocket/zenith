@@ -142,6 +142,22 @@ impl TankId {
     }
 }
 
+impl PressSensId {
+    /// Full-scale reading of this sensor, for telemetry encoding purposes.
+    pub fn full_scale_bar(&self) -> f32 {
+        match self {
+            PressSensId::Nosecone => 10.0,
+            PressSensId::PressurantTank | PressSensId::ExternalPressurant => 300.0,
+            PressSensId::PReg1
+            | PressSensId::PReg2
+            | PressSensId::OxTankUpper
+            | PressSensId::OxTankLower
+            | PressSensId::CombustionChamber
+            | PressSensId::ExternalOxidizer => 60.0,
+        }
+    }
+}
+
 impl InventoryId<9> for ValveId {
     // The MavLink type has enum values Extra{1..10} with higher values, we simply ignore those
     const ALL: [Self; 9] = [
@@ -331,5 +347,22 @@ mod tests {
         check::<PressSensId, 9>();
         check::<BinaryOutputId, 5>();
         check::<TankId, 6>();
+    }
+
+    /// Sensor ranges and tank ratings are written out separately, so they can drift apart. A
+    /// sensor whose range stopped at its tank's rating would saturate exactly when an overpressure
+    /// started, and the telemetry encoding would clamp it to full scale rather than show it.
+    #[test]
+    fn sensors_can_read_past_their_tank_rating() {
+        for tank in TankId::ALL {
+            for sensor in tank.pressure_sensors().into_iter().flatten() {
+                assert!(
+                    sensor.full_scale_bar() >= tank.pressure_rating_bar(),
+                    "{sensor:?} tops out at {} bar, below the {} bar {tank:?} is rated for",
+                    sensor.full_scale_bar(),
+                    tank.pressure_rating_bar(),
+                );
+            }
+        }
     }
 }

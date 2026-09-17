@@ -150,14 +150,15 @@
 //!      |        |           |         |
 //!      +--------|-----------|---------|-- 11b time
 //!               +-----------|---------|--  5b message identifier
-//!                           +---------|-- 14B message payload, depends on identifier
+//!                           +---------|-- 12B message payload, depends on identifier
 //!                                     +-- 16b HMAC calculated over everything else
 //! ```
 //!
 //!   - time: time since boot and/or message counter, depending on your point of view.
-//!     Time is encoded as 11bits of time in 16*ms (time_in_ms >> 4). Since we assume our message
-//!     interval to be a multiple of 16ms (see below), so we can recover full time in ms by
-//!     assuming 4 bits of zeros, and the value should cleanly overflow every 32.8 seconds.
+//!     Time is encoded as 11 bits of time in 32*ms (time_in_ms >> 5). Since our message interval
+//!     is a multiple of 32ms (see below), we can recover full time in ms by assuming 5 bits of
+//!     zeros, and the value cleanly overflows every 65.5 seconds. In order to get absolute time,
+//!     The higher bits can occasionally be sent in a specific message.
 //!
 //!   - message identifier: allows identifying the content of the message payload.
 //!     Since we have just 5 bits for this, we are limited to just 32 possible downlink messages.
@@ -172,7 +173,7 @@
 //!         which allows identifying the profile of vehicle. This is not something we do at the
 //!         moment.
 //!
-//!   - payload: 14 bytes of actual payload, depending on the message identifier.
+//!   - payload: 12 bytes of actual payload, depending on the message identifier.
 //!
 //!   - HMAC: 16 bits of HMAC calculated over the other 14 bytes using a key known by both the
 //!     vehicle and the receiver. This provides some integrity and authenticity protection, and it
@@ -199,16 +200,16 @@
 //! MAVLink messages on reception ("unpacking").
 //!
 //! As an example, the MAVLink HEARTBEAT message mostly contains mode information, which we can
-//! compress to way less than 14 bytes. So we combine it with some altitude and velocity
-//! information from LOCAL_POSITION_NED as well as our attitude from the ATTITUDE message.
+//! compress to way less than 12 bytes. So we combine it with some altitude information from
+//! LOCAL_POSITION_NED, our attitude from the ATTITUDE message and the speeds from VFR_HUD.
 //!
 //! The receiver may even recover more MAVLink messages than were used in the construction of the
-//! message. For instance, our combined messages of (HEARTBEAT, LOCAL_POSITION_NED, ATTITUDE) are
-//! enough to recover most of the information contained in the VFR_HUD message as well. This gives
-//! the system more compatibility with MAVLink ground stations using different messages without any
-//! additional RF bandwidth.
+//! message. For instance, the altitude that went in as LOCAL_POSITION_NED.z is enough to recover
+//! most of an ALTITUDE message as well. This gives the system more compatibility with MAVLink
+//! ground stations using different messages without any additional RF bandwidth. Fields that no
+//! longer fit come back as NaN, so a ground station can tell them apart from a real reading.
 //!
-//!   (HEARBEAT, LOCAL_POSITION_NED, ATTITUDE) -> [packet] -> (HB, L_P_N, ATT, ALTITUDE, VFR_HUD)
+//!   (HEARBEAT, L_P_N, ATTITUDE, VFR_HUD) -> [packet] -> (HB, L_P_N, ATT, ALTITUDE, VFR_HUD)
 //!
 //!
 //! # Uplink

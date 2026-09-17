@@ -3,6 +3,8 @@
 use core::f32;
 use core::num::Wrapping;
 
+use nalgebra::{UnitQuaternion, Vector3};
+
 #[cfg(target_os = "none")]
 use num_traits::Float as _;
 
@@ -78,6 +80,20 @@ impl VehicleSnapshot<'_> {
     }
 }
 
+/// Attitude as (roll, pitch, yaw) in radians, in MAVLink's aircraft convention.
+fn euler_angles(orientation: &UnitQuaternion<f32>) -> (f32, f32, f32) {
+    let nose = orientation.transform_vector(&Vector3::z());
+    let board_normal = orientation.transform_vector(&Vector3::y());
+    let across_board = orientation.transform_vector(&Vector3::x());
+
+    let roll = across_board.z.atan2(board_normal.z);
+    let pitch = nose.z.clamp(-1.0, 1.0).asin();
+    // yaw is compass heading; the estimator is east-north-up
+    let yaw = nose.x.atan2(nose.y);
+
+    (roll, pitch, yaw)
+}
+
 impl From<&VehicleSnapshot<'_>> for Heartbeat {
     fn from(snap: &VehicleSnapshot<'_>) -> Self {
         Heartbeat {
@@ -97,20 +113,19 @@ impl From<&VehicleSnapshot<'_>> for Heartbeat {
 
 impl Into<Attitude> for &VehicleSnapshot<'_> {
     fn into(self) -> Attitude {
-        let q = self.state_estimator.orientation.unwrap_or_default();
-        let body_z_world = q.transform_vector(&nalgebra::Vector3::new(0.0, 0.0, 1.0));
-        let pitch = body_z_world.z.clamp(-1.0, 1.0).asin();
-        let yaw = (-body_z_world.y).atan2(body_z_world.x);
+        let (roll, pitch, yaw) =
+            euler_angles(&self.state_estimator.orientation.unwrap_or_default());
         let gyro = self.readings.imu1_gyro.unwrap_or_default();
 
         Attitude {
             time_boot_ms: self.time.0,
-            roll: 0.0,
+            roll,
             pitch,
             yaw,
+            // Body rates about the same aircraft axes: forward, right and down.
             rollspeed: gyro.z.to_radians(),
-            pitchspeed: gyro.x.to_radians(),
-            yawspeed: gyro.y.to_radians(),
+            pitchspeed: -gyro.x.to_radians(),
+            yawspeed: -gyro.y.to_radians(),
         }
     }
 }
@@ -136,8 +151,8 @@ impl Into<GlobalPositionInt> for &VehicleSnapshot<'_> {
     fn into(self) -> GlobalPositionInt {
         let vel = self.state_estimator.velocity();
 
-        let q = self.state_estimator.orientation.unwrap_or_default();
-        let (_roll, _pitch, yaw) = q.euler_angles();
+        let (_roll, _pitch, yaw) =
+            euler_angles(&self.state_estimator.orientation.unwrap_or_default());
 
         GlobalPositionInt {
             time_boot_ms: self.time.0,
@@ -296,24 +311,26 @@ impl Into<ScaledPressure3> for &VehicleSnapshot<'_> {
     }
 }
 
+/// The throttle percentage VFR_HUD reports for a flight mode. Also used by the telemetry receiver.
+pub fn throttle_percent(mode: FlightMode) -> u16 {
+    if mode == FlightMode::Burn { 100 } else { 0 }
+}
+
 impl Into<VfrHud> for &VehicleSnapshot<'_> {
     fn into(self) -> VfrHud {
-        let q = self.state_estimator.orientation.unwrap_or_default();
-        let (_roll, _pitch, yaw) = q.euler_angles();
+        let (_roll, _pitch, yaw) =
+            euler_angles(&self.state_estimator.orientation.unwrap_or_default());
         let vel = self.state_estimator.velocity();
 
         VfrHud {
-            airspeed: 0.0,
+            // No airspeed sensor on this vehicle.
+            airspeed: f32::NAN,
             groundspeed: vel.xy().magnitude(),
             heading: ({
                 let d = yaw.to_degrees();
                 d - (d / 360.0).floor() * 360.0
             }) as i16,
-            throttle: if self.mode == FlightMode::Burn {
-                100
-            } else {
-                0
-            },
+            throttle: throttle_percent(self.mode),
             alt: self.state_estimator.altitude_asl(),
             climb: vel.z,
         }
@@ -568,6 +585,96 @@ impl InstanceMessage<ValveId> for Valve {
             id: valve,
             state,
             commanded,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use core::f32::consts::FRAC_PI_2;
+
+    use nalgebra::Matrix3;
+
+    /// The board lying on a bench, components up, nosecone end facing north: body z points north,
+    /// body y (the board's own up) points up, and body x is what is left.
+    fn level_facing_north() -> UnitQuaternion<f32> {
+        UnitQuaternion::from_matrix(&Matrix3::from_columns(&[
+            -Vector3::x(),
+            Vector3::z(),
+            Vector3::y(),
+        ]))
+    }
+
+    /// Nosecone end at compass `heading`, raised `elevation` above the horizon, the board turned
+    /// `bank` about the airframe from having its components face up.
+    fn attitude(heading: f32, elevation: f32, bank: f32) -> UnitQuaternion<f32> {
+        UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -heading)
+            * level_facing_north()
+            * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -elevation)
+            * UnitQuaternion::from_axis_angle(&Vector3::z_axis(), bank)
+    }
+
+    /// The bench check: a board lying flat with its components up is level, whichever way round it
+    /// happens to be lying.
+    fn assert_level(orientation: &UnitQuaternion<f32>, expected_yaw: f32) {
+        let (roll, pitch, yaw) = euler_angles(orientation);
+        assert!(roll.abs() < 1e-3, "roll {roll}");
+        assert!(pitch.abs() < 1e-3, "pitch {pitch}");
+        assert!((yaw - expected_yaw).abs() < 1e-3, "yaw {yaw}");
+    }
+
+    #[test]
+    fn a_flat_board_is_level_at_any_heading() {
+        for heading in [0.0, 0.7, FRAC_PI_2, -2.5] {
+            assert_level(&attitude(heading, 0.0, 0.0), heading);
+        }
+    }
+
+    /// Yaw is a compass heading: zero north, positive east. Built by hand rather than through
+    /// `attitude`, so the helper's own convention is not what is being checked.
+    #[test]
+    fn yaw_is_a_compass_heading() {
+        let level_facing_east = UnitQuaternion::from_matrix(&Matrix3::from_columns(&[
+            Vector3::y(),
+            Vector3::z(),
+            Vector3::x(),
+        ]));
+        assert_level(&level_facing_east, FRAC_PI_2);
+    }
+
+    /// Roll is the board turning about the airframe and nothing else - not the heading, which is
+    /// what it tracked while the decomposition put its reference in the world frame.
+    #[test]
+    fn roll_is_the_board_turning_about_the_airframe() {
+        for bank in [-2.0, -0.5, 0.0, 0.5, 2.0] {
+            for heading in [0.0, 2.5] {
+                for elevation in [0.0, 0.6] {
+                    let (roll, pitch, yaw) = euler_angles(&attitude(heading, elevation, bank));
+
+                    assert!((roll - bank).abs() < 1e-3, "roll {roll}, bank {bank}");
+                    assert!((pitch - elevation).abs() < 1e-3, "pitch {pitch}");
+                    assert!((yaw - heading).abs() < 1e-3, "yaw {yaw}");
+                }
+            }
+        }
+    }
+
+    /// Positive roll is right wing down, so with the nose north the board's components turn east.
+    #[test]
+    fn positive_roll_drops_the_right_hand_side() {
+        let banked = attitude(0.0, 0.0, FRAC_PI_2);
+        let board_up = banked.transform_vector(&Vector3::y());
+
+        assert!(board_up.x > 0.9, "components face {board_up:?}");
+    }
+
+    #[test]
+    fn pitch_is_the_nose_above_the_horizon() {
+        for elevation in [-1.4, -0.3, 0.0, 0.9, 1.4] {
+            let (_, pitch, _) = euler_angles(&attitude(1.0, elevation, 0.8));
+            assert!((pitch - elevation).abs() < 1e-3, "pitch {pitch}");
         }
     }
 }

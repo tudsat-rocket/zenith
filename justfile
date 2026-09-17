@@ -49,7 +49,7 @@ clippy:
 
 # cargo test, but with release due to all the state estimator sitl number crunching
 test:
-    cargo test --release
+    cargo test --release --workspace --exclude firmware
     cargo test -p sitl --no-default-features --release
     cargo test -p sitl --features hybrid --release
 
