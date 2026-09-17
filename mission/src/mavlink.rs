@@ -425,7 +425,7 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
             onboard_control_sensors_present: present,
             onboard_control_sensors_enabled: enabled,
             onboard_control_sensors_health: health,
-            load: 0,
+            load: crate::cpu::CPU_LOAD.permille().unwrap_or(0),
             voltage_battery: r
                 .power
                 .as_ref()
@@ -439,8 +439,8 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
             battery_remaining: -1,
             drop_rate_comm: 0,
             errors_comm: 0,
-            errors_count1: 0,
-            errors_count2: 0,
+            errors_count1: crate::cpu::LOOP_HEALTH.overruns(),
+            errors_count2: crate::cpu::LOOP_HEALTH.peak_latency_us(),
             errors_count3: 0,
             errors_count4: 0,
             onboard_control_sensors_present_extended: recovery_present,

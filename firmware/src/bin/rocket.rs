@@ -5,13 +5,14 @@
     reason = "boot-time peripheral/task init; panic-on-failure is the embedded model"
 )]
 
-use embassy_executor::{InterruptExecutor, Spawner};
+use embassy_executor::{InterruptExecutor, Spawner, raw};
 use embassy_stm32::interrupt;
 use embassy_stm32::interrupt::{InterruptExt, Priority};
 use embassy_stm32::peripherals::*;
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_sync::pubsub::PubSubChannel;
-use embassy_time::{Duration, Ticker};
+use embassy_time::{Duration, Instant, Ticker};
+use static_cell::StaticCell;
 
 use firmware::Vehicle;
 use firmware::bus::BusHandler;
@@ -24,9 +25,31 @@ use firmware as fw;
 
 static EXECUTOR_HIGH: InterruptExecutor = InterruptExecutor::new();
 static EXECUTOR_MEDIUM: InterruptExecutor = InterruptExecutor::new();
+static EXECUTOR_LOW: StaticCell<raw::Executor> = StaticCell::new();
 
-#[embassy_executor::main]
-async fn main(low_priority_spawner: Spawner) {
+/// Hand-rolled `#[embassy_executor::main]`, so we can watch CPU utilization.
+#[cortex_m_rt::entry]
+fn main() -> ! {
+    /// Context value the cortex-m pender uses to recognise the thread-mode executor.
+    /// Not public in `embassy-executor`, but part of its ABI.
+    const THREAD_PENDER: usize = usize::MAX;
+
+    let executor: &'static raw::Executor =
+        EXECUTOR_LOW.init(raw::Executor::new(THREAD_PENDER as *mut ()));
+    executor.spawner().must_spawn(init(executor.spawner()));
+
+    fw::cpu::init();
+
+    loop {
+        // SAFETY: the only `poll` for this executor, never called reentrantly - `sleep` below
+        // cannot run any of this executor's tasks.
+        unsafe { executor.poll() };
+        fw::cpu::sleep();
+    }
+}
+
+#[embassy_executor::task]
+async fn init(low_priority_spawner: Spawner) {
     let mut board = fw::board::init().await;
 
     // Start high priority executor
@@ -86,8 +109,11 @@ pub async fn main_loop(
     mut links: Links,
     mut iwdg: IndependentWatchdog<'static, IWDG1>,
 ) -> ! {
+    let mut cpu = fw::cpu::CpuMonitor::new();
     let mut ticker = Ticker::every(Duration::from_micros(1000));
     loop {
+        let tick_started = Instant::now();
+
         if links::take_uplink_activity() {
             vehicle.note_uplink();
         }
@@ -118,6 +144,7 @@ pub async fn main_loop(
 
         links.send_telemetry_messages(&vehicle);
 
+        cpu.update(tick_started.elapsed());
         iwdg.pet();
         ticker.next().await;
     }
