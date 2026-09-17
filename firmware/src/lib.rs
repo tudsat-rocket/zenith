@@ -28,6 +28,7 @@ use crate::bus::BusHandler;
 pub mod board;
 pub mod bus;
 pub mod can;
+pub mod cpu;
 pub mod links;
 pub mod lora_iv;
 pub mod sensors;

@@ -2,6 +2,7 @@
 #![allow(async_fn_in_trait)]
 
 pub mod bus;
+pub mod cpu;
 pub mod flight_logic;
 pub mod inventory;
 pub mod leds;
