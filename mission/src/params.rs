@@ -22,6 +22,7 @@ pub struct Params {
     pub state_machine: StateMachineParams,
     pub propulsion: PropulsionParams,
     pub failsafe: FailsafeParams,
+    pub misc: MiscParams,
 }
 
 /// State machine parameters, exposed over MAVLink as `SM_*`.
@@ -79,6 +80,16 @@ pub struct FailsafeParams {
     /// Time (ms) without ground station contact after which the vehicle vents. 0 disables.
     #[param(id = 0x0401, name = "UPLINK_VENT", default = 120_000)]
     pub uplink_vent_timeout: u32,
+}
+
+/// Miscellaneous parameters, exposed over MAVLink as `MISC_*`.
+#[derive(Debug, Clone, macros::ParameterGroup)]
+#[param_group(prefix = "MISC")]
+pub struct MiscParams {
+    /// Duty cycle (percent, 0-100) of the buzzer PWM signal. A buzzer is loudest at 50%, other
+    /// values trade volume for a lower current draw. Values above 100 are clamped.
+    #[param(id = 0x0500, name = "BUZZ_VOL", default = 50)]
+    pub buzzer_volume: u32,
 }
 
 /// Live mirror of the current [`Params`] for the MAVLink param protocol tasks. Starts empty (the
@@ -240,6 +251,7 @@ mod tests {
         assert_eq!(s.state_estimator.std_dev_barometer_transsonic, 5000.0);
         assert_eq!(s.state_machine.main_deploy_altitude, 400.0);
         assert_eq!(s.state_machine.min_time_to_drogue, 1000);
+        assert_eq!(s.misc.buzzer_volume, 50);
     }
 
     #[test]
