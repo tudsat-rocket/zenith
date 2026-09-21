@@ -38,7 +38,8 @@ pub enum PressSensId {
     PReg2,
     OxTankUpper,
     OxTankLower,
-    CombustionChamber,
+    CombustionChamber1,
+    CombustionChamber2,
     ExternalPressurant,
     ExternalOxidizer,
 }
@@ -61,7 +62,7 @@ pub struct InventoryMap<I, T, const N: usize> {
 
 pub type ValveMap<T> = InventoryMap<ValveId, T, 9>;
 pub type TemperatureSensorMap<T> = InventoryMap<TempSensId, T, 2>;
-pub type PressureSensorMap<T> = InventoryMap<PressSensId, T, 9>;
+pub type PressureSensorMap<T> = InventoryMap<PressSensId, T, 10>;
 pub type BinaryOutputMap<T> = InventoryMap<BinaryOutputId, T, 5>;
 pub type TankMap<T> = InventoryMap<TankId, T, 6>;
 
@@ -134,7 +135,10 @@ impl TankId {
                 Some(PressSensId::OxTankUpper),
                 Some(PressSensId::OxTankLower),
             ],
-            TankId::CombustionChamber => [Some(PressSensId::CombustionChamber), None],
+            TankId::CombustionChamber => [
+                Some(PressSensId::CombustionChamber1),
+                Some(PressSensId::CombustionChamber2),
+            ],
             TankId::RegulatedPressurant => [Some(PressSensId::PReg1), Some(PressSensId::PReg2)],
             TankId::ExternalPressurant => [Some(PressSensId::ExternalPressurant), None],
             TankId::ExternalOxidizer => [Some(PressSensId::ExternalOxidizer), None],
@@ -155,14 +159,15 @@ impl TankId {
 
 impl PressSensId {
     /// Sensors on the vehicle, in [`Self::ALL`] order.
-    pub const INTERNAL: [Self; 7] = [
+    pub const INTERNAL: [Self; 8] = [
         Self::Nosecone,
         Self::PressurantTank,
         Self::PReg1,
         Self::PReg2,
         Self::OxTankUpper,
         Self::OxTankLower,
-        Self::CombustionChamber,
+        Self::CombustionChamber1,
+        Self::CombustionChamber2,
     ];
 
     /// Sensors on the ground side of the umbilical, in [`Self::ALL`] order.
@@ -177,7 +182,8 @@ impl PressSensId {
             | PressSensId::PReg2
             | PressSensId::OxTankUpper
             | PressSensId::OxTankLower
-            | PressSensId::CombustionChamber
+            | PressSensId::CombustionChamber1
+            | PressSensId::CombustionChamber2
             | PressSensId::ExternalOxidizer => 60.0,
         }
     }
@@ -225,15 +231,16 @@ impl InventoryId<2> for TempSensId {
     }
 }
 
-impl InventoryId<9> for PressSensId {
-    const ALL: [Self; 9] = [
+impl InventoryId<10> for PressSensId {
+    const ALL: [Self; 10] = [
         Self::Nosecone,
         Self::PressurantTank,
         Self::PReg1,
         Self::PReg2,
         Self::OxTankUpper,
         Self::OxTankLower,
-        Self::CombustionChamber,
+        Self::CombustionChamber1,
+        Self::CombustionChamber2,
         Self::ExternalPressurant,
         Self::ExternalOxidizer,
     ];
@@ -301,7 +308,7 @@ macro_rules! assert_partitioned {
     };
 }
 
-assert_partitioned!(PressSensId, 9);
+assert_partitioned!(PressSensId, 10);
 assert_partitioned!(TankId, 6);
 
 impl<I, T: Clone, const N: usize> Clone for InventoryMap<I, T, N> {
@@ -401,7 +408,7 @@ mod tests {
         }
         check::<ValveId, 9>();
         check::<TempSensId, 2>();
-        check::<PressSensId, 9>();
+        check::<PressSensId, 10>();
         check::<BinaryOutputId, 5>();
         check::<TankId, 6>();
     }

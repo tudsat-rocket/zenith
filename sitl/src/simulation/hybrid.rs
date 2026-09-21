@@ -313,7 +313,9 @@ impl Bus for SitlBus {
             let pressure = match id {
                 P::PressurantTank => sim.hybrid.tank_pressure(TankId::Pressurant),
                 P::OxTankUpper | P::OxTankLower => sim.hybrid.tank_pressure(TankId::Oxidizer),
-                P::CombustionChamber => sim.hybrid.tank_pressure(TankId::CombustionChamber),
+                P::CombustionChamber1 | P::CombustionChamber2 => {
+                    sim.hybrid.tank_pressure(TankId::CombustionChamber)
+                }
                 P::ExternalPressurant if umbilical_connected => {
                     sim.hybrid.tank_pressure(TankId::ExternalPressurant)
                 }

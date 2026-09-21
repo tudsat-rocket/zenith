@@ -247,6 +247,36 @@ pub(crate) mod tests {
         assert_eq!(ox.id, TankId::Oxidizer as u8);
     }
 
+    /// Both chamber transducers have to come back, on the two slots of the same vessel. Fitting
+    /// the second one is what the split was for.
+    #[test]
+    fn both_chamber_sensors_survive_the_packet() {
+        let mut parts = SnapshotParts::default();
+        parts.inputs.press_sens[PressSensId::CombustionChamber1] =
+            Some(DataWithTime::new(30.0, Wrapping(0)));
+        parts.inputs.press_sens[PressSensId::CombustionChamber2] =
+            Some(DataWithTime::new(28.0, Wrapping(0)));
+
+        let msg = DownlinkMessage::Pressures(PressuresMessage::pack(&parts.snapshot()));
+        let DownlinkMessage::Pressures(decoded) = through_packet(msg) else {
+            panic!("decoded as the wrong message")
+        };
+        let vessels = decoded.unpack(&mut ConnectionContext::init(0));
+
+        let chamber = &vessels[at(&TankId::INTERNAL, TankId::CombustionChamber)];
+        // 60 bar / 254 ~ 0.24 bar.
+        assert!(
+            chamber.pressure1.abs_diff(3000) <= 24,
+            "{}",
+            chamber.pressure1
+        );
+        assert!(
+            chamber.pressure2.abs_diff(2800) <= 24,
+            "{}",
+            chamber.pressure2
+        );
+    }
+
     #[test]
     fn external_readings_survive_the_packet() {
         let mut parts = SnapshotParts::default();
