@@ -111,6 +111,8 @@ const SIMULATED_NODES: [u8; 0] = [];
 fn every_present_io_board_node_heartbeats_as_its_own_component() {
     block_on(async {
         let mut harness = Harness::new(None).await;
+        // The simulated boards only report a high-current supply out of Idle.
+        harness.arm();
         let sent = harness.collect_telemetry_by_tick(TICKS).await;
         let sent: Vec<&links::Downlink> = sent.iter().flatten().collect();
 

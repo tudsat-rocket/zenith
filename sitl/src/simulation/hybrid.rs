@@ -356,9 +356,13 @@ impl Bus for SitlBus {
                 Wrapping(t),
             )),
             nodes,
-            // Nothing simulates a high-current supply; every board reports one, matching the
-            // recovery bus.
-            nodes_armed: nodes,
+            // Nothing simulates a high-current supply; every board reports one whenever the
+            // vehicle is out of Idle, matching the recovery bus.
+            nodes_armed: if sim.hybrid.flight_mode == FlightMode::Idle {
+                NodeSet::NONE
+            } else {
+                nodes
+            },
         }
     }
 

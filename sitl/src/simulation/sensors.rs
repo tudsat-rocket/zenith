@@ -10,6 +10,7 @@
 
 use nalgebra::Vector3;
 use rand::Rng;
+use rapid_dialect::FlightMode;
 
 use mission::{AdcData, BaroReading, SensorReadings, Sensors};
 use state_estimator::GpsDatum;
@@ -113,7 +114,11 @@ impl SensorModel {
             bus_main_voltage: pack_mv,
             bus_supply_voltage: 24000,
             fc_current: current_ma,
-            recovery_voltage: pack_mv,
+            recovery_voltage: if physics.mode == FlightMode::Idle {
+                0
+            } else {
+                pack_mv
+            },
             recovery_current: 0,
             temperature: 0,
         };
