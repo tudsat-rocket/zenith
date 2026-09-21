@@ -33,6 +33,8 @@ pub struct BusInputImage {
     pub binary_outputs: BinaryOutputMap<Option<DataWithTime<bool>>>,
     pub ox_tank_level: Option<DataWithTime<f32>>,
     pub nodes: NodeSet,
+    /// A subset of `nodes`: a board we cannot hear from tells us nothing.
+    pub nodes_armed: NodeSet,
 }
 
 /// The IO board protocol's node id field is four bits wide.
@@ -76,6 +78,10 @@ impl NodeSet {
         self.0
     }
 
+    pub const fn any(self) -> bool {
+        self.0 != 0
+    }
+
     pub fn contains(self, node_id: u8) -> bool {
         Self::bit(node_id).is_some_and(|bit| self.0 & bit != 0)
     }
@@ -90,6 +96,11 @@ impl NodeSet {
         } else {
             self.0 &= !bit;
         }
+    }
+
+    #[must_use]
+    pub const fn intersection(self, other: Self) -> Self {
+        Self(self.0 & other.0)
     }
 
     fn bit(node_id: u8) -> Option<u16> {
@@ -147,6 +158,7 @@ impl BusInputImage {
             binary_outputs: BinaryOutputMap::splat(None),
             ox_tank_level: None,
             nodes: NodeSet::NONE,
+            nodes_armed: NodeSet::NONE,
         }
     }
 }

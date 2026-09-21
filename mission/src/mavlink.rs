@@ -71,13 +71,8 @@ impl VehicleSnapshot<'_> {
             .map(|p| p.recovery_voltage > RECOVERY_ARMED_THRESHOLD_MV)
             .unwrap_or(false);
 
-        // TODO: replace with a real IO-board armed flag once available on the bus.
-        #[cfg(feature = "hybrid")]
-        let io_armed = false;
-        #[cfg(not(feature = "hybrid"))]
-        let io_armed = false;
-
-        recovery_hot || io_armed
+        // A live board can drive an output, so the vehicle is armed even if recovery is not.
+        recovery_hot || self.input_image.nodes_armed.any()
     }
 }
 
@@ -535,7 +530,7 @@ impl InstanceMessage<u8> for Heartbeat {
         node_id
     }
 
-    /// Presence only. Whether the board is *working* is what its other messages say.
+    /// Whether the board is *working* is what its other messages say.
     fn build(snap: &VehicleSnapshot<'_>, node_id: u8) -> Option<Self> {
         snap.input_image
             .nodes
@@ -545,7 +540,11 @@ impl InstanceMessage<u8> for Heartbeat {
                 // not by id.
                 type_: MavType::Servo,
                 autopilot: MavAutopilot::Invalid,
-                base_mode: MavModeFlag::default(),
+                base_mode: if snap.input_image.nodes_armed.contains(node_id) {
+                    MavModeFlag::SAFETY_ARMED
+                } else {
+                    MavModeFlag::default()
+                },
                 custom_mode: 0,
                 system_status: MavState::Active,
                 mavlink_version: 2,

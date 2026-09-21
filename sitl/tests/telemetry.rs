@@ -12,7 +12,7 @@ use links::SELF_COMPONENT_ID;
 use mission::TankId;
 use mission::inventory::InventoryId;
 use rapid_dialect::Rapid;
-use rapid_dialect::rapid::enums::ValveId;
+use rapid_dialect::rapid::enums::{MavModeFlag, ValveId};
 
 /// Two full cycles of the slowest (2000 ms) interval, so every combination of phases that can
 /// coincide has had the chance to. Every interval in the schedule has to divide this, or the
@@ -115,15 +115,27 @@ fn every_present_io_board_node_heartbeats_as_its_own_component() {
         let sent: Vec<&links::Downlink> = sent.iter().flatten().collect();
 
         for node_id in SIMULATED_NODES {
-            let beats = sent
+            let beats: Vec<_> = sent
                 .iter()
-                .filter(|m| m.component_id == node_id && matches!(m.message, Rapid::Heartbeat(_)))
-                .count();
+                .filter_map(|m| match &m.message {
+                    Rapid::Heartbeat(h) if m.component_id == node_id => Some(h),
+                    _ => None,
+                })
+                .collect();
             assert_eq!(
-                beats,
+                beats.len(),
                 (TICKS / 1000) as usize,
-                "node {node_id} heartbeat {beats} times"
+                "node {} heartbeat {} times",
+                node_id,
+                beats.len()
             );
+
+            for beat in beats {
+                assert!(
+                    beat.base_mode.contains(MavModeFlag::SAFETY_ARMED),
+                    "node {node_id} did not report itself armed"
+                );
+            }
         }
 
         for message in sent.iter().filter(|m| m.component_id != SELF_COMPONENT_ID) {

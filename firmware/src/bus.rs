@@ -44,6 +44,12 @@ pub const VALVE_MESSAGE_INTERVAL: Duration = Duration::from_millis(500);
 /// The boards heartbeat once a second, so this rides out two missed beats.
 pub const NODE_PRESENCE_TIMEOUT: Duration = Duration::from_millis(3000);
 
+/// Low on purpose: the error worth avoiding is reporting a powered board as safe.
+///
+/// Only rev3 senses its rails; rev2 broadcasts zeros, which read as disarmed. The vehicle is all
+/// rev3.
+pub const HCO_ARMED_THRESHOLD_MV: u16 = 1000;
+
 pub struct BusHandler {
     pub input: BusInputImage,
     pub outputs_last: BusOutputImage,
@@ -84,6 +90,9 @@ impl Bus for BusHandler {
                 last.is_some_and(|t| now.saturating_duration_since(t) < NODE_PRESENCE_TIMEOUT);
             self.input.nodes.set(node_id as u8, present);
         }
+
+        // A board gone quiet would otherwise keep claiming its last rail reading.
+        self.input.nodes_armed = self.input.nodes_armed.intersection(self.input.nodes);
 
         self.input.clone()
     }
@@ -212,6 +221,12 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
                 }
             }
         }
+        // Either pair counts: the rails are sensed separately, but the harness feeds them from
+        // one input.
+        TpdoFrame::RailVoltage([_logic, hco12, hco34]) => {
+            let armed = hco12 >= HCO_ARMED_THRESHOLD_MV || hco34 >= HCO_ARMED_THRESHOLD_MV;
+            image.nodes_armed.set(node_id, armed);
+        }
         // NOTE: currently all sensor processing must happen on nodes on the bus, so the raw
         // amplifier windows are ignored. The rest has no home in the input image (yet) —
         // listed one by one so that a new frame kind fails to compile rather than being
@@ -226,7 +241,6 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
         | TpdoFrame::RawBus1B(_)
         | TpdoFrame::SensorUnits(_)
         | TpdoFrame::I2cScan { .. }
-        | TpdoFrame::RailVoltage(_)
         | TpdoFrame::RailCurrent(_)
         | TpdoFrame::Status { .. } => (),
     }
