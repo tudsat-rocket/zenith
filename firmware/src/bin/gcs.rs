@@ -175,9 +175,13 @@ async fn split_downlink(
         eth_tx.publish_immediate(msg.clone());
         usb_tx.publish_immediate(msg);
 
-        led_activity.set_low();
-        Timer::after(Duration::from_millis(2)).await;
-        led_activity.set_high();
+        // One blink per burst, not per message: the receiver blocks on this channel while
+        // unpacking, so a slow drain costs it the next packet slot.
+        if rx.is_empty() {
+            led_activity.set_low();
+            Timer::after(Duration::from_millis(2)).await;
+            led_activity.set_high();
+        }
     }
 }
 
