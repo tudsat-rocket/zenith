@@ -5,21 +5,24 @@
     reason = "boot-time peripheral/task init; panic-on-failure is the embedded model"
 )]
 
-use rapid_dialect::Rapid;
+use rapid_dialect::{FlightMode, Rapid};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 use embassy_executor::{InterruptExecutor, Spawner};
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either3, select3};
 use embassy_stm32::interrupt::{InterruptExt, Priority};
-use embassy_stm32::{gpio::Output, interrupt};
+use embassy_stm32::{
+    gpio::{Input, Output},
+    interrupt,
+};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Receiver, Sender},
     watch::Watch,
 };
 use embassy_sync::{channel::Channel, pubsub::PubSubChannel};
-use embassy_time::{Duration, Instant, Timer, with_timeout};
+use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
 
 use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG};
 use telemetry::messages::{DownlinkMessage, SetFlightModeMessage, SetValveMessage, UplinkMessage};
@@ -37,9 +40,22 @@ static EXECUTOR_MEDIUM: InterruptExecutor = InterruptExecutor::new();
 
 static CONNECTION: Watch<CriticalSectionRawMutex, Option<(Instant, u16)>, 3> = Watch::new();
 
+/// Debounced state of the GSE ignition button: `true` while it is held down. `join_uplink`
+/// subscribes with `changed()`, so a press arrives as an event alongside the Ethernet/USB
+/// command streams rather than being polled when a command happens to come in.
+static IGNITION_BUTTON: Watch<CriticalSectionRawMutex, bool, 2> = Watch::new();
+
 static DOWNLINK: StaticCell<Channel<CriticalSectionRawMutex, Rapid, 5>> = StaticCell::new();
 static UPLINK: StaticCell<Channel<CriticalSectionRawMutex, (u16, UplinkMessage), 5>> =
     StaticCell::new();
+
+/// One wakeup of the GCS relay loop. Folds the two command streams and the physical ignition
+/// button into a single `select`, so the button is handled exactly like a command event.
+enum GroundInput {
+    Eth(UplinkCommand),
+    Usb(UplinkCommand),
+    IgnitionButton(bool),
+}
 
 #[embassy_executor::main]
 async fn main(low_priority_spawner: Spawner) {
@@ -72,6 +88,13 @@ async fn main(low_priority_spawner: Spawner) {
 
     let (led_red, led_yellow, led_green) = board.outputs.leds;
 
+    low_priority_spawner
+        .spawn(ignition_button_task(
+            board.ignition_button,
+            IGNITION_BUTTON.sender(),
+        ))
+        .unwrap();
+
     medium_priority_spawner
         .spawn(split_downlink(tx.receiver(), eth_tx, usb_tx, led_green))
         .unwrap();
@@ -79,6 +102,7 @@ async fn main(low_priority_spawner: Spawner) {
         .spawn(join_uplink(
             eth_rx,
             usb_rx,
+            IGNITION_BUTTON.receiver().unwrap(),
             rx.sender(),
             led_yellow,
             led_red,
@@ -153,10 +177,55 @@ async fn split_downlink(
     }
 }
 
+/// Debounce the physical ignition button and publish its state on [`IGNITION_BUTTON`].
+///
+/// The pin is sampled on a fixed ticker and a new level is only accepted once it has been stable
+/// for `DEBOUNCE_SAMPLES` consecutive samples. Writing to the `Watch` then wakes the `changed()`
+/// future in [`join_uplink`], giving us an edge-triggered event without a dedicated interrupt.
+#[embassy_executor::task]
+async fn ignition_button_task(
+    button: Input<'static>,
+    sender: embassy_sync::watch::Sender<'static, CriticalSectionRawMutex, bool, 2>,
+) -> ! {
+    // Stable for 5 samples at 10 ms each = 50 ms of debounce.
+    const DEBOUNCE_SAMPLES: u8 = 5;
+
+    let mut ticker = Ticker::every(Duration::from_millis(10));
+    let mut stable = button.is_high();
+    let mut last = stable;
+    let mut count = 0u8;
+
+    sender.send(stable);
+    loop {
+        ticker.next().await;
+        let now = button.is_high();
+        if now == last {
+            count = count.saturating_add(1);
+        } else {
+            last = now;
+            count = 0;
+        }
+        if count >= DEBOUNCE_SAMPLES && now != stable {
+            stable = now;
+            sender.send(stable);
+        }
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "single relay state machine; keeping the gating logic in one place is clearer"
+)]
 #[embassy_executor::task]
 async fn join_uplink(
     mut eth_rx: InterfaceCommandSubscriber,
     mut usb_rx: InterfaceCommandSubscriber,
+    mut ignition_button_rx: embassy_sync::watch::Receiver<
+        'static,
+        CriticalSectionRawMutex,
+        bool,
+        2,
+    >,
     tx: Sender<'static, CriticalSectionRawMutex, (u16, UplinkMessage), 5>,
     mut led_activity: Output<'static>,
     mut led_error: Output<'static>,
@@ -166,25 +235,58 @@ async fn join_uplink(
 
     let mut seq: u16 = 0;
 
+    // Set once the vehicle has been commanded into `Pressurize`. This is the ignition gate: the
+    // physical button may only release an `Ignite` command while it is true. It is cleared again
+    // on `Idle`, so an abort cannot be followed by an accidental ignition.
+    let mut pressurized = false;
+
     loop {
-        let received_command = match with_timeout(
+        // Wait for any local input: an Ethernet command, a USB command, or an ignition-button
+        // edge. The button is a first-class event source here, not a level polled on command.
+        let input = match with_timeout(
             Duration::from_millis(500),
-            select(eth_rx.next_message_pure(), usb_rx.next_message_pure()),
+            select3(
+                eth_rx.next_message_pure(),
+                usb_rx.next_message_pure(),
+                ignition_button_rx.changed(),
+            ),
         )
         .await
         {
-            Ok(Either::First(cmd) | Either::Second(cmd)) => Some(cmd),
+            Ok(Either3::First(cmd)) => Some(GroundInput::Eth(cmd)),
+            Ok(Either3::Second(cmd)) => Some(GroundInput::Usb(cmd)),
+            Ok(Either3::Third(pressed)) => Some(GroundInput::IgnitionButton(pressed)),
             Err(_timeout) => None,
         };
 
         let connection = CONNECTION.try_get().flatten();
         led_error.set_level(connection.is_some().into());
 
-        // If we received a command we can send, we do so. If not, we send a heartbeat message,
-        // but only if we actually have an active connection.
-        let message = match (received_command, connection) {
-            (Some(command), _) => match command {
+        // Translate an input into a message for the vehicle. Inputs that must not reach the rocket
+        // (a rejected ignition request, a button release, an idle tick) `continue` without sending.
+        let message = match (input, connection) {
+            (Some(GroundInput::Eth(command) | GroundInput::Usb(command)), _) => match command {
+                // Remember that the vehicle is being pressurized, then forward the mode change.
+                // This is what arms the ignition gate below.
+                UplinkCommand::SetFlightMode(FlightMode::Pressurize) => {
+                    pressurized = true;
+                    UplinkMessage::SetFlightMode(SetFlightModeMessage {
+                        mode: FlightMode::Pressurize as u8,
+                    })
+                }
+                // Ignition may never be requested from the ground software. Swallow it here; the
+                // only path to `Ignite` is the physical button.
+                UplinkCommand::SetFlightMode(FlightMode::Ignite) => {
+                    defmt::warn!(
+                        "Refusing ground-commanded ignition; use the physical ignition button."
+                    );
+                    continue;
+                }
+                // Any other mode change is forwarded as-is. Returning to `Idle` disarms ignition.
                 UplinkCommand::SetFlightMode(fm) => {
+                    if fm == FlightMode::Idle {
+                        pressurized = false;
+                    }
                     UplinkMessage::SetFlightMode(SetFlightModeMessage { mode: fm as u8 })
                 }
                 UplinkCommand::CommandValve(valve, cmd) => {
@@ -198,10 +300,22 @@ async fn join_uplink(
                     continue;
                 }
             },
-            (None, Some(_)) => UplinkMessage::Heartbeat(()),
-            (None, None) => {
-                continue;
+            // Physical ignition button: the only way to send `Ignite`, and only while pressurized.
+            (Some(GroundInput::IgnitionButton(true)), _) => {
+                if pressurized {
+                    defmt::info!("Ignition button pressed while pressurized: sending Ignite.");
+                    UplinkMessage::SetFlightMode(SetFlightModeMessage {
+                        mode: FlightMode::Ignite as u8,
+                    })
+                } else {
+                    defmt::warn!("Ignition button pressed but not pressurized; ignoring.");
+                    continue;
+                }
             }
+            // Button release and idle ticks carry no command for the vehicle.
+            (Some(GroundInput::IgnitionButton(false)), _) => continue,
+            (None, Some(_)) => UplinkMessage::Heartbeat(()),
+            (None, None) => continue,
         };
 
         seq = seq.wrapping_add(1);
