@@ -4,7 +4,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use links::Downlink;
-use mission::mavlink::VehicleSnapshot;
+use mission::bus::IO_NODE_IDS;
+use mission::mavlink::{VehicleSnapshot, io_node_heartbeat};
 use rapid_dialect::rapid::messages::RadioStatus;
 use rapid_dialect::{FlightMode, Rapid};
 use siphasher::sip::SipHasher;
@@ -282,8 +283,17 @@ impl TelemetryMessage for DownlinkMessage {
                 }
             }
             Self::Components(inner) => {
-                for valve in inner.unpack(context) {
+                let (valves, nodes, armed) = inner.unpack(context);
+
+                for valve in valves {
                     sender.anysend(Downlink::from_self(valve)).await;
+                }
+
+                // The wired links send these from the schedule; rebuilding them here makes a
+                // board look the same either way.
+                for node_id in IO_NODE_IDS.into_iter().filter(|id| nodes.contains(*id)) {
+                    let heartbeat = io_node_heartbeat(armed.contains(node_id));
+                    sender.anysend(Downlink::new(node_id, heartbeat)).await;
                 }
             }
             Self::Sensors(inner) => {

@@ -523,6 +523,24 @@ trait InstanceMessage<I: Copy>: Sized {
     fn build(snapshot: &VehicleSnapshot<'_>, id: I) -> Option<Self>;
 }
 
+/// Shared because the ground station rebuilds these from the LoRa downlink, and both paths have
+/// to produce the same message.
+pub fn io_node_heartbeat(armed: bool) -> Heartbeat {
+    Heartbeat {
+        // The closest MAV_TYPE to an io board; the spec identifies components by type, not by id.
+        type_: MavType::Servo,
+        autopilot: MavAutopilot::Invalid,
+        base_mode: if armed {
+            MavModeFlag::SAFETY_ARMED
+        } else {
+            MavModeFlag::default()
+        },
+        custom_mode: 0,
+        system_status: MavState::Active,
+        mavlink_version: 2,
+    }
+}
+
 /// Not the vehicle's own heartbeat: an IO board's CAN node id becomes its MAVLink component id,
 /// so ground software sees one component per board.
 impl InstanceMessage<u8> for Heartbeat {
@@ -535,20 +553,7 @@ impl InstanceMessage<u8> for Heartbeat {
         snap.input_image
             .nodes
             .contains(node_id)
-            .then_some(Heartbeat {
-                // The closest MAV_TYPE to an io board; the spec identifies components by type,
-                // not by id.
-                type_: MavType::Servo,
-                autopilot: MavAutopilot::Invalid,
-                base_mode: if snap.input_image.nodes_armed.contains(node_id) {
-                    MavModeFlag::SAFETY_ARMED
-                } else {
-                    MavModeFlag::default()
-                },
-                custom_mode: 0,
-                system_status: MavState::Active,
-                mavlink_version: 2,
-            })
+            .then(|| io_node_heartbeat(snap.input_image.nodes_armed.contains(node_id)))
     }
 }
 
