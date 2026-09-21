@@ -32,6 +32,69 @@ pub struct BusInputImage {
     pub valve_state: ValveMap<Option<DataWithTime<ValveState>>>,
     pub binary_outputs: BinaryOutputMap<Option<DataWithTime<bool>>>,
     pub ox_tank_level: Option<DataWithTime<f32>>,
+    pub nodes: NodeSet,
+}
+
+/// The IO board protocol's node id field is four bits wide.
+pub const NODE_ID_COUNT: usize = 16;
+
+const _: () = assert!(
+    links::SELF_COMPONENT_ID == 1,
+    "IO node ids start at 2 because 0 is MAVLink's \"all components\" and 1 is zenith itself"
+);
+
+/// The node ids zenith reports as MAVLink components.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "const-evaluated fill of a fixed-length array, bounded by the array's own length"
+)]
+pub const IO_NODE_IDS: [u8; NODE_ID_COUNT - 2] = {
+    let mut ids = [0; NODE_ID_COUNT - 2];
+    let mut i = 0;
+    while i < ids.len() {
+        ids[i] = (i + 2) as u8;
+        i += 1;
+    }
+    ids
+};
+
+/// A set of IO board node ids. Bit n is node id n, which is also the LoRa downlink's encoding,
+/// so [`Self::bits`] goes straight onto the wire.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NodeSet(u16);
+
+const _: () = assert!(NODE_ID_COUNT == u16::BITS as usize);
+
+impl NodeSet {
+    pub const NONE: Self = Self(0);
+
+    pub const fn from_bits(bits: u16) -> Self {
+        Self(bits)
+    }
+
+    pub const fn bits(self) -> u16 {
+        self.0
+    }
+
+    pub fn contains(self, node_id: u8) -> bool {
+        Self::bit(node_id).is_some_and(|bit| self.0 & bit != 0)
+    }
+
+    pub fn set(&mut self, node_id: u8, member: bool) {
+        let Some(bit) = Self::bit(node_id) else {
+            return;
+        };
+
+        if member {
+            self.0 |= bit;
+        } else {
+            self.0 &= !bit;
+        }
+    }
+
+    fn bit(node_id: u8) -> Option<u16> {
+        1u16.checked_shl(u32::from(node_id))
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -83,6 +146,7 @@ impl BusInputImage {
             valve_state: ValveMap::splat(None),
             binary_outputs: BinaryOutputMap::splat(None),
             ox_tank_level: None,
+            nodes: NodeSet::NONE,
         }
     }
 }
@@ -139,6 +203,43 @@ impl IoAddr {
             node_id: board_id,
             index,
             subindex,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A bit landing next door would move a board.
+    #[test]
+    fn presence_bits_do_not_overlap() {
+        for subject in 0..NODE_ID_COUNT as u8 {
+            let mut nodes = NodeSet::NONE;
+            nodes.set(subject, true);
+
+            for other in 0..NODE_ID_COUNT as u8 {
+                assert_eq!(
+                    nodes.contains(other),
+                    other == subject,
+                    "node {subject} leaked into {other}"
+                );
+            }
+
+            nodes.set(subject, false);
+            assert_eq!(nodes, NodeSet::NONE, "node {subject} would not clear");
+        }
+    }
+
+    #[test]
+    fn ids_off_the_bus_are_never_present() {
+        let mut nodes = NodeSet::from_bits(u16::MAX);
+
+        for node_id in [NODE_ID_COUNT as u8, 100, u8::MAX] {
+            assert!(!nodes.contains(node_id));
+
+            nodes.set(node_id, true);
+            assert_eq!(nodes.bits(), u16::MAX, "setting {node_id} moved a real bit");
         }
     }
 }

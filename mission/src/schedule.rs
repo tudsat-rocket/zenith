@@ -119,8 +119,8 @@ pub const fn allocate<const N: usize>(intervals: [u32; N]) -> [Slot; N] {
     slots
 }
 
-/// How many slots one entry of the [`downlink_schedule!`] takes: one per message actually built, so
-/// an instance message takes one per component. Must stay in step with [`downlink_entry!`] - the
+/// How many slots one entry of the [`downlink_schedule!`] takes: one per message that may be built,
+/// so an instance message takes one per component. Must stay in step with [`downlink_entry!`] - the
 /// n-th `due()` is answered with the n-th slot, so a disagreement drops messages.
 macro_rules! downlink_entry_slots {
     ($message:ty) => {
@@ -145,12 +145,17 @@ macro_rules! downlink_entry {
             $link.send_message(::links::Downlink::from_self(message));
         }
     };
-    // instance message, iterate through all ids
+    // instance message, iterate through all ids. One with nothing to say spends its slot in
+    // silence rather than shifting anyone else's phase.
     ($due:ident, $snapshot:expr, $link:ident, $message:ty, $ids:expr) => {
         for id in $ids {
-            if $due() {
-                let message = <$message as InstanceMessage<_>>::build($snapshot, id);
-                $link.send_message(::links::Downlink::from_self(message));
+            if $due()
+                && let Some(message) = <$message as InstanceMessage<_>>::build($snapshot, id)
+            {
+                $link.send_message(::links::Downlink::new(
+                    <$message as InstanceMessage<_>>::component_id(id),
+                    message,
+                ));
             }
         }
     };
@@ -251,13 +256,11 @@ mod tests {
         }
     }
 
+    /// Not the real schedule: `allocate` runs in const position, so one that does not fit fails
+    /// to compile.
     #[test]
-    fn the_flight_schedule_fits() {
-        // 2 at 10 ms, 7 sensor, 1 battery, 4 at 500, 2 at 1000, 6 tanks and 9 valves at 200.
-        let intervals = [
-            10, 10, 100, 100, 100, 100, 100, 100, 100, 200, 500, 500, 500, 500, 1000, 1000, 200,
-            200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200,
-        ];
+    fn allocated_slots_never_collide() {
+        let intervals = [50, 50, 100, 100, 200, 200, 200, 500, 1000, 1000, 1000];
         check(&intervals, &allocate(intervals));
     }
 

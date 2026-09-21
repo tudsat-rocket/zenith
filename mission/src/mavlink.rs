@@ -11,8 +11,8 @@ use num_traits::Float as _;
 use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::{
     GpsFixType, MavAutopilot, MavBatteryChargeState, MavBatteryFault, MavBatteryFunction,
-    MavBatteryMode, MavBatteryType, MavModeFlag, MavProtocolCapability, MavSysStatusSensor,
-    MavSysStatusSensorExtended, MavType, RocketCapability,
+    MavBatteryMode, MavBatteryType, MavModeFlag, MavProtocolCapability, MavState,
+    MavSysStatusSensor, MavSysStatusSensorExtended, MavType, RocketCapability,
 };
 use rapid_dialect::rapid::messages::{
     Attitude, AutopilotVersion, BatteryStatus, GlobalPositionInt, GpsRawInt, Heartbeat,
@@ -55,6 +55,7 @@ impl VehicleSnapshot<'_> {
             every 2000 ms => RocketInfo, AutopilotVersion;
             // One message per component
             every 200 ms => PressureVessel[TankId::ALL], Valve[ValveId::ALL];
+            every 1000 ms => Heartbeat[crate::bus::IO_NODE_IDS];
         }
     }
 
@@ -518,13 +519,42 @@ impl Into<BatteryStatus> for &VehicleSnapshot<'_> {
     }
 }
 
-/// A message the flight computer sends one of per component.
-trait InstanceMessage<I> {
-    fn build(snapshot: &VehicleSnapshot<'_>, id: I) -> Self;
+/// A message the flight computer sends one of per component. `None` leaves that slot silent.
+trait InstanceMessage<I: Copy>: Sized {
+    fn component_id(_id: I) -> u8 {
+        links::SELF_COMPONENT_ID
+    }
+
+    fn build(snapshot: &VehicleSnapshot<'_>, id: I) -> Option<Self>;
+}
+
+/// Not the vehicle's own heartbeat: an IO board's CAN node id becomes its MAVLink component id,
+/// so ground software sees one component per board.
+impl InstanceMessage<u8> for Heartbeat {
+    fn component_id(node_id: u8) -> u8 {
+        node_id
+    }
+
+    /// Presence only. Whether the board is *working* is what its other messages say.
+    fn build(snap: &VehicleSnapshot<'_>, node_id: u8) -> Option<Self> {
+        snap.input_image
+            .nodes
+            .contains(node_id)
+            .then_some(Heartbeat {
+                // The closest MAV_TYPE to an io board; the spec identifies components by type,
+                // not by id.
+                type_: MavType::Servo,
+                autopilot: MavAutopilot::Invalid,
+                base_mode: MavModeFlag::default(),
+                custom_mode: 0,
+                system_status: MavState::Active,
+                mavlink_version: 2,
+            })
+    }
 }
 
 impl InstanceMessage<TankId> for PressureVessel {
-    fn build(snap: &VehicleSnapshot<'_>, tank: TankId) -> Self {
+    fn build(snap: &VehicleSnapshot<'_>, tank: TankId) -> Option<Self> {
         let p_ids = tank.pressure_sensors();
         let t_ids = tank.temperature_sensors();
 
@@ -558,7 +588,7 @@ impl InstanceMessage<TankId> for PressureVessel {
             .map(|l| (l * 10000.0).clamp(0.0, f32::from(u16::MAX)) as u16)
             .unwrap_or(u16::MAX);
 
-        PressureVessel {
+        Some(PressureVessel {
             id: tank as u8,
             flags: tank.flags(),
             fluid: tank.fluid(),
@@ -569,23 +599,23 @@ impl InstanceMessage<TankId> for PressureVessel {
             temperature2,
             volume: (tank.volume_l() * 1000.0) as u16,
             level,
-        }
+        })
     }
 }
 
 impl InstanceMessage<ValveId> for Valve {
-    fn build(snap: &VehicleSnapshot<'_>, valve: ValveId) -> Self {
+    fn build(snap: &VehicleSnapshot<'_>, valve: ValveId) -> Option<Self> {
         // Both fields use 0.0 = fully closed, 1.0 = fully open; NAN = unknown.
         let state = snap.input_image.valve_state[valve]
             .map(|state| f32::from(state.data.promille()) / 1000.0)
             .unwrap_or(f32::NAN);
         let commanded = f32::from(snap.output_image.valve[valve].promille()) / 1000.0;
 
-        Valve {
+        Some(Valve {
             id: valve,
             state,
             commanded,
-        }
+        })
     }
 }
 

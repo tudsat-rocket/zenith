@@ -15,6 +15,7 @@ use embassy_time::{Duration, Instant};
 use embedded_can::Id;
 
 use heapless::Vec;
+use iocan_proto::ids::{HEARTBEAT_BASE, NODE_ID_MASK};
 use iocan_proto::{TpdoFrame, TpdoKind, decode_pdo};
 use num_traits::float::Float;
 use zencan_common::{CanId, CanMessage, sdo::SdoRequest};
@@ -22,7 +23,8 @@ use zencan_common::{CanId, CanMessage, sdo::SdoRequest};
 use rapid_dialect::rapid::enums::{ValveId, valve_id};
 
 use mission::bus::{
-    Bus, BusDataError, BusInputImage, BusOutputImage, DataWithTime, IoAddr, ValveState,
+    Bus, BusDataError, BusInputImage, BusOutputImage, DataWithTime, IoAddr, NODE_ID_COUNT,
+    ValveState,
 };
 use mission::inventory::{BinaryOutputId, BinaryOutputMap, InventoryId, ValveMap};
 
@@ -39,12 +41,16 @@ pub const VERY_FRESH_DURATION: Duration = Duration::from_millis(50);
 pub const BINARY_OUTPUT_MESSAGE_INTERVAL: Duration = Duration::from_millis(500);
 pub const VALVE_MESSAGE_INTERVAL: Duration = Duration::from_millis(500);
 
+/// The boards heartbeat once a second, so this rides out two missed beats.
+pub const NODE_PRESENCE_TIMEOUT: Duration = Duration::from_millis(3000);
+
 pub struct BusHandler {
     pub input: BusInputImage,
     pub outputs_last: BusOutputImage,
     pub can: (CanTxPublisher, CanRxSubscriber),
     last_binary_output_messages: BinaryOutputMap<Option<Instant>>,
     last_valve_messages: ValveMap<Option<Instant>>,
+    last_node_frames: [Option<Instant>; NODE_ID_COUNT],
 }
 
 impl BusHandler {
@@ -55,18 +61,28 @@ impl BusHandler {
             can: (can_tx_pub, can_rx_sub),
             last_binary_output_messages: BinaryOutputMap::splat(None),
             last_valve_messages: ValveMap::splat(None),
+            last_node_frames: [None; NODE_ID_COUNT],
         }
     }
 }
 
 impl Bus for BusHandler {
     fn get_input_image(&mut self) -> BusInputImage {
+        let now = Instant::now();
+        let now_ms = Wrapping(now.as_millis() as u32);
+
         while let Some(msg) = self.can.1.try_next_message_pure() {
-            try_injest_can_msg(
-                &mut self.input,
-                msg,
-                Wrapping(Instant::now().as_millis() as u32),
-            );
+            if let Some(node_id) = try_injest_can_msg(&mut self.input, msg, now_ms)
+                && let Some(slot) = self.last_node_frames.get_mut(node_id as usize)
+            {
+                *slot = Some(now);
+            }
+        }
+
+        for (node_id, last) in self.last_node_frames.iter().enumerate() {
+            let present =
+                last.is_some_and(|t| now.saturating_duration_since(t) < NODE_PRESENCE_TIMEOUT);
+            self.input.nodes.set(node_id as u8, present);
         }
 
         self.input.clone()
@@ -147,23 +163,26 @@ impl Bus for BusHandler {
     }
 }
 
-fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u32>) {
+/// Reports the sender whether or not the frame carried anything we use: being heard from at all
+/// is what presence means.
+fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u32>) -> Option<u8> {
     let Id::Standard(cob_id) = frame.header().id() else {
-        return;
+        return None;
     };
+    let cob_id = cob_id.as_raw();
 
-    let Some((node_id, kind_index)) = decode_pdo(cob_id.as_raw()) else {
-        return;
+    let Some((node_id, kind_index)) = decode_pdo(cob_id) else {
+        return (cob_id & !NODE_ID_MASK == HEARTBEAT_BASE).then_some((cob_id & NODE_ID_MASK) as u8);
     };
 
     let Ok(data) = <[u8; 8]>::try_from(frame.data()) else {
         defmt::warn!("injesting can msg with non 8 length not supported");
-        return;
+        return Some(node_id);
     };
 
     let Some(kind) = TpdoKind::from_index(kind_index) else {
         defmt::warn!("injest can msg with unknown tpdo kind: {}", kind_index);
-        return;
+        return Some(node_id);
     };
 
     match TpdoFrame::decode(kind, data) {
@@ -211,6 +230,8 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
         | TpdoFrame::RailCurrent(_)
         | TpdoFrame::Status { .. } => (),
     }
+
+    Some(node_id)
 }
 
 // technically const

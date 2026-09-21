@@ -6,7 +6,7 @@
 
 use std::num::Wrapping;
 
-use mission::bus::{Bus, BusInputImage, BusOutputImage, DataWithTime, ValveState};
+use mission::bus::{Bus, BusInputImage, BusOutputImage, DataWithTime, NodeSet, ValveState};
 use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::ValveId;
 
@@ -282,6 +282,11 @@ impl HybridSimulation {
     }
 }
 
+/// The vehicle's wiring table is firmware-only, so its node set is restated here by hand.
+const ONBOARD_NODES: [u8; 6] = [2, 3, 4, 5, 6, 7];
+/// The external tank board, on the umbilical.
+const UMBILICAL_NODE: u8 = 8;
+
 pub struct SitlBus {
     sim: super::SharedSimulation,
 }
@@ -335,6 +340,12 @@ impl Bus for SitlBus {
             ))
         });
 
+        let mut nodes = NodeSet::NONE;
+        for node_id in ONBOARD_NODES {
+            nodes.set(node_id, true);
+        }
+        nodes.set(UMBILICAL_NODE, umbilical_connected);
+
         BusInputImage {
             temp_sens,
             press_sens,
@@ -344,6 +355,7 @@ impl Bus for SitlBus {
                 sim.hybrid.tank_level(TankId::Oxidizer),
                 Wrapping(t),
             )),
+            nodes,
         }
     }
 
