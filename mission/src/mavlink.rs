@@ -59,20 +59,17 @@ impl VehicleSnapshot<'_> {
         }
     }
 
-    /// Whether the vehicle is *physically* armed, i.e. the arming pins/switches are thrown. This is
-    /// orthogonal to the flight mode and is what MAVLink SAFETY_ARMED reflects.
+    /// Whether the flight computer itself is *physically* armed, i.e. its arming pins/switches are
+    /// thrown. This is orthogonal to the flight mode and is what MAVLink SAFETY_ARMED reflects.
+    /// The IO boards report their own arming separately, as their own components.
     fn is_physically_armed(&self) -> bool {
         const RECOVERY_ARMED_THRESHOLD_MV: u16 = 6000;
 
-        let recovery_hot = self
-            .readings
+        self.readings
             .power
             .as_ref()
             .map(|p| p.recovery_voltage > RECOVERY_ARMED_THRESHOLD_MV)
-            .unwrap_or(false);
-
-        // A live board can drive an output, so the vehicle is armed even if recovery is not.
-        recovery_hot || self.input_image.nodes_armed.any()
+            .unwrap_or(false)
     }
 }
 

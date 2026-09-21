@@ -78,10 +78,6 @@ impl NodeSet {
         self.0
     }
 
-    pub const fn any(self) -> bool {
-        self.0 != 0
-    }
-
     pub fn contains(self, node_id: u8) -> bool {
         Self::bit(node_id).is_some_and(|bit| self.0 & bit != 0)
     }
