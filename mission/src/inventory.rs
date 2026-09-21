@@ -76,6 +76,17 @@ pub trait InventoryId<const N: usize>: Copy {
 }
 
 impl TankId {
+    /// Tanks on the vehicle, in [`Self::ALL`] order.
+    pub const INTERNAL: [Self; 4] = [
+        Self::Pressurant,
+        Self::Oxidizer,
+        Self::CombustionChamber,
+        Self::RegulatedPressurant,
+    ];
+
+    /// Tanks on the ground side of the umbilical, in [`Self::ALL`] order.
+    pub const EXTERNAL: [Self; 2] = [Self::ExternalPressurant, Self::ExternalOxidizer];
+
     pub fn flags(&self) -> PressureVesselFlag {
         match self {
             TankId::ExternalPressurant | TankId::ExternalOxidizer => PressureVesselFlag::EXTERNAL,
@@ -143,6 +154,20 @@ impl TankId {
 }
 
 impl PressSensId {
+    /// Sensors on the vehicle, in [`Self::ALL`] order.
+    pub const INTERNAL: [Self; 7] = [
+        Self::Nosecone,
+        Self::PressurantTank,
+        Self::PReg1,
+        Self::PReg2,
+        Self::OxTankUpper,
+        Self::OxTankLower,
+        Self::CombustionChamber,
+    ];
+
+    /// Sensors on the ground side of the umbilical, in [`Self::ALL`] order.
+    pub const EXTERNAL: [Self; 2] = [Self::ExternalPressurant, Self::ExternalOxidizer];
+
     /// Full-scale reading of this sensor, for telemetry encoding purposes.
     pub fn full_scale_bar(&self) -> f32 {
         match self {
@@ -247,6 +272,38 @@ impl InventoryId<6> for TankId {
     }
 }
 
+/// Checks that `INTERNAL` and `EXTERNAL` reproduce `ALL`, in order. The LoRa downlink carries the
+/// two halves in separate messages and keeps indexing the internal one by `idx()`, so `INTERNAL`
+/// has to be a prefix of `ALL` and `EXTERNAL` the rest of it.
+macro_rules! assert_partitioned {
+    ($id:ty, $n:literal) => {
+        #[allow(
+            clippy::indexing_slicing,
+            clippy::arithmetic_side_effects,
+            reason = "const-evaluated walk over fixed-length arrays"
+        )]
+        const _: () = {
+            let all = <$id as InventoryId<$n>>::ALL;
+            assert!(<$id>::INTERNAL.len() + <$id>::EXTERNAL.len() == all.len());
+
+            let mut i = 0;
+            while i < <$id>::INTERNAL.len() {
+                assert!(<$id>::INTERNAL[i] as usize == all[i] as usize);
+                i += 1;
+            }
+
+            let mut i = 0;
+            while i < <$id>::EXTERNAL.len() {
+                assert!(<$id>::EXTERNAL[i] as usize == all[<$id>::INTERNAL.len() + i] as usize);
+                i += 1;
+            }
+        };
+    };
+}
+
+assert_partitioned!(PressSensId, 9);
+assert_partitioned!(TankId, 6);
+
 impl<I, T: Clone, const N: usize> Clone for InventoryMap<I, T, N> {
     fn clone(&self) -> Self {
         Self {
@@ -347,6 +404,25 @@ mod tests {
         check::<PressSensId, 9>();
         check::<BinaryOutputId, 5>();
         check::<TankId, 6>();
+    }
+
+    /// The two halves of the inventory travel in separate telemetry messages, so a tank whose
+    /// sensor sits in the other half would come back with that reading missing.
+    #[test]
+    fn tanks_and_their_sensors_are_on_the_same_side() {
+        for (tanks, sensors) in [
+            (&TankId::INTERNAL[..], &PressSensId::INTERNAL[..]),
+            (&TankId::EXTERNAL[..], &PressSensId::EXTERNAL[..]),
+        ] {
+            for tank in tanks {
+                for sensor in tank.pressure_sensors().into_iter().flatten() {
+                    assert!(
+                        sensors.contains(&sensor),
+                        "{tank:?} reads {sensor:?} from the other half of the inventory"
+                    );
+                }
+            }
+        }
     }
 
     /// Sensor ranges and tank ratings are written out separately, so they can drift apart. A
