@@ -4,8 +4,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use mission::mavlink::VehicleSnapshot;
-use rapid_dialect::Rapid;
 use rapid_dialect::rapid::messages::RadioStatus;
+use rapid_dialect::{FlightMode, Rapid};
 use siphasher::sip::SipHasher;
 use utils::anychannel::AnySender;
 
@@ -23,7 +23,7 @@ mod status;
 pub use components::ComponentsMessage;
 pub use gps::GpsMessage;
 pub use heartbeat::HeartbeatMessage;
-pub use pressures::PressuresMessage;
+pub use pressures::{ExternalPressuresMessage, PressuresMessage};
 pub use sensors::SensorsMessage;
 pub use status::StatusMessage;
 
@@ -120,6 +120,7 @@ pub enum DownlinkMessage {
     Heartbeat(HeartbeatMessage),
     Status(StatusMessage),
     Pressures(PressuresMessage),
+    ExternalPressures(ExternalPressuresMessage),
     Components(ComponentsMessage),
     Sensors(SensorsMessage),
     Gps(GpsMessage),
@@ -138,7 +139,8 @@ impl DownlinkMessage {
     /// the receiver has to know when to expect a packet in order to follow the hopping sequence,
     /// and it infers packet loss from the packets that fail to arrive, so we leave no gaps.
     ///
-    /// The pattern itself is fixed for now, may be dynamic based on flight mode later.
+    /// The pattern is otherwise fixed, except for the one slot the ground side gives back once
+    /// the umbilical is gone.
     pub fn for_tick(
         time_ms: u32,
         snapshot: &VehicleSnapshot<'_>,
@@ -154,13 +156,17 @@ impl DownlinkMessage {
         )]
         let slot = (time_ms / DOWNLINK_MESSAGE_INTERVAL_MS) % Self::SLOT_COUNT;
 
-        // The four packed messages repeat over each half of the cycle, so the GPS slot is paid
-        // for out of the heartbeat's share alone.
+        // The four packed messages repeat over each half of the cycle, so the GPS and external
+        // pressure slots are paid for out of the heartbeat's share alone.
         Some(match slot {
             1 | 9 => Self::Pressures(PressuresMessage::pack(snapshot)),
             3 | 11 => Self::Components(ComponentsMessage::pack(snapshot)),
             5 | 13 => Self::Status(StatusMessage::pack((snapshot, uplink))),
             7 | 15 => Self::Sensors(SensorsMessage::pack(snapshot)),
+            // The umbilical is severed at liftoff, so the ground side hands its slot back.
+            6 if snapshot.mode < FlightMode::Burn => {
+                Self::ExternalPressures(ExternalPressuresMessage::pack(snapshot))
+            }
             14 => Self::Gps(GpsMessage::pack(snapshot)),
             // Every remaining slot, so the heartbeat keeps most of the link to itself.
             _ => Self::Heartbeat(HeartbeatMessage::pack(snapshot)),
@@ -184,6 +190,7 @@ impl TelemetryMessage for DownlinkMessage {
             Self::Heartbeat(inner) => (HeartbeatMessage::ID, inner.serialize()?),
             Self::Status(inner) => (StatusMessage::ID, inner.serialize()?),
             Self::Pressures(inner) => (PressuresMessage::ID, inner.serialize()?),
+            Self::ExternalPressures(inner) => (ExternalPressuresMessage::ID, inner.serialize()?),
             Self::Components(inner) => (ComponentsMessage::ID, inner.serialize()?),
             Self::Sensors(inner) => (SensorsMessage::ID, inner.serialize()?),
             Self::Gps(inner) => (GpsMessage::ID, inner.serialize()?),
@@ -229,6 +236,9 @@ impl TelemetryMessage for DownlinkMessage {
             HeartbeatMessage::ID => DownlinkMessage::Heartbeat(postcard::from_bytes(payload)?),
             StatusMessage::ID => DownlinkMessage::Status(postcard::from_bytes(payload)?),
             PressuresMessage::ID => DownlinkMessage::Pressures(postcard::from_bytes(payload)?),
+            ExternalPressuresMessage::ID => {
+                DownlinkMessage::ExternalPressures(postcard::from_bytes(payload)?)
+            }
             ComponentsMessage::ID => DownlinkMessage::Components(postcard::from_bytes(payload)?),
             SensorsMessage::ID => DownlinkMessage::Sensors(postcard::from_bytes(payload)?),
             GpsMessage::ID => DownlinkMessage::Gps(postcard::from_bytes(payload)?),
@@ -261,6 +271,11 @@ impl TelemetryMessage for DownlinkMessage {
                 sender.anysend(Rapid::SystemTime(time)).await;
             }
             Self::Pressures(inner) => {
+                for vessel in inner.unpack(context) {
+                    sender.anysend(Rapid::PressureVessel(vessel)).await;
+                }
+            }
+            Self::ExternalPressures(inner) => {
                 for vessel in inner.unpack(context) {
                     sender.anysend(Rapid::PressureVessel(vessel)).await;
                 }
@@ -519,37 +534,47 @@ pub(crate) mod tests {
         assert_eq!(unpack_temperature(pack_temperature(None)), None);
     }
 
-    /// One packet per interval, no gaps, and the slot pattern the module documents.
+    /// One packet per interval, no gaps, and the slot pattern the module documents. Walked in
+    /// both a pre- and a post-liftoff mode, since slot 6 changes hands between them.
     #[test]
     fn the_slot_pattern_repeats_and_leaves_no_gaps() {
-        let parts = SnapshotParts::default();
-        let snapshot = parts.snapshot();
+        for mode in [FlightMode::Idle, FlightMode::Ignite, FlightMode::Burn] {
+            let mut parts = SnapshotParts::default();
+            parts.mode = mode;
+            let snapshot = parts.snapshot();
 
-        let mut built = 0;
-        for time_ms in 0..(DownlinkMessage::SLOT_COUNT * DOWNLINK_MESSAGE_INTERVAL_MS * 2) {
-            let Some(msg) = DownlinkMessage::for_tick(time_ms, &snapshot, RadioStatus::default())
-            else {
-                continue;
-            };
-            built += 1;
+            let mut built = 0;
+            for time_ms in 0..(DownlinkMessage::SLOT_COUNT * DOWNLINK_MESSAGE_INTERVAL_MS * 2) {
+                let Some(msg) =
+                    DownlinkMessage::for_tick(time_ms, &snapshot, RadioStatus::default())
+                else {
+                    continue;
+                };
+                built += 1;
 
-            let slot = (time_ms / DOWNLINK_MESSAGE_INTERVAL_MS) % DownlinkMessage::SLOT_COUNT;
-            let expected = match slot {
-                1 | 9 => PressuresMessage::ID,
-                3 | 11 => ComponentsMessage::ID,
-                5 | 13 => StatusMessage::ID,
-                7 | 15 => SensorsMessage::ID,
-                14 => GpsMessage::ID,
-                _ => HeartbeatMessage::ID,
-            };
+                let slot = (time_ms / DOWNLINK_MESSAGE_INTERVAL_MS) % DownlinkMessage::SLOT_COUNT;
+                let expected = match slot {
+                    1 | 9 => PressuresMessage::ID,
+                    3 | 11 => ComponentsMessage::ID,
+                    5 | 13 => StatusMessage::ID,
+                    7 | 15 => SensorsMessage::ID,
+                    6 if mode < FlightMode::Burn => ExternalPressuresMessage::ID,
+                    14 => GpsMessage::ID,
+                    _ => HeartbeatMessage::ID,
+                };
 
-            let packet = msg
-                .encode(time_ms as u16, &[0x42; 16])
-                .expect("message did not fit its packet");
-            assert_eq!(packet[1] & 0b11111, expected, "slot {slot} at {time_ms} ms");
+                let packet = msg
+                    .encode(time_ms as u16, &[0x42; 16])
+                    .expect("message did not fit its packet");
+                assert_eq!(
+                    packet[1] & 0b11111,
+                    expected,
+                    "slot {slot} at {time_ms} ms in {mode:?}"
+                );
+            }
+
+            assert_eq!(built, DownlinkMessage::SLOT_COUNT * 2);
         }
-
-        assert_eq!(built, DownlinkMessage::SLOT_COUNT * 2);
     }
 
     /// Every payload has to be the same length whatever the vehicle put in it: the packet is a
@@ -557,12 +582,13 @@ pub(crate) mod tests {
     /// the bench. This is what catches a field that lost its `fixint` annotation.
     #[test]
     fn no_payload_length_depends_on_its_values() {
-        fn lengths(parts: &SnapshotParts) -> [usize; 6] {
+        fn lengths(parts: &SnapshotParts) -> [usize; 7] {
             let s = parts.snapshot();
             [
                 encoded_len(&HeartbeatMessage::pack(&s)),
                 encoded_len(&StatusMessage::pack((&s, RadioStatus::default()))),
                 encoded_len(&PressuresMessage::pack(&s)),
+                encoded_len(&ExternalPressuresMessage::pack(&s)),
                 encoded_len(&ComponentsMessage::pack(&s)),
                 encoded_len(&SensorsMessage::pack(&s)),
                 encoded_len(&GpsMessage::pack(&s)),
