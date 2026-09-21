@@ -142,7 +142,7 @@ macro_rules! downlink_entry {
     ($due:ident, $snapshot:expr, $link:ident, $message:ty) => {
         if $due() {
             let message: $message = $snapshot.into();
-            $link.send_message(message.into());
+            $link.send_message(::links::Downlink::from_self(message));
         }
     };
     // instance message, iterate through all ids
@@ -150,7 +150,7 @@ macro_rules! downlink_entry {
         for id in $ids {
             if $due() {
                 let message = <$message as InstanceMessage<_>>::build($snapshot, id);
-                $link.send_message(message.into());
+                $link.send_message(::links::Downlink::from_self(message));
             }
         }
     };

@@ -2,7 +2,6 @@
 
 use embassy_sync::watch::Watch;
 use heapless::Vec;
-use rapid_dialect::Rapid;
 use static_cell::StaticCell;
 
 use embassy_executor::{SendSpawner, Spawner};
@@ -29,6 +28,7 @@ use crate::links::interfaces::{
     InterfaceTxSubscriber,
 };
 use crate::links::protocols::link_quality::LinkQuality;
+use links::Downlink;
 use mission::TelemetryLink;
 
 use crate::links::{UplinkCommand, protocols};
@@ -106,7 +106,6 @@ impl UsbHandle {
         spawner
             .spawn(run_commands(
                 USB_SYSTEM_ID,
-                0x01,
                 tx.publisher().unwrap(),
                 rx.subscriber().unwrap(),
                 commands.publisher().unwrap(),
@@ -131,7 +130,6 @@ impl UsbHandle {
         spawner
             .spawn(run_params(
                 USB_SYSTEM_ID,
-                0x01,
                 tx.publisher().unwrap(),
                 rx.subscriber().unwrap(),
                 commands.publisher().unwrap(),
@@ -151,7 +149,7 @@ impl UsbHandle {
 }
 
 impl TelemetryLink for UsbHandle {
-    fn send_message(&mut self, message: Rapid) {
+    fn send_message(&mut self, message: Downlink) {
         self.tx.publish_immediate(message);
     }
 
@@ -166,7 +164,6 @@ impl TelemetryLink for UsbHandle {
 #[embassy_executor::task(pool_size = 2)]
 async fn run_commands(
     system_id: u8,
-    component_id: u8,
     tx: InterfaceTxPublisher,
     rx: InterfaceRxSubscriber,
     cmd_tx: InterfaceCommandPublisher,
@@ -177,7 +174,7 @@ async fn run_commands(
         3,
     >,
 ) {
-    protocols::commands::run(system_id, component_id, tx, rx, cmd_tx, link_quality_sender).await;
+    protocols::commands::run(system_id, tx, rx, cmd_tx, link_quality_sender).await;
 }
 
 #[embassy_executor::task(pool_size = 2)]
@@ -196,20 +193,11 @@ async fn run_modes(tx: InterfaceTxPublisher, rx: InterfaceCommandSubscriber) {
 #[embassy_executor::task(pool_size = 2)]
 async fn run_params(
     system_id: u8,
-    component_id: u8,
     tx: InterfaceTxPublisher,
     rx: InterfaceRxSubscriber,
     cmd_tx: InterfaceCommandPublisher,
 ) {
-    protocols::params::run(
-        system_id,
-        component_id,
-        tx,
-        rx,
-        cmd_tx,
-        &crate::storage::PARAM_STORE,
-    )
-    .await;
+    protocols::params::run(system_id, tx, rx, cmd_tx, &crate::storage::PARAM_STORE).await;
 }
 
 #[embassy_executor::task]
@@ -238,7 +226,10 @@ async fn run_downlink(
     mut sender: Sender<'static, Driver<'static, USB_OTG_FS>>,
     mut subscriber: InterfaceTxSubscriber,
 ) -> ! {
-    let endpoint = mavio::Endpoint::v2(mavio::MavLinkId::new(USB_SYSTEM_ID, 0x01));
+    let endpoint = mavio::Endpoint::v2(mavio::MavLinkId::new(
+        USB_SYSTEM_ID,
+        links::SELF_COMPONENT_ID,
+    ));
 
     loop {
         defmt::info!("Waiting for usb connection.");
@@ -248,7 +239,7 @@ async fn run_downlink(
         loop {
             let message = subscriber.next_message_pure().await;
 
-            let Ok(frame) = endpoint.next_frame(&message) else {
+            let Ok(frame) = message.frame(&endpoint) else {
                 defmt::error!("Failed to create MAVLink frame");
                 continue;
             };
@@ -292,7 +283,6 @@ async fn run_uplink(
     // NOTE: enforce packet size
     let mut packet_buffer: [u8; 64] = [0; 64];
 
-    let endpoint = mavio::Endpoint::v2(mavio::MavLinkId::new(USB_SYSTEM_ID, 0x01));
     let mut mavlink_buffer = heapless::Vec::<u8, 1024>::new();
 
     loop {

@@ -16,7 +16,8 @@ use rapid_dialect::{FlightMode, Rapid, ValveCommand};
 
 use crate::protocols::link_quality::LinkQuality;
 use crate::{
-    InterfaceCommandPublisher, InterfaceRxSubscriber, InterfaceTxPublisher, UplinkCommand,
+    InterfaceCommandPublisher, InterfaceRxSubscriber, InterfaceTxPublisher, SELF_COMPONENT_ID,
+    UplinkCommand,
 };
 
 #[allow(clippy::too_many_lines, reason = "TODO")]
@@ -32,7 +33,6 @@ use crate::{
 )]
 pub async fn run(
     system_id: u8,
-    component_id: u8,
     tx: InterfaceTxPublisher,
     mut rx: InterfaceRxSubscriber,
     cmd_tx: InterfaceCommandPublisher,
@@ -69,7 +69,7 @@ pub async fn run(
 
         match msg {
             Rapid::CommandLong(cmd)
-                if cmd.target_system == system_id && cmd.target_component == component_id =>
+                if cmd.target_system == system_id && cmd.target_component == SELF_COMPONENT_ID =>
             {
                 let mut reboot_requested = false;
 
@@ -153,14 +153,14 @@ pub async fn run(
                     ..Default::default()
                 };
 
-                let _ = tx.publish(Rapid::CommandAck(ack)).await;
+                let _ = tx.publish(Rapid::CommandAck(ack).into()).await;
 
                 if reboot_requested {
                     reboot().await;
                 }
             }
             Rapid::CommandInt(cmd)
-                if cmd.target_system == system_id && cmd.target_component == component_id =>
+                if cmd.target_system == system_id && cmd.target_component == SELF_COMPONENT_ID =>
             {
                 let ack = CommandAck {
                     command: cmd.command,
@@ -170,7 +170,7 @@ pub async fn run(
                     ..Default::default()
                 };
 
-                let _ = tx.publish(Rapid::CommandAck(ack)).await;
+                let _ = tx.publish(Rapid::CommandAck(ack).into()).await;
             }
             _ => {}
         }

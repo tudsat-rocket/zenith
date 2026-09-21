@@ -9,7 +9,7 @@ use lora_phy::mod_params::{ModulationParams, PacketParams, PacketStatus, RadioEr
 use lora_phy::mod_traits::{IrqState, RadioKind};
 use lora_phy::{LoRa, RxMode};
 
-use rapid_dialect::Rapid;
+use links::Downlink;
 use rapid_dialect::rapid::messages::RadioStatus;
 
 use utils::anychannel::AnySender;
@@ -167,7 +167,7 @@ impl<RK: RadioKind, M: TelemetryMessage, S: AnySender<M::Output>> HoppingReceive
     }
 }
 
-impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S> {
+impl<RK: RadioKind, S: AnySender<Downlink>> HoppingReceiver<RK, DownlinkMessage, S> {
     const CONNECTION_LOST_TIMEOUT_MS: u64 = 2000;
 
     /// How many worst-case gaps in the hopping sequence to spend on one channel before moving on.
@@ -237,7 +237,7 @@ impl<RK: RadioKind, S: AnySender<Rapid>> HoppingReceiver<RK, DownlinkMessage, S>
 
                 // Send a "100% packet loss" message after every RX period while we're sweeping.
                 self.sender
-                    .anysend(Rapid::RadioStatus(RadioStatus {
+                    .anysend(Downlink::from_self(RadioStatus {
                         rssi: u8::MAX,
                         remrssi: u8::MAX,
                         txbuf: 0,

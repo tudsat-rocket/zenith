@@ -25,7 +25,10 @@ macro_rules! assert_rates {
     ($sent:expr, $($message:ident every $interval_ms:expr),+ $(,)?) => {
         $(
             assert_eq!(
-                $sent.iter().filter(|m| matches!(m, Rapid::$message(_))).count(),
+                $sent
+                    .iter()
+                    .filter(|m| matches!(m.message, Rapid::$message(_)))
+                    .count(),
                 (TICKS / $interval_ms) as usize,
                 concat!(stringify!($message), " did not go out every {} ms"),
                 $interval_ms,
@@ -45,7 +48,7 @@ fn every_message_goes_out_at_its_intended_rate() {
             assert!(built <= 1, "tick {tick} built {built} messages");
         }
 
-        let sent: Vec<&Rapid> = per_tick.iter().flatten().collect();
+        let sent: Vec<&links::Downlink> = per_tick.iter().flatten().collect();
 
         assert_rates! { sent,
             Attitude every 100,
@@ -73,7 +76,7 @@ fn every_message_goes_out_at_its_intended_rate() {
         for tank in TankId::ALL {
             let reports = sent
                 .iter()
-                .filter(|m| matches!(m, Rapid::PressureVessel(p) if p.id == tank as u8))
+                .filter(|m| matches!(&m.message, Rapid::PressureVessel(p) if p.id == tank as u8))
                 .count();
             assert_eq!(
                 reports, propulsion_reports,
@@ -84,7 +87,7 @@ fn every_message_goes_out_at_its_intended_rate() {
         for valve in ValveId::ALL {
             let reports = sent
                 .iter()
-                .filter(|m| matches!(m, Rapid::Valve(v) if v.id == valve))
+                .filter(|m| matches!(&m.message, Rapid::Valve(v) if v.id == valve))
                 .count();
             assert_eq!(
                 reports, propulsion_reports,

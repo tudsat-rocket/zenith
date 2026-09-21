@@ -5,7 +5,6 @@
     reason = "boot-time peripheral/task init; panic-on-failure is the embedded model"
 )]
 
-use rapid_dialect::{FlightMode, Rapid};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -29,6 +28,10 @@ use telemetry::messages::{DownlinkMessage, SetValveMessage, UplinkMessage};
 use telemetry::trx::receiver::HoppingReceiver;
 use telemetry::trx::transmitter::HoppingTransmitter;
 
+use rapid_dialect::FlightMode;
+
+use links::Downlink;
+
 use firmware::links::UplinkCommand;
 use firmware::links::interfaces::InterfaceTxPublisher;
 use firmware::links::interfaces::usb::UsbHandle;
@@ -45,7 +48,7 @@ static CONNECTION: Watch<CriticalSectionRawMutex, Option<(Instant, u16)>, 3> = W
 /// command streams rather than being polled when a command happens to come in.
 static IGNITION_BUTTON: Watch<CriticalSectionRawMutex, bool, 2> = Watch::new();
 
-static DOWNLINK: StaticCell<Channel<CriticalSectionRawMutex, Rapid, 5>> = StaticCell::new();
+static DOWNLINK: StaticCell<Channel<CriticalSectionRawMutex, Downlink, 5>> = StaticCell::new();
 static UPLINK: StaticCell<Channel<CriticalSectionRawMutex, (u16, UplinkMessage), 5>> =
     StaticCell::new();
 
@@ -129,7 +132,7 @@ async fn run_downlink(
     receiver: HoppingReceiver<
         LoraTransceiver,
         DownlinkMessage,
-        Sender<'static, CriticalSectionRawMutex, Rapid, 5>,
+        Sender<'static, CriticalSectionRawMutex, Downlink, 5>,
     >,
     connection_sender: embassy_sync::watch::Sender<
         'static,
@@ -160,7 +163,7 @@ async fn run_uplink(
 
 #[embassy_executor::task]
 async fn split_downlink(
-    rx: Receiver<'static, CriticalSectionRawMutex, Rapid, 5>,
+    rx: Receiver<'static, CriticalSectionRawMutex, Downlink, 5>,
     eth_tx: InterfaceTxPublisher,
     usb_tx: InterfaceTxPublisher,
     mut led_activity: Output<'static>,

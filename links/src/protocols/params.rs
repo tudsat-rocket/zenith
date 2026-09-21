@@ -15,7 +15,8 @@ use rapid_dialect::rapid::enums::MavParamType;
 use rapid_dialect::rapid::messages::ParamValue;
 
 use crate::{
-    InterfaceCommandPublisher, InterfaceRxSubscriber, InterfaceTxPublisher, UplinkCommand,
+    Downlink, InterfaceCommandPublisher, InterfaceRxSubscriber, InterfaceTxPublisher,
+    SELF_COMPONENT_ID, UplinkCommand,
 };
 
 /// Everything needed to emit one PARAM_VALUE message.
@@ -53,13 +54,13 @@ pub trait ParamStore: Sync {
 
 /// Whether a message targeting `(target_system, target_component)` is for us. A zero target is a
 /// broadcast, which ground stations commonly use for parameter discovery.
-fn addressed(target_system: u8, target_component: u8, system_id: u8, component_id: u8) -> bool {
+fn addressed(target_system: u8, target_component: u8, system_id: u8) -> bool {
     (target_system == 0 || target_system == system_id)
-        && (target_component == 0 || target_component == component_id)
+        && (target_component == 0 || target_component == SELF_COMPONENT_ID)
 }
 
-fn param_value_msg(info: &ParamInfo) -> Rapid {
-    Rapid::ParamValue(ParamValue {
+fn param_value_msg(info: &ParamInfo) -> Downlink {
+    Downlink::from_self(ParamValue {
         param_id: info.name,
         param_value: info.value,
         param_type: info.ty,
@@ -70,7 +71,6 @@ fn param_value_msg(info: &ParamInfo) -> Rapid {
 
 pub async fn run<P: ParamStore>(
     system_id: u8,
-    component_id: u8,
     tx: InterfaceTxPublisher,
     mut rx: InterfaceRxSubscriber,
     cmd_tx: InterfaceCommandPublisher,
@@ -91,12 +91,7 @@ pub async fn run<P: ParamStore>(
 
         match msg {
             Rapid::ParamRequestList(req)
-                if addressed(
-                    req.target_system,
-                    req.target_component,
-                    system_id,
-                    component_id,
-                ) =>
+                if addressed(req.target_system, req.target_component, system_id) =>
             {
                 log::info!("params: enumerating {} params", store.count());
                 for index in 0..store.count() {
@@ -109,12 +104,7 @@ pub async fn run<P: ParamStore>(
                 }
             }
             Rapid::ParamRequestRead(req)
-                if addressed(
-                    req.target_system,
-                    req.target_component,
-                    system_id,
-                    component_id,
-                ) =>
+                if addressed(req.target_system, req.target_component, system_id) =>
             {
                 let info = if req.param_index >= 0 {
                     store.by_index(req.param_index as u16)
@@ -128,12 +118,7 @@ pub async fn run<P: ParamStore>(
                 }
             }
             Rapid::ParamSet(req)
-                if addressed(
-                    req.target_system,
-                    req.target_component,
-                    system_id,
-                    component_id,
-                ) =>
+                if addressed(req.target_system, req.target_component, system_id) =>
             {
                 match store.set(&req.param_id, req.param_value, req.param_type) {
                     Ok((id, raw, info)) => {

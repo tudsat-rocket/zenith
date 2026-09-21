@@ -3,6 +3,7 @@ use core::hash::Hasher;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use links::Downlink;
 use mission::mavlink::VehicleSnapshot;
 use rapid_dialect::rapid::messages::RadioStatus;
 use rapid_dialect::{FlightMode, Rapid};
@@ -178,7 +179,7 @@ impl TelemetryMessage for DownlinkMessage {
     type Packet = [u8; DOWNLINK_PACKET_SIZE];
 
     type Input = Rapid;
-    type Output = Rapid;
+    type Output = Downlink;
 
     fn encode(
         self,
@@ -258,42 +259,42 @@ impl TelemetryMessage for DownlinkMessage {
         match self {
             Self::Heartbeat(inner) => {
                 let (h, l, a, al, v) = inner.unpack(context);
-                sender.anysend(Rapid::Heartbeat(h)).await;
-                sender.anysend(Rapid::LocalPositionNed(l)).await;
-                sender.anysend(Rapid::Attitude(a)).await;
-                sender.anysend(Rapid::Altitude(al)).await;
-                sender.anysend(Rapid::VfrHud(v)).await;
+                sender.anysend(Downlink::from_self(h)).await;
+                sender.anysend(Downlink::from_self(l)).await;
+                sender.anysend(Downlink::from_self(a)).await;
+                sender.anysend(Downlink::from_self(al)).await;
+                sender.anysend(Downlink::from_self(v)).await;
             }
             Self::Status(inner) => {
                 let (sys, radio, time) = inner.unpack(context);
-                sender.anysend(Rapid::SysStatus(sys)).await;
-                sender.anysend(Rapid::RadioStatus(radio)).await;
-                sender.anysend(Rapid::SystemTime(time)).await;
+                sender.anysend(Downlink::from_self(sys)).await;
+                sender.anysend(Downlink::from_self(radio)).await;
+                sender.anysend(Downlink::from_self(time)).await;
             }
             Self::Pressures(inner) => {
                 for vessel in inner.unpack(context) {
-                    sender.anysend(Rapid::PressureVessel(vessel)).await;
+                    sender.anysend(Downlink::from_self(vessel)).await;
                 }
             }
             Self::ExternalPressures(inner) => {
                 for vessel in inner.unpack(context) {
-                    sender.anysend(Rapid::PressureVessel(vessel)).await;
+                    sender.anysend(Downlink::from_self(vessel)).await;
                 }
             }
             Self::Components(inner) => {
                 for valve in inner.unpack(context) {
-                    sender.anysend(Rapid::Valve(valve)).await;
+                    sender.anysend(Downlink::from_self(valve)).await;
                 }
             }
             Self::Sensors(inner) => {
                 let (imu, pressure) = inner.unpack(context);
-                sender.anysend(Rapid::ScaledImu(imu)).await;
-                sender.anysend(Rapid::ScaledPressure(pressure)).await;
+                sender.anysend(Downlink::from_self(imu)).await;
+                sender.anysend(Downlink::from_self(pressure)).await;
             }
             Self::Gps(inner) => {
                 let (raw, global) = inner.unpack(context);
-                sender.anysend(Rapid::GpsRawInt(raw)).await;
-                sender.anysend(Rapid::GlobalPositionInt(global)).await;
+                sender.anysend(Downlink::from_self(raw)).await;
+                sender.anysend(Downlink::from_self(global)).await;
             }
         }
     }

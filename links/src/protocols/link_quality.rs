@@ -27,19 +27,22 @@ pub async fn run(
     loop {
         match select(ticker.next(), rx.changed()).await {
             Either::First(()) => {
-                tx.publish(Rapid::LinkNodeStatus(LinkNodeStatus {
-                    timestamp: t.elapsed().as_millis(),
-                    tx_buf: 100,
-                    rx_buf: 100,
-                    tx_rate: link_quality.tx_rate,
-                    rx_rate: link_quality.rx_rate,
-                    rx_parse_err: 0,
-                    tx_overflows: 0,
-                    rx_overflows: 0,
-                    messages_sent: 0,
-                    messages_received: link_quality.messages_received,
-                    messages_lost: link_quality.messages_lost,
-                }))
+                tx.publish(
+                    Rapid::LinkNodeStatus(LinkNodeStatus {
+                        timestamp: t.elapsed().as_millis(),
+                        tx_buf: 100,
+                        rx_buf: 100,
+                        tx_rate: link_quality.tx_rate,
+                        rx_rate: link_quality.rx_rate,
+                        rx_parse_err: 0,
+                        tx_overflows: 0,
+                        rx_overflows: 0,
+                        messages_sent: 0,
+                        messages_received: link_quality.messages_received,
+                        messages_lost: link_quality.messages_lost,
+                    })
+                    .into(),
+                )
                 .await;
             }
             Either::Second(lq) => {

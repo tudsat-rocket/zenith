@@ -104,14 +104,17 @@ pub async fn run(
                 }
 
                 let _ = eth_tx
-                    .publish(Rapid::CanFrame(CanFrame {
-                        target_system: 0xff,    // TODO
-                        target_component: 0xff, // TODO
-                        bus: 1,
-                        id,
-                        len: frame.data().len() as u8,
-                        data: buffer,
-                    }))
+                    .publish(
+                        Rapid::CanFrame(CanFrame {
+                            target_system: 0xff,    // TODO
+                            target_component: 0xff, // TODO
+                            bus: 1,
+                            id,
+                            len: frame.data().len() as u8,
+                            data: buffer,
+                        })
+                        .into(),
+                    )
                     .await;
             }
             _ => {}
