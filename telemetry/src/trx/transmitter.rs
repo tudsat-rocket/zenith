@@ -12,7 +12,6 @@ use utils::anychannel::AnyReceiver;
 use crate::config::{FREQUENCIES, LinkConfig};
 use crate::messages::{DOWNLINK_PACKET_SIZE, DownlinkMessage, TelemetryMessage, UplinkMessage};
 use crate::trx::MAX_CONSECUTIVE_ERRORS;
-use crate::{DOWNLINK_MESSAGE_INTERVAL_MS, UPLINK_HOP_INTERVAL_MS};
 
 pub struct HoppingTransmitter<RK: RadioKind, M: TelemetryMessage, R: AnyReceiver<(u16, M)>> {
     radio: LoRa<RK, Delay>,
@@ -126,10 +125,6 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, DownlinkMessage)>>
 }
 
 impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage)>> HoppingTransmitter<RK, UplinkMessage, R> {
-    #[allow(
-        clippy::arithmetic_side_effects,
-        reason = "bounded modular frequency-hop timing math"
-    )]
     pub async fn run_uplink<CONN: AnyReceiver<Option<(Instant, u16)>>>(
         mut self,
         mut connection_receiver: CONN,
@@ -165,39 +160,14 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage)>> HoppingTransmitter<RK,
                 // If we have a good downlink connection, we use that information to figure out on
                 // which frequency we have to transmit right now, and when best to do that to avoid
                 // overlaps with downlink packets.
-
-                // Note that this does not account for time-on-air or transmission latency. This is
-                // effectively the timestamp a downlink packet would have if it arrived right now.
-                // This means our clock is running slightly late, so we'll have to apply some extra
-                // tolerance to our end-of-hop checks.
-                let current_t = last_t.wrapping_add(last_instant.elapsed().as_millis() as u16);
-                let frequency = self.config.frequency(current_t);
-
-                // If we're close to the end of an uplink frequency hopping slot, we delay our
-                // transmission so its reception does not get interrupted by the hop.
-                let time_in_hopping_interval = current_t as u64 % UPLINK_HOP_INTERVAL_MS as u64;
-                if (UPLINK_HOP_INTERVAL_MS as u64) - time_in_hopping_interval < 30 {
-                    let remaining = UPLINK_HOP_INTERVAL_MS as u64 - time_in_hopping_interval;
-                    Timer::after(Duration::from_millis(remaining + 10)).await;
-                } else if time_in_hopping_interval < 10 {
-                    Timer::after(Duration::from_millis(10 - time_in_hopping_interval)).await;
-                }
-
                 for _i in 0..num_transmissions {
-                    // If we're close to another downlink message, we also delay our transmission, so
-                    // it is sent and arrives while the airwaves are clear (assuming we're sending with
-                    // less than 50% duty cycle).
-                    let time_in_downlink_interval =
-                        current_t as u64 % DOWNLINK_MESSAGE_INTERVAL_MS as u64;
-                    //let target_time_in_downlink_interval =
-                    //    5 * (DOWNLINK_MESSAGE_INTERVAL_MS as u64) / 16;
-                    //if time_in_downlink_interval > target_time_in_downlink_interval {
-                    if time_in_downlink_interval > 2 {
-                        let remaining =
-                            DOWNLINK_MESSAGE_INTERVAL_MS as u64 - time_in_downlink_interval;
-                        Timer::after(Duration::from_millis(remaining + 1)).await;
-                    }
+                    // Both the clock estimate and the frequency are taken per transmission, since
+                    // the receiver could hop while we're retransmitting.
+                    let t = last_t.wrapping_add(last_instant.elapsed().as_millis() as u16);
+                    let target = self.config.next_transmission_time(t);
+                    Timer::after(Duration::from_millis(target.wrapping_sub(t).into())).await;
 
+                    let frequency = self.config.frequency(target);
                     self.transmit_or_reset(frequency, &bytes, TX_POWER, &mut consecutive_errors)
                         .await;
                 }

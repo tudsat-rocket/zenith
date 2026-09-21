@@ -64,6 +64,9 @@ pub async fn run(
             frame.component_id()
         );
 
+        // Anything that got this far came from a ground station, whether or not it is a command.
+        crate::note_uplink_activity();
+
         match msg {
             Rapid::CommandLong(cmd)
                 if cmd.target_system == system_id && cmd.target_component == component_id =>

@@ -8,8 +8,9 @@ use state_estimator::StateEstimator;
 use crate::bus::{Bus, BusInputImage, BusOutputImage};
 use crate::flight_logic::FlightLogic;
 use crate::inventory::BinaryOutputId;
+use crate::leds::LedState;
 use crate::mavlink::VehicleSnapshot;
-use crate::params::{Params, PropulsionParams, RecoveryParams};
+use crate::params::{FailsafeParams, Params, PropulsionParams, StateMachineParams};
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
 use crate::valves::{ValveCommand, ValveController, ValveError};
 
@@ -19,8 +20,9 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     /// Vehicle time at which the current mode was entered.
     mode_entered_at: Wrapping<u32>,
     flight_logic: FlightLogic,
-    recovery_params: RecoveryParams,
+    state_machine_params: StateMachineParams,
     propulsion_params: PropulsionParams,
+    failsafe_params: FailsafeParams,
     pub sensors: S,
     pub outputs: O,
     pub storage: F,
@@ -48,8 +50,9 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             mode: FlightMode::default(),
             mode_entered_at: Wrapping(0),
             flight_logic: FlightLogic::default(),
-            recovery_params: params.recovery,
+            state_machine_params: params.state_machine,
             propulsion_params: params.propulsion,
+            failsafe_params: params.failsafe,
             sensors,
             outputs,
             storage,
@@ -86,16 +89,19 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             self.time,
             self.mode,
             &self.state_estimator,
-            &self.recovery_params,
+            &self.state_machine_params,
+            &self.failsafe_params,
         ) {
             self.set_mode(new_mode);
         }
 
-        // Set our on-board recovery outputs based on flight mode.
+        // Set our on-board recovery outputs and LEDs based on flight mode.
         self.outputs
             .set_recovery_armed(self.mode >= FM::DetectLaunch);
         self.outputs.set_drogue(self.mode == FM::DeployDrogue);
         self.outputs.set_main(self.mode == FM::DeployMain);
+        self.outputs
+            .set_leds(LedState::for_mode(self.mode, self.time.0));
 
         // The igniters are energized for the first PROP_IGNTR_TIME milliseconds of Ignition.
         let igniting = self.mode == FM::Ignite
@@ -135,6 +141,10 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         }
     }
 
+    pub fn note_uplink(&mut self) {
+        self.flight_logic.note_uplink(self.time);
+    }
+
     pub fn try_command_valve(
         &mut self,
         valve: ValveId,
@@ -155,15 +165,17 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
 
         let mut params = Params {
             state_estimator: self.state_estimator.params().clone(),
-            recovery: self.recovery_params.clone(),
+            state_machine: self.state_machine_params.clone(),
             propulsion: self.propulsion_params.clone(),
+            failsafe: self.failsafe_params.clone(),
         };
 
         params.set(descriptor.id, value);
 
         log::info!("Applying param {} (id {id:#x})", descriptor.name);
-        self.recovery_params = params.recovery;
+        self.state_machine_params = params.state_machine;
         self.propulsion_params = params.propulsion;
+        self.failsafe_params = params.failsafe;
         self.state_estimator.update_params(params.state_estimator);
 
         self.storage.write_param(descriptor.id, value);
@@ -173,7 +185,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         VehicleSnapshot {
             time: self.time,
             mode: self.mode,
-            recovery_params: &self.recovery_params,
+            state_machine_params: &self.state_machine_params,
             readings: &self.readings,
             input_image: &self.bus_inputs,
             state_estimator: &self.state_estimator,

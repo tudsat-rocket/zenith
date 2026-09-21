@@ -25,7 +25,7 @@ use embassy_sync::{channel::Channel, pubsub::PubSubChannel};
 use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
 
 use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG};
-use telemetry::messages::{DownlinkMessage, SetFlightModeMessage, UplinkMessage};
+use telemetry::messages::{DownlinkMessage, SetFlightModeMessage, SetValveMessage, UplinkMessage};
 use telemetry::trx::receiver::HoppingReceiver;
 use telemetry::trx::transmitter::HoppingTransmitter;
 
@@ -284,6 +284,9 @@ async fn join_uplink(
                     }
                     UplinkMessage::SetFlightMode(SetFlightModeMessage { mode: fm as u8 })
                 }
+                UplinkCommand::CommandValve(valve, cmd) => {
+                    UplinkMessage::SetValve(SetValveMessage::new(valve, cmd))
+                }
                 unsupported => {
                     defmt::warn!(
                         "Unsupported GCS command: {:?}",
@@ -306,6 +309,10 @@ async fn join_uplink(
             }
             // Button release and idle ticks carry no command for the vehicle.
             Some(GroundInput::IgnitionButton(false)) | None => continue,
+            (None, Some(_)) => UplinkMessage::Heartbeat(()),
+            (None, None) => {
+                continue;
+            }
         };
 
         seq = seq.wrapping_add(1);

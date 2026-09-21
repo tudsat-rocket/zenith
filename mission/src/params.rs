@@ -19,23 +19,40 @@ pub use params::{ParamDescriptor, ParamId, ParamType, ParamValue, ParameterField
 #[derive(Debug, Default, Clone, macros::ParameterGroups)]
 pub struct Params {
     pub state_estimator: StateEstimatorParams,
-    pub recovery: RecoveryParams,
+    pub state_machine: StateMachineParams,
     pub propulsion: PropulsionParams,
+    pub failsafe: FailsafeParams,
 }
 
-/// Recovery / parachute deployment parameters, exposed over MAVLink as `REC_*`.
+/// State machine parameters, exposed over MAVLink as `SM_*`.
 #[derive(Debug, Clone, macros::ParameterGroup)]
-#[param_group(prefix = "REC")]
-pub struct RecoveryParams {
+#[param_group(prefix = "SM")]
+pub struct StateMachineParams {
     /// Altitude AGL (meters) at which to deploy the main parachute
     #[param(id = 0x0200, name = "MAIN_ALT", default = 400.0)]
     pub main_deploy_altitude: f32,
     /// Minimum time (ms) after launch before allowing drogue deployment
-    #[param(id = 0x0201, name = "MIN_T_DROGUE", default = 1000)]
+    #[param(id = 0x0201, name = "MIN_T_APOGEE", default = 1000)]
     pub min_time_to_drogue: u32,
-    /// Minimum time (ms) after drogue before allowing main deployment
-    #[param(id = 0x0202, name = "MIN_T_MAIN", default = 3000)]
+    /// Minimum delay (ms) after drogue before allowing main deployment
+    #[param(id = 0x0202, name = "DLY_MAIN", default = 3000)]
     pub min_time_to_main: u32,
+    /// Time (ms) after liftoff after which drogue is automatically deployed
+    ///
+    /// Must be larger than MAX_T_BURN.
+    #[param(id = 0x0203, name = "MAX_T_APOGEE", default = 30_000)]
+    pub max_time_to_drogue: u32,
+    /// Time limit for burn (ms), after which automatically transition to Coast
+    ///
+    /// Must be smaller than MAX_T_DROGUE.
+    #[param(id = 0x0204, name = "MAX_T_BURN", default = 15_000)]
+    pub max_time_in_burn: u32,
+    /// Acceleration (G) to be exceeded for LODEC_T in order to detect liftoff
+    #[param(id = 0x0205, name = "LODEC_ACC", default = 3.0)]
+    pub liftoff_detection_acceleration: f32,
+    /// Time (ms) to exceed LODEC_ACC in order to detect liftoff
+    #[param(id = 0x0206, name = "LODEC_T", default = 50)]
+    pub liftoff_detection_time: u32,
 }
 
 /// Ignition sequence parameters, exposed over MAVLink as `PROP_*`.
@@ -48,6 +65,20 @@ pub struct PropulsionParams {
     /// Delay (ms) after ignition mode is entered after which main valve is opened
     #[param(id = 0x0301, name = "MAIN_DELAY", default = 700)]
     pub main_valve_delay: u32,
+}
+
+/// Uplink-loss failsafe parameters, exposed over MAVLink as `FS_*`.
+///
+/// The timeouts are measured from boot, so the failsafe survives reboots.
+#[derive(Debug, Clone, macros::ParameterGroup)]
+#[param_group(prefix = "FS")]
+pub struct FailsafeParams {
+    /// Time (ms) without ground station contact after which the vehicle returns to Idle. 0 disables.
+    #[param(id = 0x0400, name = "UPLINK_IDLE", default = 10_000)]
+    pub uplink_idle_timeout: u32,
+    /// Time (ms) without ground station contact after which the vehicle vents. 0 disables.
+    #[param(id = 0x0401, name = "UPLINK_VENT", default = 120_000)]
+    pub uplink_vent_timeout: u32,
 }
 
 /// Live mirror of the current [`Params`] for the MAVLink param protocol tasks. Starts empty (the
@@ -207,8 +238,8 @@ mod tests {
         let s = Params::default();
         assert_eq!(s.state_estimator.mahony_kp, 0.1);
         assert_eq!(s.state_estimator.std_dev_barometer_transsonic, 5000.0);
-        assert_eq!(s.recovery.main_deploy_altitude, 400.0);
-        assert_eq!(s.recovery.min_time_to_drogue, 1000);
+        assert_eq!(s.state_machine.main_deploy_altitude, 400.0);
+        assert_eq!(s.state_machine.min_time_to_drogue, 1000);
     }
 
     #[test]
@@ -219,8 +250,8 @@ mod tests {
         assert!(s.set(ParamId::new(0x0200), ParamValue::F32(250.0)));
         assert!(s.set(ParamId::new(0x0201), ParamValue::U32(1500)));
         assert_eq!(s.state_estimator.mahony_kp, 0.25);
-        assert_eq!(s.recovery.main_deploy_altitude, 250.0);
-        assert_eq!(s.recovery.min_time_to_drogue, 1500);
+        assert_eq!(s.state_machine.main_deploy_altitude, 250.0);
+        assert_eq!(s.state_machine.min_time_to_drogue, 1500);
         assert_eq!(s.get(ParamId::new(0x0100)), Some(ParamValue::F32(0.25)));
         assert_eq!(s.get(ParamId::new(0x0200)), Some(ParamValue::F32(250.0)));
         // Unknown id and wrong-type set are rejected.
@@ -234,8 +265,8 @@ mod tests {
         let mut s = Params::default();
         s.apply_raw(0x0200, 275.0f32.to_bits());
         s.apply_raw(0x0202, 7000);
-        assert_eq!(s.recovery.main_deploy_altitude, 275.0);
-        assert_eq!(s.recovery.min_time_to_main, 7000);
+        assert_eq!(s.state_machine.main_deploy_altitude, 275.0);
+        assert_eq!(s.state_machine.min_time_to_main, 7000);
         s.apply_raw(0xffff, 123); // ignored
     }
 

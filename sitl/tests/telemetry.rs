@@ -13,10 +13,10 @@ use mission::inventory::InventoryId;
 use rapid_dialect::Rapid;
 use rapid_dialect::rapid::enums::ValveId;
 
-/// Two full cycles of the slowest (1000 ms) interval, so every combination of phases that can
+/// Two full cycles of the slowest (2000 ms) interval, so every combination of phases that can
 /// coincide has had the chance to. Every interval in the schedule has to divide this, or the
 /// expected counts below stop being whole numbers.
-const TICKS: u32 = 2000;
+const TICKS: u32 = 4000;
 
 /// How often each message is expected on the downlink, restated independently of the schedule that
 /// implements it - a message that loses its offset or ends up on the wrong interval is otherwise
@@ -48,22 +48,22 @@ fn every_message_goes_out_at_its_intended_rate() {
         let sent: Vec<&Rapid> = per_tick.iter().flatten().collect();
 
         assert_rates! { sent,
-            Attitude every 50,
-            ScaledImu every 50,
-            LocalPositionNed every 100,
+            Attitude every 100,
             VfrHud every 100,
+            ScaledImu every 100,
             ScaledImu2 every 100,
             ScaledImu3 every 100,
-            ScaledPressure every 100,
-            ScaledPressure2 every 100,
-            ScaledPressure3 every 100,
             BatteryStatus every 200,
+            LocalPositionNed every 200,
+            ScaledPressure every 200,
+            ScaledPressure2 every 200,
+            ScaledPressure3 every 200,
             Heartbeat every 500,
             SysStatus every 500,
             GlobalPositionInt every 500,
             GpsRawInt every 500,
-            RocketInfo every 1000,
-            AutopilotVersion every 1000,
+            RocketInfo every 2000,
+            AutopilotVersion every 2000,
         }
 
         // The instance messages take one slot each, so a single component can silently drop out
