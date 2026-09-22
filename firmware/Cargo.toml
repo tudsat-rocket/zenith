@@ -73,7 +73,9 @@ rand = { version = "0.8", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
 bitflags = "2.9.1"
 zencan-common = { version = "0.0.4", default-features = false, features = [ "defmt" ] }
-iocan-proto = { git = "https://github.com/tudsat-rocket/io_board_firmware.git", rev = "7bfafd7603b0cf253c62288db8640beb31ddd994", features = ["defmt"] }
+# TEMPORARY: the local io_board_firmware checkout (branch `temp_sense`), whose heater and
+# on-board temperature commits are not on GitHub yet. Re-pin to a pushed `rev` before sharing.
+iocan-proto = { path = "../../io_board_firmware/iocan-proto", features = ["defmt"] }
 
 rapid-dialect = { workspace = true }
 

@@ -1464,7 +1464,6 @@ dependencies = [
 [[package]]
 name = "iocan-proto"
 version = "0.1.0"
-source = "git+https://github.com/tudsat-rocket/io_board_firmware.git?rev=7bfafd7603b0cf253c62288db8640beb31ddd994#7bfafd7603b0cf253c62288db8640beb31ddd994"
 dependencies = [
  "defmt 0.3.100",
 ]

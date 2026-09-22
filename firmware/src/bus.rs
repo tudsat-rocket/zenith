@@ -245,6 +245,9 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
         // `TemperatureSensorMap` is indexed by tank sensors — so they are
         // dropped here rather than being given a home they do not fit.
         | TpdoFrame::Temperature { .. }
+        // A heating pad's state (node 4). Not acted on by the flight computer
+        // yet; it is commanded over SDO at 0x2018/0x3070.
+        | TpdoFrame::Heater { .. }
         | TpdoFrame::Status { .. } => (),
     }
 }
