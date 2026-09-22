@@ -10,11 +10,11 @@ use iocan_proto::{HcoOutput, TpdoKind};
 
 use mission::{
     bus::ValveState,
-    inventory::{BinaryOutputId, PressSensId, TempSensId, ValveId},
+    inventory::{BinaryOutputId, OxProbeId, PressSensId, TempSensId, ValveId},
 };
 
 use crate::bus::mapping::{
-    BINARY_OUTPUT_ID_MAP, PRESS_SENSOR_ID_MAP, TEMP_SENSOR_ID_MAP, VALVE_ID_MAP,
+    BINARY_OUTPUT_ID_MAP, OX_PROBE_ID_MAP, PRESS_SENSOR_ID_MAP, TEMP_SENSOR_ID_MAP, VALVE_ID_MAP,
 };
 
 // TODO: this is very error prone
@@ -72,6 +72,8 @@ pub const fn sensor_slot_base(kind: TpdoKind) -> Option<u8> {
 pub enum SensorReading {
     Temperature(TempSensId, f32),
     Pressure(PressSensId, f32),
+    /// A rung of the oxidizer tank level probe row.
+    OxProbe(OxProbeId, f32),
 }
 
 /// Valve positions in promille, in the frame's slot order.
@@ -145,6 +147,8 @@ pub fn sensor_msg_to_readings(
             let _ = out.push(SensorReading::Temperature(id, f32::from(raw) / 100.0));
         } else if let Some(id) = press_sensor_id_for(node_id, slot) {
             let _ = out.push(SensorReading::Pressure(id, f32::from(raw) / 100.0));
+        } else if let Some(id) = ox_probe_id_for(node_id, slot) {
+            let _ = out.push(SensorReading::OxProbe(id, f32::from(raw) / 100.0));
         }
     }
 
@@ -160,6 +164,13 @@ fn temp_sensor_id_for(node_id: u8, slot: u8) -> Option<TempSensId> {
 
 fn press_sensor_id_for(node_id: u8, slot: u8) -> Option<PressSensId> {
     PRESS_SENSOR_ID_MAP
+        .iter()
+        .find(|(_, addr)| addr.node_id == node_id && addr.slot == slot)
+        .map(|(id, _)| id)
+}
+
+fn ox_probe_id_for(node_id: u8, slot: u8) -> Option<OxProbeId> {
+    OX_PROBE_ID_MAP
         .iter()
         .find(|(_, addr)| addr.node_id == node_id && addr.slot == slot)
         .map(|(id, _)| id)

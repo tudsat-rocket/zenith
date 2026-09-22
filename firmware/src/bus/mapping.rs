@@ -1,6 +1,8 @@
 use crate::bus::pdo_mapping::SensorAddr;
 use mission::bus::IoAddr;
-use mission::inventory::{BinaryOutputMap, PressureSensorMap, TemperatureSensorMap, ValveMap};
+use mission::inventory::{
+    BinaryOutputMap, OxProbeMap, PressureSensorMap, TemperatureSensorMap, ValveMap,
+};
 
 // Io-board store index
 /// "valve commanded state, position word", promille per valve.
@@ -61,6 +63,24 @@ pub const TEMP_SENSOR_ID_MAP: TemperatureSensorMap<SensorAddr> = TemperatureSens
     // node_id, sensor slot
     SensorAddr::from_sensor_idx(5, 0).unwrap(), // TempSensId::OxTankUpper
     SensorAddr::from_sensor_idx(6, 2).unwrap(), // TempSensId::OxTankLower
+]);
+
+/// The tank level probe row, bottom to top. Slots 8 and 9 arrive in the `Sensor3` frame, which no
+/// other board on this vehicle populates.
+///
+/// 0-indexed, since it arrives by tpdo
+pub const OX_PROBE_ID_MAP: OxProbeMap<SensorAddr> = OxProbeMap::new([
+    // node_id, sensor slot
+    SensorAddr::from_sensor_idx(10, 0).unwrap(), // OxProbeId::Probe0 (tank bottom)
+    SensorAddr::from_sensor_idx(10, 1).unwrap(), // OxProbeId::Probe1
+    SensorAddr::from_sensor_idx(10, 2).unwrap(), // OxProbeId::Probe2
+    SensorAddr::from_sensor_idx(10, 3).unwrap(), // OxProbeId::Probe3
+    SensorAddr::from_sensor_idx(10, 4).unwrap(), // OxProbeId::Probe4
+    SensorAddr::from_sensor_idx(10, 5).unwrap(), // OxProbeId::Probe5
+    SensorAddr::from_sensor_idx(10, 6).unwrap(), // OxProbeId::Probe6
+    SensorAddr::from_sensor_idx(10, 7).unwrap(), // OxProbeId::Probe7
+    SensorAddr::from_sensor_idx(10, 8).unwrap(), // OxProbeId::Probe8
+    SensorAddr::from_sensor_idx(10, 9).unwrap(), // OxProbeId::Probe9
 ]);
 
 /// 0-indexed, since it arrives by tpdo

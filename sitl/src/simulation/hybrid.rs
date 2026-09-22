@@ -11,8 +11,8 @@ use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::ValveId;
 
 use mission::inventory::{
-    BinaryOutputId, BinaryOutputMap, InventoryId, PressSensId, PressureSensorMap, TankId,
-    TemperatureSensorMap, ValveMap,
+    BinaryOutputId, BinaryOutputMap, InventoryId, OxProbeId, OxProbeMap, PressSensId,
+    PressureSensorMap, TankId, TemperatureSensorMap, ValveMap,
 };
 use mission::valves::ValveCommand;
 
@@ -220,6 +220,29 @@ impl HybridSimulation {
         }
     }
 
+    /// Wall temperature [C] at one rung of the oxidizer tank level probe row.
+    ///
+    /// Wetted probes sit at the liquid temperature and the wall above them ramps to ambient at the
+    /// top of the tank. The wall's thermal lag is not modelled.
+    pub fn probe_temperature(&self, id: OxProbeId) -> f32 {
+        /// What each probe reads when the whole tank is at one temperature, from recorded data.
+        const OFFSETS: OxProbeMap<f32> =
+            OxProbeMap::new([-0.4, -0.2, 0.2, 0.5, -0.4, 0.7, 0.2, 0.0, -0.8, 0.0]);
+
+        let liquid = self.oxidizer.temperature() - 273.15;
+        let ambient = AMBIENT_TEMP - 273.15;
+        let level = self.oxidizer.fill_level();
+
+        let wall = if id.height() <= level {
+            liquid
+        } else {
+            let above = (id.height() - level) / (1.0 - level).max(f32::EPSILON);
+            liquid + above.min(1.0) * (ambient - liquid)
+        };
+
+        wall + OFFSETS[id]
+    }
+
     /// Tank temperature [C], or None where not modelled
     pub fn tank_temperature(&self, id: TankId) -> Option<f32> {
         match id {
@@ -346,11 +369,19 @@ impl Bus for SitlBus {
         }
         nodes.set(UMBILICAL_NODE, umbilical_connected);
 
+        let ox_probes = OxProbeMap::from_fn(|id| {
+            Some(DataWithTime::new(
+                sim.hybrid.probe_temperature(id),
+                Wrapping(t),
+            ))
+        });
+
         BusInputImage {
             temp_sens,
             press_sens,
             valve_state,
             binary_outputs: BinaryOutputMap::splat(None),
+            ox_probes,
             ox_tank_level: Some(DataWithTime::new(
                 sim.hybrid.tank_level(TankId::Oxidizer),
                 Wrapping(t),

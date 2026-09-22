@@ -15,8 +15,8 @@ use rapid_dialect::rapid::enums::{
     MavSysStatusSensor, MavSysStatusSensorExtended, MavType, RocketCapability,
 };
 use rapid_dialect::rapid::messages::{
-    Attitude, AutopilotVersion, BatteryStatus, GlobalPositionInt, GpsRawInt, Heartbeat,
-    LocalPositionNed, PressureVessel, RocketInfo, ScaledImu, ScaledImu2, ScaledImu3,
+    Attitude, AutopilotVersion, BatteryStatus, DebugFloatArray, GlobalPositionInt, GpsRawInt,
+    Heartbeat, LocalPositionNed, PressureVessel, RocketInfo, ScaledImu, ScaledImu2, ScaledImu3,
     ScaledPressure, ScaledPressure2, ScaledPressure3, SysStatus, Valve, VfrHud,
 };
 
@@ -24,7 +24,7 @@ use state_estimator::StateEstimator;
 
 use crate::TelemetryLink;
 use crate::bus::{BusInputImage, BusOutputImage};
-use crate::inventory::{InventoryId, TankId, ValveId};
+use crate::inventory::{InventoryId, OxProbeId, TankId, ValveId};
 use crate::params::StateMachineParams;
 use crate::schedule::downlink_schedule;
 use crate::traits::SensorReadings;
@@ -51,7 +51,7 @@ impl VehicleSnapshot<'_> {
             every 100 ms => Attitude, VfrHud, ScaledImu, ScaledImu2, ScaledImu3;
             every 200 ms => BatteryStatus, LocalPositionNed,
                 ScaledPressure, ScaledPressure2, ScaledPressure3;
-            every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt;
+            every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt, DebugFloatArray;
             every 2000 ms => RocketInfo, AutopilotVersion;
             // One message per component
             every 200 ms => PressureVessel[TankId::ALL], Valve[ValveId::ALL];
@@ -100,6 +100,23 @@ impl From<&VehicleSnapshot<'_>> for Heartbeat {
             custom_mode: snap.mode as u32,
             system_status: snap.mode.into(),
             mavlink_version: 2,
+        }
+    }
+}
+
+/// The tank level probe row, raw. Only the level derived from it fits on the RF link.
+impl From<&VehicleSnapshot<'_>> for DebugFloatArray {
+    fn from(snap: &VehicleSnapshot<'_>) -> Self {
+        let mut data = [0.0_f32; 58];
+        for (slot, id) in data.iter_mut().zip(OxProbeId::ALL) {
+            *slot = snap.input_image.ox_probes[id].map_or(f32::NAN, |d| d.data);
+        }
+
+        DebugFloatArray {
+            time_usec: u64::from(snap.time.0).saturating_mul(1000),
+            name: *b"TLI\0\0\0\0\0\0\0",
+            array_id: 0,
+            data,
         }
     }
 }
