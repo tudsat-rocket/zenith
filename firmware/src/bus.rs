@@ -218,6 +218,9 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
                     SensorReading::Pressure(id, value) => {
                         image.press_sens[id] = Some(DataWithTime::new(value, time));
                     }
+                    SensorReading::OxProbe(id, value) => {
+                        image.ox_probes[id] = Some(DataWithTime::new(value, time));
+                    }
                 }
             }
         }

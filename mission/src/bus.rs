@@ -1,6 +1,8 @@
 use core::num::Wrapping;
 
-use crate::inventory::{BinaryOutputMap, PressureSensorMap, TemperatureSensorMap, ValveMap};
+use crate::inventory::{
+    BinaryOutputMap, OxProbeMap, PressureSensorMap, TemperatureSensorMap, ValveMap,
+};
 
 pub trait Bus {
     fn get_input_image(&mut self) -> BusInputImage;
@@ -31,6 +33,9 @@ pub struct BusInputImage {
     pub press_sens: PressureSensorMap<Option<DataWithTime<f32>>>,
     pub valve_state: ValveMap<Option<DataWithTime<ValveState>>>,
     pub binary_outputs: BinaryOutputMap<Option<DataWithTime<bool>>>,
+    /// The tank level probe row, as it arrives from the bus.
+    pub ox_probes: OxProbeMap<Option<DataWithTime<f32>>>,
+    /// Oxidizer fill level, 0 - 1.
     pub ox_tank_level: Option<DataWithTime<f32>>,
     pub nodes: NodeSet,
     /// A subset of `nodes`: a board we cannot hear from tells us nothing.
@@ -152,6 +157,7 @@ impl BusInputImage {
             press_sens: PressureSensorMap::splat(None),
             valve_state: ValveMap::splat(None),
             binary_outputs: BinaryOutputMap::splat(None),
+            ox_probes: OxProbeMap::splat(None),
             ox_tank_level: None,
             nodes: NodeSet::NONE,
             nodes_armed: NodeSet::NONE,

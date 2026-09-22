@@ -28,6 +28,25 @@ pub enum TempSensId {
     OxTankLower,
 }
 
+/// The row of temperature probes up the oxidizer tank wall, [`OxProbeId::Probe0`] at the bottom.
+///
+/// Not part of [`TempSensId`]: that enum sizes the `temperatures` array in the LoRa
+/// `PressuresMessage`, whose payload is already full.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[repr(u8)]
+pub enum OxProbeId {
+    Probe0,
+    Probe1,
+    Probe2,
+    Probe3,
+    Probe4,
+    Probe5,
+    Probe6,
+    Probe7,
+    Probe8,
+    Probe9,
+}
+
 /// Every pressure sensor on the IO boards.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
@@ -62,6 +81,7 @@ pub struct InventoryMap<I, T, const N: usize> {
 
 pub type ValveMap<T> = InventoryMap<ValveId, T, 9>;
 pub type TemperatureSensorMap<T> = InventoryMap<TempSensId, T, 2>;
+pub type OxProbeMap<T> = InventoryMap<OxProbeId, T, { OxProbeId::COUNT }>;
 pub type PressureSensorMap<T> = InventoryMap<PressSensId, T, 10>;
 pub type BinaryOutputMap<T> = InventoryMap<BinaryOutputId, T, 5>;
 pub type TankMap<T> = InventoryMap<TankId, T, 6>;
@@ -225,6 +245,40 @@ const _: () = {
 
 impl InventoryId<2> for TempSensId {
     const ALL: [Self; 2] = [Self::OxTankUpper, Self::OxTankLower];
+
+    fn idx(self) -> usize {
+        self as usize
+    }
+}
+
+impl OxProbeId {
+    /// Probes in the row, bottom to top.
+    pub const COUNT: usize = 10;
+
+    /// Height of this probe up the tank, as a fraction. The probes are taken to be evenly spaced,
+    /// each reporting from the middle of its tenth.
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "COUNT is 10; every index is exactly representable"
+    )]
+    pub fn height(self) -> f32 {
+        (self.idx() as f32 + 0.5) / Self::COUNT as f32
+    }
+}
+
+impl InventoryId<{ OxProbeId::COUNT }> for OxProbeId {
+    const ALL: [Self; OxProbeId::COUNT] = [
+        Self::Probe0,
+        Self::Probe1,
+        Self::Probe2,
+        Self::Probe3,
+        Self::Probe4,
+        Self::Probe5,
+        Self::Probe6,
+        Self::Probe7,
+        Self::Probe8,
+        Self::Probe9,
+    ];
 
     fn idx(self) -> usize {
         self as usize
@@ -408,6 +462,7 @@ mod tests {
         }
         check::<ValveId, 9>();
         check::<TempSensId, 2>();
+        check::<OxProbeId, { OxProbeId::COUNT }>();
         check::<PressSensId, 10>();
         check::<BinaryOutputId, 5>();
         check::<TankId, 6>();
