@@ -22,6 +22,11 @@ flash-gcs *args:
     cargo build -p firmware --bin gcs --release --features gcs,hybrid --target {{target}} {{args}}
     probe-rs run --chip STM32H743VITx --catch-hardfault --always-print-stacktrace --log-format '{L} {m:white} {s}' target/thumbv7em-none-eabihf/release/gcs
 
+# Build and flash the GSE CAN probe firmware via probe-rs
+flash-gse *args:
+    cargo build -p firmware --bin gse --release --target {{target}} {{args}}
+    probe-rs run --chip STM32H743VITx --catch-hardfault --always-print-stacktrace --log-format '{L} {m:white} {s}' target/thumbv7em-none-eabihf/release/gse
+
 # Run the SITL on the host (solid-rocket build)
 sitl-solid *args:
     ./sitl/tap.sh
@@ -37,6 +42,7 @@ cargo-everywhere *args:
     cargo {{args}} -p firmware --bin rocket --features hybrid --target {{target}}
     cargo {{args}} -p firmware --bin selftest --target {{target}}
     cargo {{args}} -p firmware --bin gcs --features gcs --target {{target}}
+    cargo {{args}} -p firmware --bin gse --target {{target}}
     cargo {{args}} -p sitl --no-default-features
     cargo {{args}} -p sitl --features hybrid
     cargo {{args}} -p state_estimator -p telemetry -p utils -p links -p mission --all-features

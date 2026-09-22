@@ -29,10 +29,9 @@ use mission::TelemetryLink;
 
 use crate::links::{UplinkCommand, protocols};
 
-#[cfg(not(feature = "gcs"))]
-pub const ETHERNET_SYSTEM_ID: u8 = 0x04;
-#[cfg(feature = "gcs")]
-pub const ETHERNET_SYSTEM_ID: u8 = 0x06;
+pub const ROCKET_SYSTEM_ID: u8 = 0x04;
+pub const GCS_SYSTEM_ID: u8 = 0x06;
+pub const GSE_SYSTEM_ID: u8 = 0x08;
 
 pub static DOWNLINK: StaticCell<InterfaceTx> = StaticCell::new();
 pub static UPLINK: StaticCell<InterfaceRx> = StaticCell::new();
@@ -45,6 +44,18 @@ static RX_BUFFER: StaticCell<[u8; 2048]> = StaticCell::new();
 static TX_META: StaticCell<[PacketMetadata; 16]> = StaticCell::new();
 static TX_BUFFER: StaticCell<[u8; 2048]> = StaticCell::new();
 
+pub struct CanForwarding {
+    pub tx: CanTxPublisher,
+    pub rx: CanRxSubscriber,
+    /// Start forwarding at boot instead of waiting for `MAV_CMD_CAN_FORWARD`.
+    pub enabled_at_boot: bool,
+}
+
+pub struct EthernetConfig {
+    pub system_id: u8,
+    pub can: Option<CanForwarding>,
+}
+
 pub struct EthernetHandle {
     tx: InterfaceTxPublisher,
     cmd_rx: InterfaceCommandSubscriber,
@@ -55,14 +66,10 @@ impl EthernetHandle {
         clippy::unwrap_used,
         reason = "boot-time socket/task setup; panic-on-failure is the embedded model"
     )]
-    #[allow(
-        clippy::needless_pass_by_value,
-        reason = "at the moment we always pass the CAN stuff, even for the GCS where we don't need it."
-    )]
     pub fn init(
         device: Ethernet<'static, ETH, GenericPhy>,
         seed: u64,
-        can: (CanTxPublisher, CanRxSubscriber),
+        config: EthernetConfig,
         spawner: Spawner,
     ) -> Self {
         static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
@@ -72,10 +79,14 @@ impl EthernetHandle {
         let commands = COMMANDS.init(PubSubChannel::new());
 
         // TODO
-        let config = embassy_net::Config::dhcpv4(DhcpConfig::default());
+        let net_config = embassy_net::Config::dhcpv4(DhcpConfig::default());
 
-        let (stack, runner) =
-            embassy_net::new(device, config, RESOURCES.init(StackResources::new()), seed);
+        let (stack, runner) = embassy_net::new(
+            device,
+            net_config,
+            RESOURCES.init(StackResources::new()),
+            seed,
+        );
 
         spawner.spawn(run_network(runner)).unwrap();
 
@@ -90,6 +101,7 @@ impl EthernetHandle {
         spawner
             .spawn(run_socket(
                 socket,
+                config.system_id,
                 tx.subscriber().unwrap(),
                 rx.publisher().unwrap(),
             ))
@@ -97,7 +109,7 @@ impl EthernetHandle {
 
         spawner
             .spawn(run_commands(
-                ETHERNET_SYSTEM_ID,
+                config.system_id,
                 tx.publisher().unwrap(),
                 rx.subscriber().unwrap(),
                 commands.publisher().unwrap(),
@@ -112,16 +124,18 @@ impl EthernetHandle {
             ))
             .unwrap();
 
-        #[cfg(not(feature = "gcs"))]
-        spawner
-            .spawn(protocols::can_probe::run(
-                can.0,
-                can.1,
-                commands.subscriber().unwrap(),
-                tx.publisher().unwrap(),
-                rx.subscriber().unwrap(),
-            ))
-            .unwrap();
+        if let Some(can) = config.can {
+            spawner
+                .spawn(protocols::can_probe::run(
+                    can.tx,
+                    can.rx,
+                    can.enabled_at_boot,
+                    commands.subscriber().unwrap(),
+                    tx.publisher().unwrap(),
+                    rx.subscriber().unwrap(),
+                ))
+                .unwrap();
+        }
 
         spawner
             .spawn(run_modes(
@@ -132,7 +146,7 @@ impl EthernetHandle {
 
         spawner
             .spawn(run_params(
-                ETHERNET_SYSTEM_ID,
+                config.system_id,
                 tx.publisher().unwrap(),
                 rx.subscriber().unwrap(),
                 commands.publisher().unwrap(),
@@ -212,6 +226,7 @@ async fn run_network(
 #[embassy_executor::task]
 async fn run_socket(
     mut socket: UdpSocket<'static>,
+    system_id: u8,
     mut subscriber: InterfaceTxSubscriber,
     publisher: InterfaceRxPublisher,
 ) -> ! {
@@ -220,10 +235,7 @@ async fn run_socket(
     socket.bind(14551).unwrap();
     socket.set_hop_limit(Some(4));
 
-    let endpoint = mavio::Endpoint::v2(mavio::MavLinkId::new(
-        ETHERNET_SYSTEM_ID,
-        links::SELF_COMPONENT_ID,
-    ));
+    let endpoint = mavio::Endpoint::v2(mavio::MavLinkId::new(system_id, links::SELF_COMPONENT_ID));
     let mut mavlink_buffer = heapless::Vec::<u8, 1024>::new();
 
     loop {
