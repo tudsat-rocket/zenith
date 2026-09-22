@@ -13,7 +13,9 @@ use rapid_dialect::rapid::enums::{MavCmd, MavResult};
 use crate::LoraTransceiver;
 use crate::Vehicle;
 use crate::can::{CanRxSubscriber, CanTxPublisher};
-use crate::links::interfaces::ethernet::EthernetHandle;
+use crate::links::interfaces::ethernet::{
+    CanForwarding, EthernetConfig, EthernetHandle, ROCKET_SYSTEM_ID,
+};
 use crate::links::interfaces::lora::LoraHandle;
 use crate::links::interfaces::usb::UsbHandle;
 
@@ -49,7 +51,19 @@ impl Links {
         low_priority_spawner: Spawner,
     ) -> Self {
         let lora = LoraHandle::init(lora1, lora2, medium_priority_spawner);
-        let ethernet = EthernetHandle::init(ethernet, seed, can, low_priority_spawner);
+        let ethernet = EthernetHandle::init(
+            ethernet,
+            seed,
+            EthernetConfig {
+                system_id: ROCKET_SYSTEM_ID,
+                can: Some(CanForwarding {
+                    tx: can.0,
+                    rx: can.1,
+                    enabled_at_boot: false,
+                }),
+            },
+            low_priority_spawner,
+        );
         let usb = UsbHandle::init(usb, low_priority_spawner);
 
         Self {

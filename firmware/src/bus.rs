@@ -149,15 +149,7 @@ impl Bus for BusHandler {
                 may_refresh = false;
             }
 
-            let target_state = outputs.valve[i];
-            let io_addr = &VALVE_ID_MAP[i];
-
-            let msg = sdo_write_msg(
-                &heapless::Vec::from_slice(&(target_state.promille().to_le_bytes())).unwrap(),
-                io_addr,
-            );
-
-            let frame = can_msg_to_frame(&msg);
+            let frame = valve_sdo_frame(i, outputs.valve[i]);
 
             if self.can.0.try_publish(frame).is_err() {
                 // Can't log here, too noisy.
@@ -303,4 +295,9 @@ pub fn set_servo_pwm_msg(micros: u16, servo: &IoAddr) -> CanMessage {
 pub fn set_boolean_msg(state: bool, device: &IoAddr) -> CanMessage {
     let data: heapless::Vec<u8, 4> = heapless::Vec::from_slice(&[state as u8]).unwrap();
     sdo_write_msg(&data, device)
+}
+
+pub fn valve_sdo_frame(valve: ValveId, state: ValveState) -> Frame {
+    let data = heapless::Vec::from_slice(&state.promille().to_le_bytes()).unwrap();
+    can_msg_to_frame(&sdo_write_msg(&data, &VALVE_ID_MAP[valve]))
 }

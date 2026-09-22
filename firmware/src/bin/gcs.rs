@@ -16,12 +16,12 @@ use embassy_stm32::{
     gpio::{Input, Output},
     interrupt,
 };
+use embassy_sync::channel::Channel;
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Receiver, Sender},
     watch::Watch,
 };
-use embassy_sync::{channel::Channel, pubsub::PubSubChannel};
 use embassy_time::{Duration, Instant, Ticker, Timer, with_deadline};
 
 use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG};
@@ -37,9 +37,10 @@ use rapid_dialect::FlightMode;
 use links::Downlink;
 
 use firmware::links::UplinkCommand;
+use firmware::links::interfaces::InterfaceCommandSubscriber;
 use firmware::links::interfaces::InterfaceTxPublisher;
+use firmware::links::interfaces::ethernet::{EthernetConfig, EthernetHandle, GCS_SYSTEM_ID};
 use firmware::links::interfaces::usb::UsbHandle;
-use firmware::links::interfaces::{InterfaceCommandSubscriber, ethernet::EthernetHandle};
 use firmware::{self as fw, LoraTransceiver};
 
 static EXECUTOR_HIGH: InterruptExecutor = InterruptExecutor::new();
@@ -85,13 +86,13 @@ async fn main(low_priority_spawner: Spawner) {
     interrupt::I2C3_ER.set_priority(Priority::P7);
     let medium_priority_spawner = EXECUTOR_MEDIUM.start(interrupt::I2C3_ER);
 
-    let can1_rx = fw::can::CAN1_RX_CH.init(PubSubChannel::new());
-    let can1_tx = fw::can::CAN1_TX_CH.init(PubSubChannel::new());
-
     let ethernet = EthernetHandle::init(
         board.ethernet,
         board.seed,
-        (can1_tx.publisher().unwrap(), can1_rx.subscriber().unwrap()),
+        EthernetConfig {
+            system_id: GCS_SYSTEM_ID,
+            can: None,
+        },
         low_priority_spawner,
     );
 

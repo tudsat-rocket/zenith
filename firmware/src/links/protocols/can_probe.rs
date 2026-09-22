@@ -1,7 +1,8 @@
 //! This task implements CAN bus forwarding using CAN_FRAME MavLink messages.
 //!
-//! When requested, all CAN frames received by the FC are forwarded using CAN_FRAME.
-//! Frames received by the FC using CAN_FRAME MAVLink messages are transmitted on the CAN bus.
+//! From boot or once requested via MAV_CMD_CAN_FORWARD, all CAN frames received by the FC are
+//! forwarded using CAN_FRAME. Frames received by the FC using CAN_FRAME MAVLink messages are
+//! transmitted on the CAN bus.
 //!
 //! At this time, there are the following limitations:
 //! - CAN1 only
@@ -39,12 +40,13 @@ use crate::links::interfaces::{
 pub async fn run(
     can_tx: CanTxPublisher,
     mut can_rx: CanRxSubscriber,
+    enabled_at_boot: bool,
     mut cmd_rx: InterfaceCommandSubscriber,
     eth_tx: InterfaceTxPublisher,
     mut eth_rx: InterfaceRxSubscriber,
 ) {
     // TODO: handle this separately for our two buses
-    let mut can_forwarding_enabled = false;
+    let mut can_forwarding_enabled = enabled_at_boot;
 
     loop {
         match select3(
