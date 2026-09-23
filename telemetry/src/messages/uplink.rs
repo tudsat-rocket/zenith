@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use siphasher::sip::SipHasher;
 
 use mission::inventory::{InventoryId, ValveId};
-use rapid_dialect::ValveCommand;
+use rapid_dialect::{FlightMode, ValveCommand};
 
 use crate::{TelemetryError, UplinkCommand, messages::TelemetryMessage};
 
@@ -126,6 +126,14 @@ pub trait UplinkTelemetryMessage: Sized + Serialize + DeserializeOwned {
 pub struct SetFlightModeMessage {
     pub mode: u8,
     // TODO: include an armed bit here?
+}
+
+impl From<FlightMode> for UplinkMessage {
+    fn from(flightmode: FlightMode) -> Self {
+        UplinkMessage::SetFlightMode(SetFlightModeMessage {
+            mode: flightmode as u8,
+        })
+    }
 }
 
 impl UplinkTelemetryMessage for SetFlightModeMessage {

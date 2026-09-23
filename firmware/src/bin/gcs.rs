@@ -25,7 +25,7 @@ use embassy_sync::{channel::Channel, pubsub::PubSubChannel};
 use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
 
 use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG};
-use telemetry::messages::{DownlinkMessage, SetFlightModeMessage, SetValveMessage, UplinkMessage};
+use telemetry::messages::{DownlinkMessage, SetValveMessage, UplinkMessage};
 use telemetry::trx::receiver::HoppingReceiver;
 use telemetry::trx::transmitter::HoppingTransmitter;
 
@@ -51,10 +51,11 @@ static UPLINK: StaticCell<Channel<CriticalSectionRawMutex, (u16, UplinkMessage),
 
 /// One wakeup of the GCS relay loop. Folds the two command streams and the physical ignition
 /// button into a single `select`, so the button is handled exactly like a command event.
-enum GroundInput {
+enum UplinkEvent {
     Eth(UplinkCommand),
     Usb(UplinkCommand),
     IgnitionButton(bool),
+    Heartbeat,
 }
 
 #[embassy_executor::main]
@@ -253,10 +254,10 @@ async fn join_uplink(
         )
         .await
         {
-            Ok(Either3::First(cmd)) => Some(GroundInput::Eth(cmd)),
-            Ok(Either3::Second(cmd)) => Some(GroundInput::Usb(cmd)),
-            Ok(Either3::Third(pressed)) => Some(GroundInput::IgnitionButton(pressed)),
-            Err(_timeout) => None,
+            Ok(Either3::First(cmd)) => UplinkEvent::Eth(cmd),
+            Ok(Either3::Second(cmd)) => UplinkEvent::Usb(cmd),
+            Ok(Either3::Third(pressed)) => UplinkEvent::IgnitionButton(pressed),
+            Err(_timeout) => UplinkEvent::Heartbeat,
         };
 
         let connection = CONNECTION.try_get().flatten();
@@ -264,15 +265,13 @@ async fn join_uplink(
 
         // Translate an input into a message for the vehicle. Inputs that must not reach the rocket
         // (a rejected ignition request, a button release, an idle tick) `continue` without sending.
-        let message = match (input, connection) {
-            (Some(GroundInput::Eth(command) | GroundInput::Usb(command)), _) => match command {
+        let message: UplinkMessage = match (input, connection) {
+            (UplinkEvent::Eth(command) | UplinkEvent::Usb(command), _) => match command {
                 // Remember that the vehicle is being pressurized, then forward the mode change.
                 // This is what arms the ignition gate below.
-                UplinkCommand::SetFlightMode(FlightMode::Pressurize) => {
+                UplinkCommand::SetFlightMode(fm @ FlightMode::Pressurize) => {
                     pressurized = true;
-                    UplinkMessage::SetFlightMode(SetFlightModeMessage {
-                        mode: FlightMode::Pressurize as u8,
-                    })
+                    fm.into()
                 }
                 // Ignition may never be requested from the ground software. Swallow it here; the
                 // only path to `Ignite` is the physical button.
@@ -282,12 +281,12 @@ async fn join_uplink(
                     );
                     continue;
                 }
-                // Any other mode change is forwarded as-is. Returning to `Idle` disarms ignition.
+                // Switching to FlightMode::Hold does not change the ignition arming state.
+                UplinkCommand::SetFlightMode(fm @ FlightMode::Hold) => fm.into(),
+                // Any other mode change disarms ignition.
                 UplinkCommand::SetFlightMode(fm) => {
-                    if fm == FlightMode::Idle {
-                        pressurized = false;
-                    }
-                    UplinkMessage::SetFlightMode(SetFlightModeMessage { mode: fm as u8 })
+                    pressurized = false;
+                    fm.into()
                 }
                 UplinkCommand::CommandValve(valve, cmd) => {
                     UplinkMessage::SetValve(SetValveMessage::new(valve, cmd))
@@ -301,21 +300,17 @@ async fn join_uplink(
                 }
             },
             // Physical ignition button: the only way to send `Ignite`, and only while pressurized.
-            (Some(GroundInput::IgnitionButton(true)), _) => {
+            (UplinkEvent::IgnitionButton(true), _) => {
                 if pressurized {
                     defmt::info!("Ignition button pressed while pressurized: sending Ignite.");
-                    UplinkMessage::SetFlightMode(SetFlightModeMessage {
-                        mode: FlightMode::Ignite as u8,
-                    })
+                    FlightMode::Ignite.into()
                 } else {
                     defmt::warn!("Ignition button pressed but not pressurized; ignoring.");
                     continue;
                 }
             }
-            // Button release and idle ticks carry no command for the vehicle.
-            (Some(GroundInput::IgnitionButton(false)), _) => continue,
-            (None, Some(_)) => UplinkMessage::Heartbeat(()),
-            (None, None) => continue,
+            (UplinkEvent::IgnitionButton(false), _) | (UplinkEvent::Heartbeat, None) => continue,
+            (UplinkEvent::Heartbeat, Some(_)) => UplinkMessage::Heartbeat(()),
         };
 
         seq = seq.wrapping_add(1);
