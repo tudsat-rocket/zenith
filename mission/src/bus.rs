@@ -38,6 +38,41 @@ pub struct BusInputImage {
 pub struct BusOutputImage {
     pub valve: ValveMap<ValveState>,
     pub binary_output: BinaryOutputMap<bool>,
+    /// What the flight computer reports about *itself* on the vehicle bus. Not
+    /// an output in the sense the other two are — nothing acts on it — but it
+    /// leaves through the same path, and putting it here is what lets the bus
+    /// layer stay the only thing that knows the wire format.
+    pub temperature: FcTemperature,
+}
+
+/// The flight computer's own temperatures, in millidegrees Celsius.
+///
+/// Millidegrees in `i32` rather than degrees in `f32` for two reasons: it is the
+/// unit the vehicle bus carries, and `BusOutputImage` is compared with `Eq` to
+/// decide whether a value is worth a CAN frame, which a float cannot do.
+#[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
+pub struct FcTemperature {
+    /// Ambient, taken from a barometer's own die sensor — the flight computer
+    /// has no dedicated board thermistor the way an IO board does.
+    pub baro_milli_c: Option<i32>,
+    /// The MCU die sensor.
+    pub mcu_milli_c: Option<i32>,
+}
+
+/// Degrees Celsius to the millidegrees the bus carries.
+///
+/// Saturating rather than wrapping: a barometer that reports a nonsense
+/// temperature should pin the reading, not wrap it around to the other end of
+/// the scale where it looks plausible again.
+pub fn celsius_to_milli_c(celsius: f32) -> i32 {
+    let milli = celsius * 1000.0;
+    if milli >= i32::MAX as f32 {
+        i32::MAX
+    } else if milli <= i32::MIN as f32 {
+        i32::MIN
+    } else {
+        milli as i32
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -92,6 +127,11 @@ impl BusOutputImage {
         Self {
             valve: ValveMap::splat(ValveState::fully_closed()),
             binary_output: BinaryOutputMap::splat(false),
+            // `Default` is not const, so this is spelled out.
+            temperature: FcTemperature {
+                baro_milli_c: None,
+                mcu_milli_c: None,
+            },
         }
     }
 }

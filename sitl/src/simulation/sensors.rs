@@ -115,7 +115,9 @@ impl SensorModel {
             fc_current: current_ma,
             recovery_voltage: pack_mv,
             recovery_current: 0,
-            temperature: 0,
+            // No thermal model in the simulation; a plausible constant so the
+            // field is exercised rather than reading as "no sensor".
+            temperature_milli_c: Some(35_000),
         };
 
         SensorReadings {
