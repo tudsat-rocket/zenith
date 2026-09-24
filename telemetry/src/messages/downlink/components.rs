@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use mission::bus::ValveState;
+use mission::bus::{NodeSet, ValveState};
 use mission::inventory::{InventoryId, ValveId};
 use mission::mavlink::VehicleSnapshot;
 use rapid_dialect::rapid::messages::Valve;
@@ -72,17 +72,19 @@ pub struct ComponentsMessage {
     /// One [`ValveCode`] per valve, as the vehicle last resolved it.
     #[serde(with = "postcard::fixint::le")]
     commanded: u32,
-    /// Reserved: bit n is node id n.
-    node_presence: u8,
-    /// Reserved: bit n is node id n.
-    node_armed: u8,
+    /// Bit n is node id n.
+    #[serde(with = "postcard::fixint::le")]
+    node_presence: u16,
+    /// The armed subset of those.
+    #[serde(with = "postcard::fixint::le")]
+    node_armed: u16,
 }
 
 impl DownlinkTelemetryMessage for ComponentsMessage {
     const ID: u8 = 0x04;
     type Input<'a> = &'a VehicleSnapshot<'a>;
-    /// One per [`ValveId`].
-    type Output = [Valve; 9];
+    /// One per [`ValveId`], then the nodes on the bus and the armed subset of them.
+    type Output = ([Valve; 9], NodeSet, NodeSet);
 
     fn pack(snapshot: Self::Input<'_>) -> Self {
         Self {
@@ -92,18 +94,23 @@ impl DownlinkTelemetryMessage for ComponentsMessage {
             commanded: ValveCode::pack_all(|valve| {
                 ValveCode::from_state(Some(snapshot.output_image.valve[valve]))
             }),
-            // TODO: no node liveness or per-node armed state is tracked on the bus yet.
-            node_presence: 0,
-            node_armed: 0,
+            node_presence: snapshot.input_image.nodes.bits(),
+            node_armed: snapshot.input_image.nodes_armed.bits(),
         }
     }
 
     fn unpack(self, _context: &mut ConnectionContext) -> Self::Output {
-        ValveId::ALL.map(|valve| Valve {
+        let valves = ValveId::ALL.map(|valve| Valve {
             id: valve,
             state: ValveCode::unpack_one(self.reported, valve).position(),
             commanded: ValveCode::unpack_one(self.commanded, valve).position(),
-        })
+        });
+
+        (
+            valves,
+            NodeSet::from_bits(self.node_presence),
+            NodeSet::from_bits(self.node_armed),
+        )
     }
 }
 
@@ -148,7 +155,7 @@ pub(crate) mod tests {
         let DownlinkMessage::Components(decoded) = through_packet(msg) else {
             panic!("decoded as the wrong message")
         };
-        let valves = decoded.unpack(&mut ConnectionContext::init(0));
+        let (valves, ..) = decoded.unpack(&mut ConnectionContext::init(0));
 
         let by_id = |id: ValveId| &valves[id.idx()];
 
@@ -169,12 +176,47 @@ pub(crate) mod tests {
     #[test]
     fn commanded_positions_are_never_unknown() {
         let parts = SnapshotParts::default();
-        let valves =
+        let (valves, ..) =
             ComponentsMessage::pack(&parts.snapshot()).unpack(&mut ConnectionContext::init(0));
 
         for valve in &valves {
             assert!(!valve.commanded.is_nan(), "{:?}", valve.id);
             assert!(valve.state.is_nan(), "{:?} was never reported", valve.id);
+        }
+    }
+
+    /// Separate words, and node 8 is what a byte-wide field would have dropped.
+    #[test]
+    fn node_presence_and_arming_survive_the_packet() {
+        const PRESENT: [u8; 3] = [2, 8, 15];
+        const ARMED: [u8; 2] = [8, 15];
+
+        let mut parts = SnapshotParts::default();
+
+        for node_id in PRESENT {
+            parts.inputs.nodes.set(node_id, true);
+        }
+        for node_id in ARMED {
+            parts.inputs.nodes_armed.set(node_id, true);
+        }
+
+        let msg = DownlinkMessage::Components(ComponentsMessage::pack(&parts.snapshot()));
+        let DownlinkMessage::Components(decoded) = through_packet(msg) else {
+            panic!("decoded as the wrong message")
+        };
+        let (_, nodes, armed) = decoded.unpack(&mut ConnectionContext::init(0));
+
+        for node_id in 0..16 {
+            assert_eq!(
+                nodes.contains(node_id),
+                PRESENT.contains(&node_id),
+                "node {node_id} presence"
+            );
+            assert_eq!(
+                armed.contains(node_id),
+                ARMED.contains(&node_id),
+                "node {node_id} arming"
+            );
         }
     }
 

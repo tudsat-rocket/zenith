@@ -1,7 +1,6 @@
 #![allow(clippy::indexing_slicing, reason = "fixed-size network packet buffers")]
 
 use embassy_sync::watch::Watch;
-use rapid_dialect::Rapid;
 use static_cell::StaticCell;
 
 use embassy_executor::Spawner;
@@ -25,6 +24,7 @@ use crate::links::interfaces::{
     InterfaceTxSubscriber,
 };
 use crate::links::protocols::link_quality::LinkQuality;
+use links::Downlink;
 use mission::TelemetryLink;
 
 use crate::links::{UplinkCommand, protocols};
@@ -98,7 +98,6 @@ impl EthernetHandle {
         spawner
             .spawn(run_commands(
                 ETHERNET_SYSTEM_ID,
-                0x01,
                 tx.publisher().unwrap(),
                 rx.subscriber().unwrap(),
                 commands.publisher().unwrap(),
@@ -134,7 +133,6 @@ impl EthernetHandle {
         spawner
             .spawn(run_params(
                 ETHERNET_SYSTEM_ID,
-                0x01,
                 tx.publisher().unwrap(),
                 rx.subscriber().unwrap(),
                 commands.publisher().unwrap(),
@@ -154,7 +152,7 @@ impl EthernetHandle {
 }
 
 impl TelemetryLink for EthernetHandle {
-    fn send_message(&mut self, message: Rapid) {
+    fn send_message(&mut self, message: Downlink) {
         if self.tx.try_publish(message).is_err() {
             // defmt::warn!("downlink queue full, dropping telemetry message");
         }
@@ -168,7 +166,6 @@ impl TelemetryLink for EthernetHandle {
 #[embassy_executor::task(pool_size = 2)]
 async fn run_commands(
     system_id: u8,
-    component_id: u8,
     tx: InterfaceTxPublisher,
     rx: InterfaceRxSubscriber,
     cmd_tx: InterfaceCommandPublisher,
@@ -179,7 +176,7 @@ async fn run_commands(
         3,
     >,
 ) {
-    protocols::commands::run(system_id, component_id, tx, rx, cmd_tx, link_quality_sender).await;
+    protocols::commands::run(system_id, tx, rx, cmd_tx, link_quality_sender).await;
 }
 
 #[embassy_executor::task(pool_size = 2)]
@@ -198,20 +195,11 @@ async fn run_modes(tx: InterfaceTxPublisher, rx: InterfaceCommandSubscriber) {
 #[embassy_executor::task(pool_size = 2)]
 async fn run_params(
     system_id: u8,
-    component_id: u8,
     tx: InterfaceTxPublisher,
     rx: InterfaceRxSubscriber,
     cmd_tx: InterfaceCommandPublisher,
 ) {
-    protocols::params::run(
-        system_id,
-        component_id,
-        tx,
-        rx,
-        cmd_tx,
-        &crate::storage::PARAM_STORE,
-    )
-    .await;
+    protocols::params::run(system_id, tx, rx, cmd_tx, &crate::storage::PARAM_STORE).await;
 }
 
 #[embassy_executor::task]
@@ -232,7 +220,10 @@ async fn run_socket(
     socket.bind(14551).unwrap();
     socket.set_hop_limit(Some(4));
 
-    let endpoint = mavio::Endpoint::v2(mavio::MavLinkId::new(ETHERNET_SYSTEM_ID, 0x01));
+    let endpoint = mavio::Endpoint::v2(mavio::MavLinkId::new(
+        ETHERNET_SYSTEM_ID,
+        links::SELF_COMPONENT_ID,
+    ));
     let mut mavlink_buffer = heapless::Vec::<u8, 1024>::new();
 
     loop {
@@ -244,7 +235,7 @@ async fn run_socket(
         .await
         {
             Either::First(message) => {
-                let Ok(frame) = endpoint.next_frame(&message) else {
+                let Ok(frame) = message.frame(&endpoint) else {
                     defmt::error!("Failed to create MAVLink frame");
                     continue;
                 };

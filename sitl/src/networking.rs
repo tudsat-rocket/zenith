@@ -19,9 +19,9 @@ use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::watch::Watch;
 
 use mavio::error::FrameError;
-use rapid_dialect::Rapid;
 use static_cell::StaticCell;
 
+use links::Downlink;
 use links::protocols::link_quality::LinkQuality;
 use links::{
     InterfaceCommandPublisher, InterfaceCommandSubscriber, InterfaceCommands, InterfaceRx,
@@ -32,7 +32,6 @@ use mission::TelemetryLink;
 use crate::Vehicle;
 
 pub const SYSTEM_ID: u8 = 0x14;
-const COMPONENT_ID: u8 = 0x01;
 
 static DOWNLINK: StaticCell<InterfaceTx> = StaticCell::new();
 static UPLINK: StaticCell<InterfaceRx> = StaticCell::new();
@@ -90,7 +89,6 @@ impl Links {
         spawner
             .spawn(run_commands(
                 SYSTEM_ID,
-                COMPONENT_ID,
                 tx.publisher().unwrap(),
                 rx.subscriber().unwrap(),
                 commands.publisher().unwrap(),
@@ -115,7 +113,6 @@ impl Links {
         spawner
             .spawn(run_params(
                 SYSTEM_ID,
-                COMPONENT_ID,
                 tx.publisher().unwrap(),
                 rx.subscriber().unwrap(),
                 commands.publisher().unwrap(),
@@ -134,7 +131,7 @@ impl Links {
 }
 
 impl TelemetryLink for Links {
-    fn send_message(&mut self, message: Rapid) {
+    fn send_message(&mut self, message: Downlink) {
         self.tx.publish_immediate(message);
     }
 
@@ -158,7 +155,7 @@ async fn run_socket(
     socket.bind(14551).unwrap();
     socket.set_hop_limit(Some(4));
 
-    let endpoint = mavio::Endpoint::v2(mavio::MavLinkId::new(SYSTEM_ID, COMPONENT_ID));
+    let endpoint = mavio::Endpoint::v2(mavio::MavLinkId::new(SYSTEM_ID, links::SELF_COMPONENT_ID));
     let mut mavlink_buffer = Vec::<u8>::new();
 
     loop {
@@ -170,7 +167,7 @@ async fn run_socket(
         .await
         {
             Either::First(message) => {
-                let frame = endpoint.next_frame(&message).unwrap();
+                let frame = message.frame(&endpoint).unwrap();
 
                 let mut transmit_buffer = [0; 1024];
                 let n = frame.serialize(&mut transmit_buffer).unwrap();
@@ -206,7 +203,6 @@ async fn run_socket(
 #[embassy_executor::task]
 async fn run_commands(
     system_id: u8,
-    component_id: u8,
     tx: InterfaceTxPublisher,
     rx: links::InterfaceRxSubscriber,
     cmd_tx: InterfaceCommandPublisher,
@@ -217,8 +213,7 @@ async fn run_commands(
         3,
     >,
 ) {
-    links::protocols::commands::run(system_id, component_id, tx, rx, cmd_tx, link_quality_sender)
-        .await;
+    links::protocols::commands::run(system_id, tx, rx, cmd_tx, link_quality_sender).await;
 }
 
 #[embassy_executor::task]
@@ -237,14 +232,12 @@ async fn run_modes(tx: InterfaceTxPublisher, rx: InterfaceCommandSubscriber) {
 #[embassy_executor::task]
 async fn run_params(
     system_id: u8,
-    component_id: u8,
     tx: InterfaceTxPublisher,
     rx: links::InterfaceRxSubscriber,
     cmd_tx: InterfaceCommandPublisher,
 ) {
     links::protocols::params::run(
         system_id,
-        component_id,
         tx,
         rx,
         cmd_tx,

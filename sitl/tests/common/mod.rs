@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use links::UplinkCommand;
+use links::{Downlink, UplinkCommand};
 use mission::{Params, TelemetryLink, Vehicle as MissionVehicle};
 use rapid_dialect::{FlightMode, Rapid};
 use sitl::{MemoryStorage, RecoveryFlags, SharedSimulation, Simulation, StdOutputs, StdSensors};
@@ -30,11 +30,11 @@ pub struct Harness {
 /// Collects what the vehicle puts on the downlink, for asserting on telemetry contents.
 #[derive(Default)]
 pub struct CapturedLink {
-    pub messages: Vec<Rapid>,
+    pub messages: Vec<Downlink>,
 }
 
 impl TelemetryLink for CapturedLink {
-    fn send_message(&mut self, message: Rapid) {
+    fn send_message(&mut self, message: Downlink) {
         self.messages.push(message);
     }
 
@@ -140,7 +140,7 @@ impl Harness {
 
     /// Runs the telemetry scheduler alongside the vehicle for `n` ticks (one tick is 1ms), keeping
     /// the emitted messages grouped by the tick they went out on.
-    pub async fn collect_telemetry_by_tick(&mut self, n: u32) -> Vec<Vec<Rapid>> {
+    pub async fn collect_telemetry_by_tick(&mut self, n: u32) -> Vec<Vec<Downlink>> {
         let mut per_tick = Vec::with_capacity(n as usize);
 
         for _ in 0..n {
@@ -153,13 +153,14 @@ impl Harness {
         per_tick
     }
 
-    /// [`Self::collect_telemetry_by_tick`] without the grouping, for asserting on what was sent
-    /// rather than on when.
+    /// [`Self::collect_telemetry_by_tick`] without the grouping or the component ids, for
+    /// asserting on what was sent rather than on when or by whom.
     pub async fn collect_telemetry(&mut self, n: u32) -> Vec<Rapid> {
         self.collect_telemetry_by_tick(n)
             .await
             .into_iter()
             .flatten()
+            .map(|d| d.message)
             .collect()
     }
 

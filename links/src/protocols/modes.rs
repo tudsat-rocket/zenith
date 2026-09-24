@@ -79,7 +79,7 @@ pub async fn run(tx: InterfaceTxPublisher, mut rx: InterfaceCommandSubscriber) {
                             properties: mode_properties(mode),
                             mode_name: mode.mavlink_name(),
                         });
-                        tx.publish(msg).await;
+                        tx.publish(msg.into()).await;
                         Timer::after(Duration::from_millis(50)).await;
                     }
                 } else if (index - 1) < FlightMode::ALL.len() {
@@ -92,7 +92,7 @@ pub async fn run(tx: InterfaceTxPublisher, mut rx: InterfaceCommandSubscriber) {
                         properties: mode_properties(mode),
                         mode_name: mode.mavlink_name(),
                     });
-                    tx.publish(msg).await;
+                    tx.publish(msg.into()).await;
                 }
             }
             _ => {}

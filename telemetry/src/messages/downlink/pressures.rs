@@ -173,13 +173,13 @@ pub(crate) mod tests {
 
     use core::num::Wrapping;
 
-    use mission::bus::{BusInputImage, DataWithTime};
+    use mission::bus::{BusInputImage, DataWithTime, NodeSet};
     use rapid_dialect::rapid::enums::PressureVesselFlag;
 
     use crate::messages::DownlinkMessage;
 
-    /// Every sensor reporting near its full scale, which is where a varint-encoded field would
-    /// have grown past the payload.
+    /// Every sensor near its full scale and every node on the bus, which is where a
+    /// varint-encoded field would have grown past the payload.
     pub(crate) fn saturated_inputs() -> BusInputImage {
         let mut inputs = BusInputImage::default();
 
@@ -191,6 +191,8 @@ pub(crate) mod tests {
             inputs.temp_sens[id] = Some(DataWithTime::new(35.0, Wrapping(0)));
         }
         inputs.ox_tank_level = Some(DataWithTime::new(0.87, Wrapping(0)));
+        inputs.nodes = NodeSet::from_bits(u16::MAX);
+        inputs.nodes_armed = NodeSet::from_bits(u16::MAX);
 
         inputs
     }

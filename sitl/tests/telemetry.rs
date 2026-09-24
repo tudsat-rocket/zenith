@@ -8,10 +8,11 @@
 mod common;
 
 use common::{Harness, block_on};
+use links::SELF_COMPONENT_ID;
 use mission::TankId;
 use mission::inventory::InventoryId;
 use rapid_dialect::Rapid;
-use rapid_dialect::rapid::enums::ValveId;
+use rapid_dialect::rapid::enums::{MavModeFlag, ValveId};
 
 /// Two full cycles of the slowest (2000 ms) interval, so every combination of phases that can
 /// coincide has had the chance to. Every interval in the schedule has to divide this, or the
@@ -25,7 +26,11 @@ macro_rules! assert_rates {
     ($sent:expr, $($message:ident every $interval_ms:expr),+ $(,)?) => {
         $(
             assert_eq!(
-                $sent.iter().filter(|m| matches!(m, Rapid::$message(_))).count(),
+                $sent
+                    .iter()
+                    .filter(|m| m.component_id == SELF_COMPONENT_ID
+                        && matches!(m.message, Rapid::$message(_)))
+                    .count(),
                 (TICKS / $interval_ms) as usize,
                 concat!(stringify!($message), " did not go out every {} ms"),
                 $interval_ms,
@@ -45,7 +50,7 @@ fn every_message_goes_out_at_its_intended_rate() {
             assert!(built <= 1, "tick {tick} built {built} messages");
         }
 
-        let sent: Vec<&Rapid> = per_tick.iter().flatten().collect();
+        let sent: Vec<&links::Downlink> = per_tick.iter().flatten().collect();
 
         assert_rates! { sent,
             Attitude every 100,
@@ -73,7 +78,7 @@ fn every_message_goes_out_at_its_intended_rate() {
         for tank in TankId::ALL {
             let reports = sent
                 .iter()
-                .filter(|m| matches!(m, Rapid::PressureVessel(p) if p.id == tank as u8))
+                .filter(|m| matches!(&m.message, Rapid::PressureVessel(p) if p.id == tank as u8))
                 .count();
             assert_eq!(
                 reports, propulsion_reports,
@@ -84,11 +89,67 @@ fn every_message_goes_out_at_its_intended_rate() {
         for valve in ValveId::ALL {
             let reports = sent
                 .iter()
-                .filter(|m| matches!(m, Rapid::Valve(v) if v.id == valve))
+                .filter(|m| matches!(&m.message, Rapid::Valve(v) if v.id == valve))
                 .count();
             assert_eq!(
                 reports, propulsion_reports,
                 "valve {valve:?} reported {reports} times"
+            );
+        }
+    });
+}
+
+/// Restated rather than read from the simulator, so a node that stops being reported fails a
+/// test. Solid builds have no bus.
+#[cfg(feature = "hybrid")]
+const SIMULATED_NODES: [u8; 7] = [2, 3, 4, 5, 6, 7, 8];
+#[cfg(not(feature = "hybrid"))]
+const SIMULATED_NODES: [u8; 0] = [];
+
+/// A publisher that forgets which component it speaks for would show up as a phantom board.
+#[test]
+fn every_present_io_board_node_heartbeats_as_its_own_component() {
+    block_on(async {
+        let mut harness = Harness::new(None).await;
+        // The simulated boards only report a high-current supply out of Idle.
+        harness.arm();
+        let sent = harness.collect_telemetry_by_tick(TICKS).await;
+        let sent: Vec<&links::Downlink> = sent.iter().flatten().collect();
+
+        for node_id in SIMULATED_NODES {
+            let beats: Vec<_> = sent
+                .iter()
+                .filter_map(|m| match &m.message {
+                    Rapid::Heartbeat(h) if m.component_id == node_id => Some(h),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                beats.len(),
+                (TICKS / 1000) as usize,
+                "node {} heartbeat {} times",
+                node_id,
+                beats.len()
+            );
+
+            for beat in beats {
+                assert!(
+                    beat.base_mode.contains(MavModeFlag::SAFETY_ARMED),
+                    "node {node_id} did not report itself armed"
+                );
+            }
+        }
+
+        for message in sent.iter().filter(|m| m.component_id != SELF_COMPONENT_ID) {
+            assert!(
+                matches!(message.message, Rapid::Heartbeat(_)),
+                "component {} sent something other than a heartbeat",
+                message.component_id
+            );
+            assert!(
+                SIMULATED_NODES.contains(&message.component_id),
+                "component {} is not a simulated io board node",
+                message.component_id
             );
         }
     });

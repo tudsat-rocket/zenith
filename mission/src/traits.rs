@@ -1,8 +1,6 @@
 use nalgebra::Vector3;
 
-use rapid_dialect::Rapid;
-
-use links::UplinkCommand;
+use links::{Downlink, UplinkCommand};
 use params::{ParamId, ParamValue};
 use state_estimator::GpsDatum;
 
@@ -68,7 +66,7 @@ pub trait Outputs {
 }
 
 pub trait TelemetryLink {
-    fn send_message(&mut self, message: Rapid);
+    fn send_message(&mut self, message: Downlink);
     fn try_recv_command(&mut self) -> Option<UplinkCommand>;
 }
 
