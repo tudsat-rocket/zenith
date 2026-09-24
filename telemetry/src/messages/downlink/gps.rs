@@ -192,6 +192,7 @@ fn altitude_mm(code: u16) -> i32 {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::super::CommandAck;
     use super::super::tests::{SnapshotParts, through_packet};
     use super::*;
 
@@ -375,7 +376,7 @@ pub(crate) mod tests {
         assert_eq!(context.altitude_ground_asl, Some(92.0));
 
         let DownlinkMessage::Heartbeat(heartbeat) = through_packet(DownlinkMessage::Heartbeat(
-            HeartbeatMessage::pack(&parts.snapshot()),
+            HeartbeatMessage::pack((&parts.snapshot(), CommandAck::NONE)),
         )) else {
             panic!("decoded as the wrong message")
         };

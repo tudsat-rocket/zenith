@@ -8,7 +8,7 @@ use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::{MavAutopilot, MavModeFlag, MavState, MavType};
 use rapid_dialect::rapid::messages::{Altitude, Attitude, Heartbeat, LocalPositionNed, VfrHud};
 
-use super::{ConnectionContext, DownlinkTelemetryMessage, f16_le};
+use super::{CommandAck, ConnectionContext, DownlinkTelemetryMessage, f16_le};
 
 /// Roll and yaw cover a full turn, pitch only a half one.
 const ROLL_YAW_CODES_PER_RAD: f32 = (i8::MAX as f32) / PI;
@@ -58,15 +58,22 @@ pub struct HeartbeatMessage {
     /// transmitted.
     #[serde(with = "f16_le")]
     ground_speed: f16,
-    // TODO: vertical acceleration in the spare byte?
+    /// Packed [`CommandAck`].
+    command_ack: u8,
+}
+
+impl HeartbeatMessage {
+    pub fn command_ack(&self) -> CommandAck {
+        CommandAck::unpack(self.command_ack)
+    }
 }
 
 impl DownlinkTelemetryMessage for HeartbeatMessage {
     const ID: u8 = 0x01;
-    type Input<'a> = &'a VehicleSnapshot<'a>;
+    type Input<'a> = (&'a VehicleSnapshot<'a>, CommandAck);
     type Output = (Heartbeat, LocalPositionNed, Attitude, Altitude, VfrHud);
 
-    fn pack(snapshot: Self::Input<'_>) -> Self {
+    fn pack((snapshot, ack): Self::Input<'_>) -> Self {
         let heartbeat: Heartbeat = snapshot.into();
         let local_position: LocalPositionNed = snapshot.into();
         let attitude: Attitude = snapshot.into();
@@ -100,6 +107,7 @@ impl DownlinkTelemetryMessage for HeartbeatMessage {
             altitude_local: alt as u16,
             vertical_speed: f16::from_f32(vfr_hud.climb),
             ground_speed: f16::from_f32(vfr_hud.groundspeed),
+            command_ack: ack.pack(),
         }
     }
 
@@ -222,6 +230,8 @@ pub(crate) mod tests {
     use mission::AdcData;
     use state_estimator::{StateEstimator, StateEstimatorParams};
 
+    use rapid_dialect::rapid::enums::MavResult;
+
     use crate::messages::DownlinkMessage;
 
     pub(crate) fn flying_estimator() -> StateEstimator {
@@ -235,11 +245,48 @@ pub(crate) mod tests {
         estimator
     }
 
+    #[test]
+    fn command_acks_survive_the_packet() {
+        use crate::messages::UPLINK_SEQ_MODULO;
+
+        let parts = SnapshotParts::default();
+
+        for seq in 0..UPLINK_SEQ_MODULO {
+            for result in [
+                Some(MavResult::Accepted),
+                Some(MavResult::TemporarilyRejected),
+                Some(MavResult::Denied),
+                Some(MavResult::Unsupported),
+                Some(MavResult::Failed),
+                None,
+            ] {
+                let ack = CommandAck { seq, result };
+                let msg =
+                    DownlinkMessage::Heartbeat(HeartbeatMessage::pack((&parts.snapshot(), ack)));
+                let DownlinkMessage::Heartbeat(decoded) = through_packet(msg) else {
+                    panic!("decoded as the wrong message")
+                };
+
+                assert_eq!(
+                    decoded.command_ack(),
+                    CommandAck {
+                        seq: seq & CommandAck::SEQ_MASK,
+                        result
+                    },
+                    "seq {seq}"
+                );
+            }
+        }
+    }
+
     fn round_trip(
         parts: &SnapshotParts,
         context: &mut ConnectionContext,
     ) -> (Heartbeat, LocalPositionNed, Attitude, Altitude, VfrHud) {
-        let msg = DownlinkMessage::Heartbeat(HeartbeatMessage::pack(&parts.snapshot()));
+        let msg = DownlinkMessage::Heartbeat(HeartbeatMessage::pack((
+            &parts.snapshot(),
+            CommandAck::NONE,
+        )));
         let DownlinkMessage::Heartbeat(decoded) = through_packet(msg) else {
             panic!("decoded as the wrong message")
         };

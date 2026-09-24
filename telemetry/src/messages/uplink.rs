@@ -5,9 +5,11 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use siphasher::sip::SipHasher;
 
 use mission::inventory::{InventoryId, ValveId};
+use rapid_dialect::rapid::enums::MavResult;
 use rapid_dialect::{FlightMode, ValveCommand};
 
-use crate::{TelemetryError, UplinkCommand, messages::TelemetryMessage};
+use crate::messages::TelemetryMessage;
+use crate::{TelemetryError, UplinkCommand};
 
 pub const UPLINK_PACKET_SIZE: usize = 16;
 const UPLINK_PAYLOAD_SIZE: usize = UPLINK_PACKET_SIZE - 10;
@@ -26,7 +28,7 @@ impl TelemetryMessage for UplinkMessage {
     type Packet = [u8; UPLINK_PACKET_SIZE];
 
     type Input = UplinkCommand;
-    type Output = UplinkCommand;
+    type Output = (u16, Result<UplinkCommand, MavResult>);
 
     fn encode(
         self,

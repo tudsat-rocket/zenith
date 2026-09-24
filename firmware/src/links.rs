@@ -24,7 +24,7 @@ pub use links::UplinkCommand;
 
 #[derive(Copy, Clone, Debug)]
 pub enum CommandToken {
-    Lora,
+    Lora(u16),
     Ethernet(MavCmd),
     Usb(MavCmd),
     /// Acked by the protocol that received it, e.g. a PARAM_SET by its PARAM_VALUE.
@@ -68,8 +68,8 @@ impl Links {
     }
 
     pub fn try_recv_command(&mut self) -> Option<(CommandToken, UplinkCommand)> {
-        if let Some(cmd) = self.lora.try_recv_command() {
-            return Some((CommandToken::Lora, cmd));
+        if let Some((seq, cmd)) = self.lora.try_recv_command() {
+            return Some((CommandToken::Lora(seq), cmd));
         }
 
         if let Some(cmd) = self.ethernet.try_recv_command() {
@@ -85,6 +85,7 @@ impl Links {
 
     pub fn note_command_result(&mut self, token: CommandToken, result: MavResult) {
         match token {
+            CommandToken::Lora(seq) => self.lora.note_command_result(seq, result),
             CommandToken::Ethernet(command) => {
                 self.ethernet
                     .send_message(Downlink::command_ack(command, result));
@@ -93,7 +94,7 @@ impl Links {
                 self.usb
                     .send_message(Downlink::command_ack(command, result));
             }
-            CommandToken::Lora | CommandToken::Unanswered => {}
+            CommandToken::Unanswered => {}
         }
     }
 
