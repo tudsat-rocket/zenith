@@ -5,7 +5,8 @@ use crate::inventory::{
 };
 
 pub trait Bus {
-    fn get_input_image(&mut self) -> BusInputImage;
+    /// Readings are stamped with `now`, the vehicle's own clock.
+    fn get_input_image(&mut self, now: Wrapping<u32>) -> BusInputImage;
     fn set_output_image(&mut self, outputs: BusOutputImage);
 }
 
@@ -14,7 +15,7 @@ pub trait Bus {
 pub struct NoBus;
 
 impl Bus for NoBus {
-    fn get_input_image(&mut self) -> BusInputImage {
+    fn get_input_image(&mut self, _now: Wrapping<u32>) -> BusInputImage {
         BusInputImage::default()
     }
 

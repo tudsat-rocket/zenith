@@ -72,7 +72,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         // everything below acts on this tick's data.
         // TODO: incorporate all IMUs, baros into the state estimator.
         self.readings = self.sensors.tick().await;
-        self.bus_inputs = self.bus.get_input_image();
+        self.bus_inputs = self.bus.get_input_image(self.time);
         self.state_estimator.update(
             self.time,
             self.mode,
