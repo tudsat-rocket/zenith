@@ -5,6 +5,7 @@
     reason = "boot-time peripheral/task init; panic-on-failure is the embedded model"
 )]
 
+use rapid_dialect::rapid::enums::MavResult;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -108,6 +109,7 @@ async fn main(low_priority_spawner: Spawner) {
             usb_rx,
             IGNITION_BUTTON.receiver().unwrap(),
             rx.sender(),
+            tx.sender(),
             led_yellow,
             led_red,
         ))
@@ -235,6 +237,7 @@ async fn join_uplink(
         2,
     >,
     tx: Sender<'static, CriticalSectionRawMutex, (u16, UplinkMessage), 5>,
+    downlink_tx: Sender<'static, CriticalSectionRawMutex, Downlink, 5>,
     mut led_activity: Output<'static>,
     mut led_error: Output<'static>,
 ) -> ! {
@@ -270,42 +273,49 @@ async fn join_uplink(
         let connection = CONNECTION.try_get().flatten();
         led_error.set_level(connection.is_some().into());
 
+        // Only an Eth/Usb command carries a MAVLink command id that needs a terminal ack; the
+        // ignition button and heartbeat ticks don't.
+        let mut mav_cmd = None;
+
         // Translate an input into a message for the vehicle. Inputs that must not reach the rocket
         // (a rejected ignition request, a button release, an idle tick) `continue` without sending.
         let message: UplinkMessage = match (input, connection) {
-            (UplinkEvent::Eth(command) | UplinkEvent::Usb(command), _) => match command {
-                // Remember that the vehicle is being pressurized, then forward the mode change.
-                // This is what arms the ignition gate below.
-                UplinkCommand::SetFlightMode(fm @ FlightMode::Pressurize) => {
-                    pressurized = true;
-                    fm.into()
+            (UplinkEvent::Eth(command) | UplinkEvent::Usb(command), _) => {
+                mav_cmd = command.mav_cmd();
+                match command {
+                    // Remember that the vehicle is being pressurized, then forward the mode change.
+                    // This is what arms the ignition gate below.
+                    UplinkCommand::SetFlightMode(fm @ FlightMode::Pressurize) => {
+                        pressurized = true;
+                        fm.into()
+                    }
+                    // Ignition may never be requested from the ground software. Swallow it here; the
+                    // only path to `Ignite` is the physical button.
+                    UplinkCommand::SetFlightMode(FlightMode::Ignite) => {
+                        defmt::warn!(
+                            "Refusing ground-commanded ignition; use the physical ignition button."
+                        );
+                        continue;
+                    }
+                    // Switching to FlightMode::Hold does not change the ignition arming state.
+                    UplinkCommand::SetFlightMode(fm @ FlightMode::Hold) => fm.into(),
+                    // Any other mode change disarms ignition.
+                    UplinkCommand::SetFlightMode(fm) => {
+                        pressurized = false;
+                        fm.into()
+                    }
+                    UplinkCommand::CommandValve(valve, cmd) => {
+                        UplinkMessage::SetValve(SetValveMessage::new(valve, cmd))
+                    }
+                    unsupported => {
+                        defmt::warn!(
+                            "Unsupported GCS command: {:?}",
+                            defmt::Debug2Format(&unsupported)
+                        );
+                        continue;
+                    }
                 }
-                // Ignition may never be requested from the ground software. Swallow it here; the
-                // only path to `Ignite` is the physical button.
-                UplinkCommand::SetFlightMode(FlightMode::Ignite) => {
-                    defmt::warn!(
-                        "Refusing ground-commanded ignition; use the physical ignition button."
-                    );
-                    continue;
-                }
-                // Switching to FlightMode::Hold does not change the ignition arming state.
-                UplinkCommand::SetFlightMode(fm @ FlightMode::Hold) => fm.into(),
-                // Any other mode change disarms ignition.
-                UplinkCommand::SetFlightMode(fm) => {
-                    pressurized = false;
-                    fm.into()
-                }
-                UplinkCommand::CommandValve(valve, cmd) => {
-                    UplinkMessage::SetValve(SetValveMessage::new(valve, cmd))
-                }
-                unsupported => {
-                    defmt::warn!(
-                        "Unsupported GCS command: {:?}",
-                        defmt::Debug2Format(&unsupported)
-                    );
-                    continue;
-                }
-            },
+            }
             // Physical ignition button: the only way to send `Ignite`, and only while pressurized.
             (UplinkEvent::IgnitionButton(true), _) => {
                 if pressurized {
@@ -324,6 +334,10 @@ async fn join_uplink(
 
         defmt::info!("Sending {} with seq={}", defmt::Debug2Format(&message), seq);
         tx.send((seq, message)).await;
+
+        if let Some(command) = mav_cmd {
+            let _ = downlink_tx.try_send(Downlink::command_ack(command, MavResult::Accepted));
+        }
 
         led_activity.set_low();
         Timer::after(Duration::from_millis(10)).await;

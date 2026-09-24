@@ -8,7 +8,8 @@ use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber};
 use mavio::Frame;
 use mavio::prelude::{Endpoint, V2};
 
-use rapid_dialect::rapid::enums::ValveId;
+use rapid_dialect::rapid::enums::{MavCmd, MavResult, ValveId};
+use rapid_dialect::rapid::messages::CommandAck;
 use rapid_dialect::{FlightMode, Rapid, ValveCommand};
 
 pub mod protocols;
@@ -39,6 +40,14 @@ impl Downlink {
         Self::new(SELF_COMPONENT_ID, message)
     }
 
+    pub fn command_ack(command: MavCmd, result: MavResult) -> Self {
+        Self::from_self(CommandAck {
+            command,
+            result,
+            ..Default::default()
+        })
+    }
+
     /// Builds the outgoing frame with this message's component rather than the endpoint's own,
     /// which is what [`Endpoint::next_frame`] would use. The sequence stays one run per link, so
     /// packet loss reconstructed from sequence gaps stays meaningful.
@@ -66,6 +75,19 @@ pub enum UplinkCommand {
     RequestCanForwarding,
     CommandValve(ValveId, ValveCommand),
     SetParam { id: u16, raw: u32 },
+}
+
+impl UplinkCommand {
+    /// The command whose terminal ack is left to the vehicle.
+    pub fn mav_cmd(&self) -> Option<MavCmd> {
+        match self {
+            Self::SetFlightMode(_) => Some(MavCmd::DoSetMode),
+            Self::CommandValve(..) => Some(MavCmd::CommandValve),
+            Self::RequestAvailableModes(_) | Self::RequestCanForwarding | Self::SetParam { .. } => {
+                None
+            }
+        }
+    }
 }
 
 pub const DOWNLINK_N: usize = 32;

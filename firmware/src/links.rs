@@ -4,9 +4,11 @@ use embassy_stm32::peripherals::*;
 use embassy_stm32::usb::Driver;
 use embassy_time::Delay;
 
+use links::Downlink;
 use lora_phy::LoRa;
 use mission::TelemetryLink;
 use rapid_dialect::FlightMode;
+use rapid_dialect::rapid::enums::{MavCmd, MavResult};
 
 use crate::LoraTransceiver;
 use crate::Vehicle;
@@ -19,6 +21,15 @@ pub mod interfaces;
 mod protocols;
 
 pub use links::UplinkCommand;
+
+#[derive(Copy, Clone, Debug)]
+pub enum CommandToken {
+    Lora,
+    Ethernet(MavCmd),
+    Usb(MavCmd),
+    /// Acked by the protocol that received it, e.g. a PARAM_SET by its PARAM_VALUE.
+    Unanswered,
+}
 
 pub struct Links {
     lora: LoraHandle,
@@ -56,31 +67,52 @@ impl Links {
         snapshot.send_telemetry(&mut self.usb);
     }
 
-    pub fn try_recv_command(&mut self) -> Option<UplinkCommand> {
+    pub fn try_recv_command(&mut self) -> Option<(CommandToken, UplinkCommand)> {
         if let Some(cmd) = self.lora.try_recv_command() {
-            return Some(cmd);
+            return Some((CommandToken::Lora, cmd));
         }
 
         if let Some(cmd) = self.ethernet.try_recv_command() {
-            return Self::from_wired(cmd);
+            return Self::from_wired(&mut self.ethernet, cmd, CommandToken::Ethernet);
         }
 
         if let Some(cmd) = self.usb.try_recv_command() {
-            return Self::from_wired(cmd);
+            return Self::from_wired(&mut self.usb, cmd, CommandToken::Usb);
         }
 
         None
     }
 
+    pub fn note_command_result(&mut self, token: CommandToken, result: MavResult) {
+        match token {
+            CommandToken::Ethernet(command) => {
+                self.ethernet
+                    .send_message(Downlink::command_ack(command, result));
+            }
+            CommandToken::Usb(command) => {
+                self.usb
+                    .send_message(Downlink::command_ack(command, result));
+            }
+            CommandToken::Lora | CommandToken::Unanswered => {}
+        }
+    }
+
     /// Filters a command received on a wired link.
     ///
     /// Ignition is reachable via LoRa only.
-    fn from_wired(cmd: UplinkCommand) -> Option<UplinkCommand> {
+    fn from_wired(
+        link: &mut impl TelemetryLink,
+        cmd: UplinkCommand,
+        token: fn(MavCmd) -> CommandToken,
+    ) -> Option<(CommandToken, UplinkCommand)> {
+        let token = cmd.mav_cmd().map_or(CommandToken::Unanswered, token);
+
         if matches!(cmd, UplinkCommand::SetFlightMode(FlightMode::Ignite)) {
-            defmt::warn!("Ignoring Ignite commanded on a wired link.");
+            defmt::warn!("Denying Ignite commanded on a wired link.");
+            link.send_message(Downlink::command_ack(MavCmd::DoSetMode, MavResult::Denied));
             return None;
         }
 
-        Some(cmd)
+        Some((token, cmd))
     }
 }

@@ -43,6 +43,7 @@ use core::time::Duration;
 
 use rapid_dialect::FlightMode;
 pub use rapid_dialect::ValveCommand;
+use rapid_dialect::rapid::enums::MavResult;
 
 use crate::bus::ValveState;
 use crate::inventory::{InventoryId, ValveId, ValveMap};
@@ -56,6 +57,16 @@ pub enum ValveError {
     InvalidCommand,
     Inhibited,
     TransportFailed,
+}
+
+impl From<ValveError> for MavResult {
+    fn from(error: ValveError) -> Self {
+        match error {
+            ValveError::NotPermittedInMode | ValveError::Inhibited => Self::TemporarilyRejected,
+            ValveError::InvalidCommand => Self::Denied,
+            ValveError::TransportFailed => Self::Failed,
+        }
+    }
 }
 
 #[derive(Copy, Clone)]

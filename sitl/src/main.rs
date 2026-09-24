@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Ticker};
 
-use links::UplinkCommand;
+use links::{Downlink, UplinkCommand};
 use mission::TelemetryLink;
+use rapid_dialect::rapid::enums::MavResult;
 
 use networking::Links;
 use sitl::simulation::storage;
@@ -84,20 +85,31 @@ async fn main_loop(mut vehicle: Vehicle, mut links: Links, sim: SharedSimulation
         vehicle.tick().await;
 
         if let Some(cmd) = links.try_recv_command() {
-            match cmd {
+            let mav_cmd = cmd.mav_cmd();
+            let result = match cmd {
                 UplinkCommand::SetFlightMode(fm) => {
                     vehicle.set_mode(fm);
+                    MavResult::Accepted
                 }
                 UplinkCommand::SetParam { id, raw } => {
                     vehicle.set_param(id, raw).await;
+                    MavResult::Accepted
                 }
                 #[cfg(feature = "hybrid")]
                 UplinkCommand::CommandValve(valve, valve_cmd) => {
-                    if let Err(_e) = vehicle.try_command_valve(valve, valve_cmd) {
-                        log::warn!("CommandValve {valve:?} {valve_cmd:?} rejected.");
+                    match vehicle.try_command_valve(valve, valve_cmd) {
+                        Ok(()) => MavResult::Accepted,
+                        Err(e) => {
+                            log::warn!("CommandValve {valve:?} {valve_cmd:?} rejected: {e:?}");
+                            e.into()
+                        }
                     }
                 }
-                _ => {}
+                _ => MavResult::Unsupported,
+            };
+
+            if let Some(mav_cmd) = mav_cmd {
+                links.send_message(Downlink::command_ack(mav_cmd, result));
             }
         }
 
