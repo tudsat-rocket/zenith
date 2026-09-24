@@ -23,6 +23,7 @@ pub struct Params {
     pub state_machine: StateMachineParams,
     pub propulsion: PropulsionParams,
     pub failsafe: FailsafeParams,
+    pub tank_level: TankLevelParams,
 }
 
 /// State machine parameters, exposed over MAVLink as `SM_*`.
@@ -66,6 +67,28 @@ pub struct PropulsionParams {
     /// Delay (ms) after ignition mode is entered after which main valve is opened
     #[param(id = 0x0301, name = "MAIN_DELAY", default = 700)]
     pub main_valve_delay: u32,
+}
+
+/// Oxidizer tank level parameters, exposed over MAVLink as `OXL_*`.
+///
+/// See [`crate::tank_level`] for how these are used.
+#[derive(Debug, Clone, macros::ParameterGroup)]
+#[param_group(prefix = "OXL")]
+pub struct TankLevelParams {
+    /// Share of its largest possible value at which the running sum up the probe row marks the
+    /// level. Higher reads higher.
+    #[param(id = 0xF000, name = "THRESHOLD", default = 0.02)]
+    pub threshold: f32,
+    /// Time constant (ms) of the low-pass on the reported level.
+    #[param(id = 0xF001, name = "TAU", default = 5000)]
+    pub tau: u32,
+    /// Smallest spread (C) the probe readings are scaled by, so that a column whose spread shrinks
+    /// as the tank fills towards the top probe is not stretched to full scale.
+    #[param(id = 0xF002, name = "MIN_SCALE", default = 10.0)]
+    pub min_scale: f32,
+    /// Temperature (C) above the coldest probe up to which a probe counts as no warmer than it.
+    #[param(id = 0xF003, name = "DEADBAND", default = 1.0)]
+    pub deadband: f32,
 }
 
 /// Uplink-loss failsafe parameters, exposed over MAVLink as `FS_*`.

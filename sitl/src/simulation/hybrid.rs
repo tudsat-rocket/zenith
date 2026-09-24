@@ -377,10 +377,7 @@ impl Bus for SitlBus {
             valve_state,
             binary_outputs: BinaryOutputMap::splat(None),
             ox_probes,
-            ox_tank_level: Some(DataWithTime::new(
-                sim.hybrid.tank_level(TankId::Oxidizer),
-                now,
-            )),
+            ox_tank_level: None,
             nodes,
             // Nothing simulates a high-current supply; every board reports one whenever the
             // vehicle is out of Idle, matching the recovery bus.

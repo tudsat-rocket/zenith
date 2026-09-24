@@ -36,7 +36,8 @@ pub struct BusInputImage {
     pub binary_outputs: BinaryOutputMap<Option<DataWithTime<bool>>>,
     /// The tank level probe row, as it arrives from the bus.
     pub ox_probes: OxProbeMap<Option<DataWithTime<f32>>>,
-    /// Oxidizer fill level, 0 - 1.
+    /// Oxidizer fill level, 0 - 1. Derived from `ox_probes` by
+    /// [`TankLevelEstimator`](crate::tank_level::TankLevelEstimator) rather than read off the bus.
     pub ox_tank_level: Option<DataWithTime<f32>>,
     pub nodes: NodeSet,
     /// A subset of `nodes`: a board we cannot hear from tells us nothing.
