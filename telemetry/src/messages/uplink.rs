@@ -8,7 +8,7 @@ use mission::inventory::{InventoryId, ValveId};
 use rapid_dialect::rapid::enums::MavResult;
 use rapid_dialect::{FlightMode, ValveCommand};
 
-use crate::messages::TelemetryMessage;
+use crate::messages::{ParamEntry, TelemetryMessage};
 use crate::{TelemetryError, UplinkCommand};
 
 pub const UPLINK_PACKET_SIZE: usize = 16;
@@ -22,6 +22,8 @@ pub enum UplinkMessage {
     Heartbeat(()),
     SetFlightMode(SetFlightModeMessage),
     SetValve(SetValveMessage),
+    ParamSet(ParamSetMessage),
+    ParamRequest(ParamRequestMessage),
 }
 
 impl TelemetryMessage for UplinkMessage {
@@ -39,6 +41,8 @@ impl TelemetryMessage for UplinkMessage {
             Self::Heartbeat(()) => (0x01, [0x00; UPLINK_PAYLOAD_SIZE]),
             Self::SetFlightMode(inner) => (SetFlightModeMessage::ID, inner.serialize()?),
             Self::SetValve(inner) => (SetValveMessage::ID, inner.serialize()?),
+            Self::ParamSet(inner) => (ParamSetMessage::ID, inner.serialize()?),
+            Self::ParamRequest(inner) => (ParamRequestMessage::ID, inner.serialize()?),
         };
 
         let mut buffer = [0x00; UPLINK_PACKET_SIZE];
@@ -95,6 +99,8 @@ impl TelemetryMessage for UplinkMessage {
                 UplinkMessage::SetFlightMode(postcard::from_bytes(payload)?)
             }
             SetValveMessage::ID => UplinkMessage::SetValve(postcard::from_bytes(payload)?),
+            ParamSetMessage::ID => UplinkMessage::ParamSet(postcard::from_bytes(payload)?),
+            ParamRequestMessage::ID => UplinkMessage::ParamRequest(postcard::from_bytes(payload)?),
             id => {
                 return Err(TelemetryError::UnknownMessageId(id));
             }
@@ -108,6 +114,36 @@ impl TelemetryMessage for UplinkMessage {
         _sender: &mut S,
         _context: &mut super::ConnectionContext,
     ) {
+    }
+}
+
+impl UplinkMessage {
+    /// What this message asks the vehicle to do, or why it can't, or `None` for a heartbeat.
+    pub fn command(self) -> Option<Result<UplinkCommand, MavResult>> {
+        Some(match self {
+            Self::Heartbeat(()) => return None,
+            Self::SetFlightMode(inner) => match inner.mode.try_into() {
+                Ok(mode) => Ok(UplinkCommand::SetFlightMode(mode)),
+                Err(_) => {
+                    defmt::warn!("Rejecting uplink command with invalid flight mode.");
+                    Err(MavResult::Denied)
+                }
+            },
+            Self::SetValve(inner) => match inner.command() {
+                Some((valve, command)) => Ok(UplinkCommand::CommandValve(valve, command)),
+                None => {
+                    defmt::warn!("Rejecting uplink command for an unknown valve.");
+                    Err(MavResult::Denied)
+                }
+            },
+            Self::ParamSet(ParamSetMessage(ParamEntry { id, raw })) => {
+                Ok(UplinkCommand::SetParam { id, raw })
+            }
+            Self::ParamRequest(inner) => Ok(UplinkCommand::RequestParams {
+                first: inner.first,
+                mask: inner.mask,
+            }),
+        })
     }
 }
 
@@ -235,8 +271,32 @@ impl SetValveMessage {
     }
 }
 
+/// 0x04: ParamSet
+///
+/// The RF counterpart of PARAM_SET. The vehicle answers with the resulting value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParamSetMessage(pub ParamEntry);
+
+impl UplinkTelemetryMessage for ParamSetMessage {
+    const ID: u8 = 0x04;
+}
+
+/// 0x05: ParamRequest
+///
+/// Asks for the values of the parameters at flat index `first + i` for every set bit `i`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParamRequestMessage {
+    #[serde(with = "postcard::fixint::le")]
+    pub first: u16,
+    #[serde(with = "postcard::fixint::le")]
+    pub mask: u32,
+}
+
+impl UplinkTelemetryMessage for ParamRequestMessage {
+    const ID: u8 = 0x05;
+}
+
 // TODO: messages for:
-//  - parameters
 //  - log/storage management
 //  -
 //  - radio control (control tx power)?
@@ -258,7 +318,14 @@ mod tests {
     /// the ground station commanding valves at all.
     #[test]
     fn no_payload_length_depends_on_its_values() {
-        let lengths: heapless::Vec<usize, 8> = [
+        fn payload_len(msg: &impl Serialize) -> usize {
+            let mut buf = [0x00; UPLINK_PAYLOAD_SIZE];
+            postcard::to_slice(msg, &mut buf)
+                .expect("message did not fit its payload")
+                .len()
+        }
+
+        let valves = [
             ValveCommand::Close,
             ValveCommand::Open,
             ValveCommand::Partial(0.0),
@@ -266,14 +333,19 @@ mod tests {
             ValveCommand::PulseOpen(Duration::from_millis(0)),
             ValveCommand::PulseOpen(Duration::from_secs(30)),
         ]
-        .into_iter()
-        .map(|cmd| {
-            let mut buf = [0x00; UPLINK_PAYLOAD_SIZE];
-            postcard::to_slice(&SetValveMessage::new(ValveId::Main, cmd), &mut buf)
-                .expect("message did not fit its payload")
-                .len()
-        })
-        .collect();
+        .map(|cmd| payload_len(&SetValveMessage::new(ValveId::Main, cmd)));
+        let params = [(0, 0, 0, 0), (u16::MAX, u32::MAX, u16::MAX, u32::MAX)].map(
+            |(id, raw, first, mask)| {
+                [
+                    payload_len(&ParamSetMessage(ParamEntry { id, raw })),
+                    payload_len(&ParamRequestMessage { first, mask }),
+                ]
+            },
+        );
+        let lengths: heapless::Vec<usize, 10> = valves
+            .into_iter()
+            .chain(params.into_iter().flatten())
+            .collect();
 
         assert!(
             lengths.iter().all(|l| *l == UPLINK_PAYLOAD_SIZE),
@@ -314,6 +386,29 @@ mod tests {
                 assert_eq!(decoded.command(), Some((valve, command)), "{valve:?}");
             }
         }
+    }
+
+    #[test]
+    fn param_messages_survive_the_packet() {
+        let UplinkMessage::ParamSet(set) =
+            through_packet(UplinkMessage::ParamSet(ParamSetMessage(ParamEntry {
+                id: 0x0201,
+                raw: 0xdead_beef,
+            })))
+        else {
+            panic!("decoded as the wrong message")
+        };
+        assert_eq!((set.0.id, set.0.raw), (0x0201, 0xdead_beef));
+
+        let UplinkMessage::ParamRequest(request) =
+            through_packet(UplinkMessage::ParamRequest(ParamRequestMessage {
+                first: 32,
+                mask: 0x8000_0001,
+            }))
+        else {
+            panic!("decoded as the wrong message")
+        };
+        assert_eq!((request.first, request.mask), (32, 0x8000_0001));
     }
 
     /// A valve id or command kind we do not recognise must not reach the vehicle.

@@ -1835,6 +1835,7 @@ version = "0.1.0"
 dependencies = [
  "critical-section",
  "embassy-sync 0.7.2",
+ "heapless 0.8.0",
  "links",
  "log",
  "macros",
@@ -2683,6 +2684,7 @@ dependencies = [
 name = "telemetry"
 version = "0.1.0"
 dependencies = [
+ "critical-section",
  "defmt 0.3.100",
  "embassy-futures",
  "embassy-sync 0.7.2",

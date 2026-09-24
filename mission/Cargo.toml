@@ -13,6 +13,7 @@ embassy-sync = { workspace = true }
 params = { workspace = true }
 macros = { workspace = true }
 log = { workspace = true }
+heapless = { workspace = true }
 
 [features]
 hybrid = []

@@ -215,6 +215,10 @@
 //! # Uplink
 //!
 //! TODO
+//!
+//! # Parameters
+//!
+//! See [`params`].
 
 #![no_std]
 #![allow(async_fn_in_trait)]
@@ -249,6 +253,7 @@ pub enum TelemetryError {
 
 pub mod config;
 pub mod messages;
+pub mod params;
 pub mod trx;
 
 pub use links::UplinkCommand;

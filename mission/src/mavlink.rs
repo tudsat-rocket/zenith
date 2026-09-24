@@ -445,13 +445,7 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
 
 impl Into<AutopilotVersion> for &VehicleSnapshot<'_> {
     fn into(self) -> AutopilotVersion {
-        AutopilotVersion {
-            // Ground stations only enable their parameter UI once one of the PARAM_ENCODE_* flags
-            // says how param_value is encoded. We encode bytewise (see links::protocols::params),
-            // so the C-cast flag must stay clear.
-            capabilities: MavProtocolCapability::PARAM_ENCODE_BYTEWISE,
-            ..Default::default()
-        }
+        autopilot_version()
     }
 }
 
@@ -518,6 +512,18 @@ trait InstanceMessage<I: Copy>: Sized {
     }
 
     fn build(snapshot: &VehicleSnapshot<'_>, id: I) -> Option<Self>;
+}
+
+/// Shared because the ground station rebuilds this from the LoRa downlink, and both paths have to
+/// produce the same message.
+pub fn autopilot_version() -> AutopilotVersion {
+    AutopilotVersion {
+        // Ground stations only enable their parameter UI once one of the PARAM_ENCODE_* flags
+        // says how param_value is encoded. We encode bytewise (see links::protocols::params),
+        // so the C-cast flag must stay clear.
+        capabilities: MavProtocolCapability::PARAM_ENCODE_BYTEWISE,
+        ..Default::default()
+    }
 }
 
 /// Shared because the ground station rebuilds these from the LoRa downlink, and both paths have

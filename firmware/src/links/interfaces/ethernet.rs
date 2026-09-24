@@ -199,7 +199,7 @@ async fn run_params(
     rx: InterfaceRxSubscriber,
     cmd_tx: InterfaceCommandPublisher,
 ) {
-    protocols::params::run(system_id, tx, rx, cmd_tx, &crate::storage::PARAM_STORE).await;
+    protocols::params::run(system_id, tx, rx, cmd_tx).await;
 }
 
 #[embassy_executor::task]

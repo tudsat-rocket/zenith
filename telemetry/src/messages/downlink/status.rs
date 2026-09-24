@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use mission::mavlink::VehicleSnapshot;
+use mission::mavlink::{VehicleSnapshot, autopilot_version};
 use rapid_dialect::rapid::enums::{MavSysStatusSensor, MavSysStatusSensorExtended};
-use rapid_dialect::rapid::messages::{RadioStatus, SysStatus, SystemTime};
+use rapid_dialect::rapid::messages::{AutopilotVersion, RadioStatus, SysStatus, SystemTime};
 
 use super::{ConnectionContext, DownlinkTelemetryMessage, UNKNOWN};
 
@@ -53,7 +53,7 @@ pub struct StatusMessage {
 impl DownlinkTelemetryMessage for StatusMessage {
     const ID: u8 = 0x02;
     type Input<'a> = (&'a VehicleSnapshot<'a>, RadioStatus);
-    type Output = (SysStatus, RadioStatus, SystemTime);
+    type Output = (SysStatus, RadioStatus, SystemTime, AutopilotVersion);
 
     fn pack((snapshot, radio_status): Self::Input<'_>) -> Self {
         let sys_status: SysStatus = snapshot.into();
@@ -125,7 +125,7 @@ impl DownlinkTelemetryMessage for StatusMessage {
             time_unix_usec: 0,
         };
 
-        (sys_status, radio_status, system_time)
+        (sys_status, radio_status, system_time, autopilot_version())
     }
 }
 
@@ -199,7 +199,7 @@ mod tests {
         let mut context = ConnectionContext::init(BOOT_MS as u16);
         assert_ne!(context.time, BOOT_MS);
 
-        let (_, _, system_time) = decoded.unpack(&mut context);
+        let (_, _, system_time, _) = decoded.unpack(&mut context);
 
         assert_eq!(context.time, BOOT_MS);
         assert_eq!(system_time.time_boot_ms, BOOT_MS);
@@ -249,7 +249,7 @@ mod tests {
         let DownlinkMessage::Status(decoded) = through_packet(msg) else {
             panic!("decoded as the wrong message")
         };
-        let (received, _, _) = decoded.unpack(&mut ConnectionContext::init(0));
+        let (received, _, _, _) = decoded.unpack(&mut ConnectionContext::init(0));
 
         assert_eq!(
             received.onboard_control_sensors_present,
@@ -278,7 +278,7 @@ mod tests {
         let snapshot = parts.snapshot();
 
         let msg = StatusMessage::pack((&snapshot, RadioStatus::default()));
-        let (sys_status, _, _) = msg.unpack(&mut ConnectionContext::init(0));
+        let (sys_status, _, _, _) = msg.unpack(&mut ConnectionContext::init(0));
 
         assert_eq!(sys_status.voltage_battery, u16::MAX);
     }

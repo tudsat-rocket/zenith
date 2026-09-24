@@ -25,7 +25,10 @@ use embassy_sync::{channel::Channel, pubsub::PubSubChannel};
 use embassy_time::{Duration, Instant, Ticker, Timer, with_deadline};
 
 use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG};
-use telemetry::messages::{CommandAck, DownlinkMessage, SetValveMessage, UplinkMessage};
+use telemetry::messages::{
+    CommandAck, DownlinkMessage, ParamEntry, ParamRequestMessage, ParamSetMessage, SetValveMessage,
+    UplinkMessage,
+};
 use telemetry::trx::receiver::HoppingReceiver;
 use telemetry::trx::transmitter::HoppingTransmitter;
 
@@ -363,6 +366,12 @@ async fn join_uplink(
                     }
                     UplinkCommand::CommandValve(valve, cmd) => {
                         UplinkMessage::SetValve(SetValveMessage::new(valve, cmd))
+                    }
+                    UplinkCommand::SetParam { id, raw } => {
+                        UplinkMessage::ParamSet(ParamSetMessage(ParamEntry { id, raw }))
+                    }
+                    UplinkCommand::RequestParams { first, mask } => {
+                        UplinkMessage::ParamRequest(ParamRequestMessage { first, mask })
                     }
                     // None of these carry a command id today, so there is nothing to ack; the
                     // rejection is still reported if one ever gains one.

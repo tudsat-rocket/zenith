@@ -462,24 +462,8 @@ impl<RK: RadioKind, S: AnySender<(u16, Result<UplinkCommand, MavResult>)>>
 
             last_seq = seq;
 
-            let cmd = match msg {
-                UplinkMessage::Heartbeat(()) => {
-                    continue;
-                }
-                UplinkMessage::SetFlightMode(inner) => match inner.mode.try_into() {
-                    Ok(mode) => Ok(UplinkCommand::SetFlightMode(mode)),
-                    Err(_) => {
-                        defmt::warn!("Rejecting uplink command with invalid flight mode.");
-                        Err(MavResult::Denied)
-                    }
-                },
-                UplinkMessage::SetValve(inner) => match inner.command() {
-                    Some((valve, command)) => Ok(UplinkCommand::CommandValve(valve, command)),
-                    None => {
-                        defmt::warn!("Rejecting uplink command for an unknown valve.");
-                        Err(MavResult::Denied)
-                    }
-                },
+            let Some(cmd) = msg.command() else {
+                continue;
             };
 
             self.sender.anysend((seq, cmd)).await;

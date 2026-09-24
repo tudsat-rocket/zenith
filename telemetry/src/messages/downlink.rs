@@ -19,6 +19,7 @@ use crate::messages::TelemetryMessage;
 mod components;
 mod gps;
 mod heartbeat;
+mod params;
 mod pressures;
 mod sensors;
 mod status;
@@ -26,6 +27,7 @@ mod status;
 pub use components::ComponentsMessage;
 pub use gps::GpsMessage;
 pub use heartbeat::HeartbeatMessage;
+pub use params::{ParamEntry, ParamValuesMessage};
 pub use pressures::{ExternalPressuresMessage, PressuresMessage};
 pub use sensors::SensorsMessage;
 pub use status::StatusMessage;
@@ -167,6 +169,7 @@ pub enum DownlinkMessage {
     Components(ComponentsMessage),
     Sensors(SensorsMessage),
     Gps(GpsMessage),
+    ParamValues(ParamValuesMessage),
 }
 
 impl DownlinkMessage {
@@ -184,11 +187,15 @@ impl DownlinkMessage {
     ///
     /// The pattern is otherwise fixed, except for the one slot the ground side gives back once
     /// the umbilical is gone.
+    ///
+    /// `param_values` is only called for the slots parameters may take from the heartbeat, which
+    /// keeps them if it returns `None`.
     pub fn for_tick(
         time_ms: u32,
         snapshot: &VehicleSnapshot<'_>,
         uplink: RadioStatus,
         ack: CommandAck,
+        param_values: impl FnOnce() -> Option<ParamValuesMessage>,
     ) -> Option<Self> {
         if time_ms % DOWNLINK_MESSAGE_INTERVAL_MS != 0 {
             return None;
@@ -212,6 +219,10 @@ impl DownlinkMessage {
                 Self::ExternalPressures(ExternalPressuresMessage::pack(snapshot))
             }
             14 => Self::Gps(GpsMessage::pack(snapshot)),
+            2 | 10 => match param_values() {
+                Some(values) => Self::ParamValues(values),
+                None => Self::Heartbeat(HeartbeatMessage::pack((snapshot, ack))),
+            },
             // Every remaining slot, so the heartbeat keeps most of the link to itself.
             _ => Self::Heartbeat(HeartbeatMessage::pack((snapshot, ack))),
         })
@@ -238,6 +249,7 @@ impl TelemetryMessage for DownlinkMessage {
             Self::Components(inner) => (ComponentsMessage::ID, inner.serialize()?),
             Self::Sensors(inner) => (SensorsMessage::ID, inner.serialize()?),
             Self::Gps(inner) => (GpsMessage::ID, inner.serialize()?),
+            Self::ParamValues(inner) => (ParamValuesMessage::ID, inner.serialize()?),
         };
 
         let mut buffer = [0x00; DOWNLINK_PACKET_SIZE];
@@ -286,6 +298,7 @@ impl TelemetryMessage for DownlinkMessage {
             ComponentsMessage::ID => DownlinkMessage::Components(postcard::from_bytes(payload)?),
             SensorsMessage::ID => DownlinkMessage::Sensors(postcard::from_bytes(payload)?),
             GpsMessage::ID => DownlinkMessage::Gps(postcard::from_bytes(payload)?),
+            ParamValuesMessage::ID => DownlinkMessage::ParamValues(postcard::from_bytes(payload)?),
             id => {
                 return Err(TelemetryError::UnknownMessageId(id));
             }
@@ -309,10 +322,11 @@ impl TelemetryMessage for DownlinkMessage {
                 sender.anysend(Downlink::from_self(v)).await;
             }
             Self::Status(inner) => {
-                let (sys, radio, time) = inner.unpack(context);
+                let (sys, radio, time, version) = inner.unpack(context);
                 sender.anysend(Downlink::from_self(sys)).await;
                 sender.anysend(Downlink::from_self(radio)).await;
                 sender.anysend(Downlink::from_self(time)).await;
+                sender.anysend(Downlink::from_self(version)).await;
             }
             Self::Pressures(inner) => {
                 for vessel in inner.unpack(context) {
@@ -347,6 +361,11 @@ impl TelemetryMessage for DownlinkMessage {
                 let (raw, global) = inner.unpack(context);
                 sender.anysend(Downlink::from_self(raw)).await;
                 sender.anysend(Downlink::from_self(global)).await;
+            }
+            Self::ParamValues(inner) => {
+                for value in inner.unpack(context) {
+                    sender.anysend(Downlink::from_self(value)).await;
+                }
             }
         }
     }
@@ -592,13 +611,16 @@ pub(crate) mod tests {
     }
 
     /// One packet per interval, no gaps, and the slot pattern the module documents. Walked in
-    /// both a pre- and a post-liftoff mode, since slot 6 changes hands between them.
+    /// both a pre- and a post-liftoff mode, since slot 6 changes hands between them, and with and
+    /// without parameter values waiting.
     #[test]
     fn the_slot_pattern_repeats_and_leaves_no_gaps() {
-        for mode in [FlightMode::Idle, FlightMode::Ignite, FlightMode::Burn] {
+        let modes = [FlightMode::Idle, FlightMode::Ignite, FlightMode::Burn];
+        for (mode, params_pending) in modes.into_iter().flat_map(|m| [(m, false), (m, true)]) {
             let mut parts = SnapshotParts::default();
             parts.mode = mode;
             let snapshot = parts.snapshot();
+            let values = ParamValuesMessage::pack([ParamEntry { id: 0x0200, raw: 0 }; 2]);
 
             let mut built = 0;
             for time_ms in 0..(DownlinkMessage::SLOT_COUNT * DOWNLINK_MESSAGE_INTERVAL_MS * 2) {
@@ -607,6 +629,7 @@ pub(crate) mod tests {
                     &snapshot,
                     RadioStatus::default(),
                     CommandAck::NONE,
+                    || params_pending.then_some(values),
                 ) else {
                     continue;
                 };
@@ -620,6 +643,7 @@ pub(crate) mod tests {
                     7 | 15 => SensorsMessage::ID,
                     6 if mode < FlightMode::Burn => ExternalPressuresMessage::ID,
                     14 => GpsMessage::ID,
+                    2 | 10 if params_pending => ParamValuesMessage::ID,
                     _ => HeartbeatMessage::ID,
                 };
 
@@ -629,7 +653,7 @@ pub(crate) mod tests {
                 assert_eq!(
                     packet[1] & 0b11111,
                     expected,
-                    "slot {slot} at {time_ms} ms in {mode:?}"
+                    "slot {slot} at {time_ms} ms in {mode:?}, params pending: {params_pending}"
                 );
             }
 
@@ -642,7 +666,7 @@ pub(crate) mod tests {
     /// the bench. This is what catches a field that lost its `fixint` annotation.
     #[test]
     fn no_payload_length_depends_on_its_values() {
-        fn lengths(parts: &SnapshotParts) -> [usize; 7] {
+        fn lengths(parts: &SnapshotParts, param: ParamEntry) -> [usize; 8] {
             let s = parts.snapshot();
             [
                 encoded_len(&HeartbeatMessage::pack((&s, CommandAck::NONE))),
@@ -652,11 +676,12 @@ pub(crate) mod tests {
                 encoded_len(&ComponentsMessage::pack(&s)),
                 encoded_len(&SensorsMessage::pack(&s)),
                 encoded_len(&GpsMessage::pack(&s)),
+                encoded_len(&ParamValuesMessage::pack([param; 2])),
             ]
         }
 
         let mut parts = SnapshotParts::default();
-        let empty = lengths(&parts);
+        let empty = lengths(&parts, ParamEntry { id: 0, raw: 0 });
 
         // Every reading present and large, which is where varints would have grown.
         parts.readings = sensors::tests::saturated_readings();
@@ -665,7 +690,13 @@ pub(crate) mod tests {
         parts.estimator = heartbeat::tests::flying_estimator();
         // After the readings, which the line above replaces wholesale.
         parts.readings.gps = Some(gps::tests::saturated_gps());
-        let full = lengths(&parts);
+        let full = lengths(
+            &parts,
+            ParamEntry {
+                id: u16::MAX,
+                raw: u32::MAX,
+            },
+        );
 
         assert_eq!(empty, full, "a payload length depends on the values in it");
         for len in full {
