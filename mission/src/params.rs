@@ -9,7 +9,8 @@ use rapid_dialect::rapid::enums::MavParamType;
 
 use state_estimator::StateEstimatorParams;
 
-use links::protocols::params::{ParamInfo, ParamSetError, ParamStore};
+use links::UplinkCommand;
+use links::protocols::params::{ParamInfo, ParamRequest, ParamSetError, ParamStore};
 
 pub use params::{ParamDescriptor, ParamId, ParamType, ParamValue, ParameterField, ParameterGroup};
 
@@ -101,9 +102,11 @@ impl Params {
         Self::descriptor(usize::from(index))
     }
 
-    /// Descriptor for a stable parameter id (linear scan; the set is small).
-    pub fn by_id(id: u16) -> Option<ParamDescriptor> {
-        (0..Self::count()).find_map(|i| Self::descriptor_by_index(i).filter(|d| d.id.get() == id))
+    /// (`param_index`, descriptor) for a stable parameter id (linear scan; the set is small).
+    pub fn by_id(id: u16) -> Option<(u16, ParamDescriptor)> {
+        (0..Self::count()).find_map(|i| {
+            Self::descriptor_by_index(i).and_then(|d| (d.id.get() == id).then_some((i, d)))
+        })
     }
 
     /// (`param_index`, descriptor) for a MAVLink `param_id` name.
@@ -113,9 +116,73 @@ impl Params {
         })
     }
 
+    /// The value a PARAM_SET of `value` as `ty` gives the param, if it is a valid one.
+    pub fn from_mavlink(
+        descriptor: &ParamDescriptor,
+        value: f32,
+        ty: MavParamType,
+    ) -> Option<ParamValue> {
+        (ty == MavParamType::from(descriptor.ty))
+            .then(|| descriptor.ty.from_mavlink(value))
+            .flatten()
+    }
+
+    /// The PARAM_VALUE for `value` of the param at `index`.
+    pub fn info(index: u16, descriptor: &ParamDescriptor, value: ParamValue) -> ParamInfo {
+        ParamInfo {
+            name: descriptor.mavlink_name(),
+            value: value.to_mavlink(),
+            ty: descriptor.ty.into(),
+            index,
+            count: Self::count(),
+        }
+    }
+
+    /// The commands that have the vehicle carry out `request` and answer it with PARAM_VALUEs.
+    /// Nothing for requests about unknown params, which get no answer.
+    pub fn commands(
+        request: &ParamRequest,
+    ) -> heapless::Vec<UplinkCommand, { Params::PARAM_COUNT.div_ceil(u32::BITS as usize) }> {
+        let read = |index| UplinkCommand::RequestParams {
+            first: index,
+            mask: 1,
+        };
+
+        match *request {
+            ParamRequest::List => (0..Self::count())
+                .step_by(u32::BITS as usize)
+                .map(|first| UplinkCommand::RequestParams {
+                    first,
+                    mask: u32::MAX,
+                })
+                .collect(),
+            ParamRequest::ReadIndex(index) => Self::descriptor_by_index(index)
+                .map(|_| read(index))
+                .into_iter()
+                .collect(),
+            ParamRequest::ReadName(name) => Self::by_name(&name)
+                .map(|(index, _)| read(index))
+                .into_iter()
+                .collect(),
+            ParamRequest::Set { name, value, ty } => Self::by_name(&name)
+                .map(
+                    |(index, descriptor)| match Self::from_mavlink(&descriptor, value, ty) {
+                        Some(value) => UplinkCommand::SetParam {
+                            id: descriptor.id.get(),
+                            raw: value.encode_raw(),
+                        },
+                        // A rejected write is answered with the current value.
+                        None => read(index),
+                    },
+                )
+                .into_iter()
+                .collect(),
+        }
+    }
+
     /// Apply a raw stored value (as read from flash) to this struct. Unknown ids are ignored.
     pub fn apply_raw(&mut self, id: u16, raw: u32) {
-        if let Some(descriptor) = Self::by_id(id) {
+        if let Some((_, descriptor)) = Self::by_id(id) {
             self.set(descriptor.id, descriptor.ty.decode_raw(raw));
         }
     }
@@ -137,13 +204,9 @@ impl SharedParams {
     fn info(&self, index: u16, descriptor: &ParamDescriptor) -> Option<ParamInfo> {
         self.inner.lock(|inner| {
             inner.borrow().as_ref().and_then(|params| {
-                params.get(descriptor.id).map(|value| ParamInfo {
-                    name: descriptor.mavlink_name(),
-                    value: value.to_mavlink(),
-                    ty: descriptor.ty.into(),
-                    index,
-                    count: Params::count(),
-                })
+                params
+                    .get(descriptor.id)
+                    .map(|value| Params::info(index, descriptor, value))
             })
         })
     }
@@ -176,14 +239,8 @@ impl ParamStore for SharedParams {
     ) -> Result<(u16, u32, ParamInfo), ParamSetError> {
         let (index, descriptor) = Params::by_name(name).ok_or(ParamSetError::UnknownParam)?;
 
-        if ty != MavParamType::from(descriptor.ty) {
-            return Err(ParamSetError::InvalidValue);
-        }
-
-        let value = descriptor
-            .ty
-            .from_mavlink(value)
-            .ok_or(ParamSetError::InvalidValue)?;
+        let value =
+            Params::from_mavlink(&descriptor, value, ty).ok_or(ParamSetError::InvalidValue)?;
 
         self.inner.lock(|inner| {
             let mut borrowed = inner.borrow_mut();
@@ -200,13 +257,7 @@ impl ParamStore for SharedParams {
             Ok((
                 descriptor.id.get(),
                 value.encode_raw(),
-                ParamInfo {
-                    name: descriptor.mavlink_name(),
-                    value: stored.to_mavlink(),
-                    ty: descriptor.ty.into(),
-                    index,
-                    count: Params::count(),
-                },
+                Params::info(index, &descriptor, stored),
             ))
         })
     }
@@ -275,7 +326,7 @@ mod tests {
         let store = SharedParams::new();
         store.init(Params::default());
 
-        let name = Params::by_id(0x0200).unwrap().mavlink_name(); // RC_MAIN_ALT
+        let name = Params::by_id(0x0200).unwrap().1.mavlink_name(); // RC_MAIN_ALT
         let (id, raw, info) = store.set(&name, 275.0, MavParamType::Real32).unwrap();
         assert_eq!(id, 0x0200);
         assert_eq!(raw, 275.0f32.to_bits());
@@ -284,7 +335,7 @@ mod tests {
 
         // u32 params travel bytewise, so the wire float carries the integer's bit pattern rather
         // than its numeric value.
-        let name = Params::by_id(0x0201).unwrap().mavlink_name(); // RC_MIN_T_DROGUE (u32)
+        let name = Params::by_id(0x0201).unwrap().1.mavlink_name(); // RC_MIN_T_DROGUE (u32)
         let (_, raw, info) = store
             .set(&name, f32::from_bits(1500), MavParamType::Uint32)
             .unwrap();
@@ -300,7 +351,7 @@ mod tests {
         // The whole point of bytewise: a by-value cast through f32 would round this to the nearest
         // representable float and lose the exact value.
         const LARGE: u32 = 0x0100_0001;
-        let name = Params::by_id(0x0201).unwrap().mavlink_name();
+        let name = Params::by_id(0x0201).unwrap().1.mavlink_name();
         let (_, raw, _) = store
             .set(&name, f32::from_bits(LARGE), MavParamType::Uint32)
             .unwrap();
@@ -313,8 +364,8 @@ mod tests {
         let store = SharedParams::new();
         store.init(Params::default());
 
-        let f32_name = Params::by_id(0x0200).unwrap().mavlink_name();
-        let u32_name = Params::by_id(0x0201).unwrap().mavlink_name();
+        let f32_name = Params::by_id(0x0200).unwrap().1.mavlink_name();
+        let u32_name = Params::by_id(0x0201).unwrap().1.mavlink_name();
         assert_eq!(
             store.set(&f32_name, 1.0, MavParamType::Uint32),
             Err(ParamSetError::InvalidValue)
@@ -338,7 +389,7 @@ mod tests {
         assert!(store.by_index(0).is_none());
         assert_eq!(
             store.set(
-                &Params::by_id(0x0200).unwrap().mavlink_name(),
+                &Params::by_id(0x0200).unwrap().1.mavlink_name(),
                 1.0,
                 MavParamType::Real32
             ),

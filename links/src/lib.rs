@@ -74,7 +74,15 @@ pub enum UplinkCommand {
     RequestAvailableModes(usize),
     RequestCanForwarding,
     CommandValve(ValveId, ValveCommand),
-    SetParam { id: u16, raw: u32 },
+    SetParam {
+        id: u16,
+        raw: u32,
+    },
+    /// Asks for the PARAM_VALUE of every flat param index `first + i` whose bit `i` is set.
+    RequestParams {
+        first: u16,
+        mask: u32,
+    },
 }
 
 impl UplinkCommand {
@@ -83,9 +91,10 @@ impl UplinkCommand {
         match self {
             Self::SetFlightMode(_) => Some(MavCmd::DoSetMode),
             Self::CommandValve(..) => Some(MavCmd::CommandValve),
-            Self::RequestAvailableModes(_) | Self::RequestCanForwarding | Self::SetParam { .. } => {
-                None
-            }
+            Self::RequestAvailableModes(_)
+            | Self::RequestCanForwarding
+            | Self::SetParam { .. }
+            | Self::RequestParams { .. } => None,
         }
     }
 }

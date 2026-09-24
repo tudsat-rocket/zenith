@@ -156,7 +156,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
     pub async fn set_param(&mut self, id: u16, raw: u32) {
         use crate::params::ParameterGroup;
 
-        let Some(descriptor) = Params::by_id(id) else {
+        let Some((_, descriptor)) = Params::by_id(id) else {
             log::warn!("Ignoring set_param for unknown param id {id:#x}");
             return;
         };

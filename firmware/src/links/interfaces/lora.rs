@@ -28,6 +28,7 @@ use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG, FREQUENC
 use telemetry::messages::TelemetryMessage;
 use telemetry::messages::UplinkMessage;
 use telemetry::messages::{CommandAck, DOWNLINK_PACKET_SIZE, DownlinkMessage};
+use telemetry::params::PendingParams;
 use telemetry::trx::receiver::{HoppingReceiver, UplinkStats};
 use telemetry::trx::transmitter::HoppingTransmitter;
 
@@ -39,6 +40,7 @@ use crate::links::interfaces::{
     InterfaceCommandSubscriber, InterfaceCommands, InterfaceRx, InterfaceRxPublisher,
     InterfaceRxSubscriber, InterfaceTx, InterfaceTxPublisher, InterfaceTxSubscriber,
 };
+use crate::storage::PARAM_STORE;
 
 type UplinkItem = (u16, Result<UplinkCommand, MavResult>);
 
@@ -58,6 +60,7 @@ pub struct LoraHandle {
     rx: Receiver<'static, CriticalSectionRawMutex, UplinkItem, 5>,
     time_sender: embassy_sync::watch::Sender<'static, CriticalSectionRawMutex, (Instant, u16), 3>,
     ack: CommandAck,
+    params: PendingParams,
 }
 
 impl LoraHandle {
@@ -86,6 +89,7 @@ impl LoraHandle {
             rx: rx.receiver(),
             time_sender: TIME.sender(),
             ack: CommandAck::NONE,
+            params: PendingParams::default(),
         }
     }
 }
@@ -94,7 +98,11 @@ impl LoraHandle {
     pub fn try_recv_command(&mut self) -> Option<(u16, UplinkCommand)> {
         while let Ok((seq, cmd)) = self.rx.try_receive() {
             match cmd {
-                Ok(cmd) => return Some((seq, cmd)),
+                Ok(cmd) => {
+                    if let Some(cmd) = self.params.handle(&PARAM_STORE, cmd) {
+                        return Some((seq, cmd));
+                    }
+                }
                 Err(result) => {
                     self.ack = CommandAck {
                         seq,
@@ -134,7 +142,10 @@ impl LoraHandle {
             },
         };
 
-        let Some(msg) = DownlinkMessage::for_tick(t, &vehicle.snapshot(), uplink, self.ack) else {
+        let param_values = || self.params.take(&PARAM_STORE);
+        let Some(msg) =
+            DownlinkMessage::for_tick(t, &vehicle.snapshot(), uplink, self.ack, param_values)
+        else {
             return;
         };
 
