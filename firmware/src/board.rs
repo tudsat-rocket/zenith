@@ -9,7 +9,7 @@ use embassy_stm32::adc::AnyAdcChannel;
 use embassy_stm32::can::CanConfigurator;
 use embassy_stm32::eth::{Ethernet, GenericPhy, PacketQueue};
 use embassy_stm32::exti::ExtiInput;
-use embassy_stm32::gpio::{Level, Output, OutputType, Pull, Speed};
+use embassy_stm32::gpio::{Input, Level, Output, OutputType, Pull, Speed};
 use embassy_stm32::mode::Async;
 use embassy_stm32::peripherals::*;
 use embassy_stm32::rcc::*;
@@ -65,6 +65,12 @@ pub struct Board {
     pub rng: Rng<'static, RNG>,
     pub iwdg: IndependentWatchdog<'static, IWDG1>,
     pub buzzer: (SimplePwm<'static, TIM2>, Channel),
+    /// Physical ignition button, populated on the GSE only (not on the rocket). `PC2` is the
+    /// datasheet name for GPIO port C pin 2, which also serves as `ADC3_INP0`; the pin still has a
+    /// digital input buffer, so it is read as a plain GPIO. Wired active-high with an internal
+    /// pull-down, so a pressed button reads logic high.
+    #[cfg(feature = "gcs")]
+    pub ignition_button: Input<'static>,
     pub seed: u64,
 }
 
@@ -301,6 +307,11 @@ pub async fn init() -> Board {
     let led_green = Output::new(p.PA15, Level::Low, Speed::Low);
     let leds = (led_red, led_yellow, led_green);
 
+    // GSE ignition button. Active-high: the button pulls the pin high, while the internal
+    // pull-down holds it low when released. Debouncing is done in the GCS task, not here.
+    #[cfg(feature = "gcs")]
+    let ignition_button = Input::new(p.PC2, Pull::Down);
+
     // Set up the independent watchdog. This reboots the processor
     // if it is not pet regularly, even if the main clock fails.
     // TODO: check if the current boot is a watchdog reset and react
@@ -433,6 +444,8 @@ pub async fn init() -> Board {
         rng,
         iwdg,
         buzzer: (buzzer_pwm, buzzer_pwm_channel),
+        #[cfg(feature = "gcs")]
+        ignition_button,
         seed,
     }
 }
