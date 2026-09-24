@@ -80,7 +80,7 @@ pub async fn run(
                             && (cmd.param1 as u32) == 0x01
                         {
                             cmd_tx.publish(UplinkCommand::SetFlightMode(mode)).await;
-                            MavResult::Accepted
+                            MavResult::InProgress
                         } else {
                             MavResult::Denied
                         }
@@ -134,10 +134,7 @@ pub async fn run(
 
                         if let (Some(vid), Some(vc)) = (valve_id, valve_cmd) {
                             cmd_tx.publish(UplinkCommand::CommandValve(vid, vc)).await;
-                            // TODO: currently this is lying, because the command may be dropped
-                            // in the vehicle main loop if the current flight mode does not permit
-                            // it. rethink our command result handling.
-                            MavResult::Accepted
+                            MavResult::InProgress
                         } else {
                             MavResult::Denied
                         }

@@ -21,12 +21,13 @@ use lora_phy::LoRa;
 use lora_phy::mod_params::{Bandwidth, CodingRate, PacketStatus, RadioError, SpreadingFactor};
 
 use rapid_dialect::Rapid;
+use rapid_dialect::rapid::enums::MavResult;
 use rapid_dialect::rapid::messages::RadioStatus;
 
 use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG, FREQUENCIES, LinkConfig};
 use telemetry::messages::TelemetryMessage;
 use telemetry::messages::UplinkMessage;
-use telemetry::messages::{DOWNLINK_PACKET_SIZE, DownlinkMessage};
+use telemetry::messages::{CommandAck, DOWNLINK_PACKET_SIZE, DownlinkMessage};
 use telemetry::trx::receiver::{HoppingReceiver, UplinkStats};
 use telemetry::trx::transmitter::HoppingTransmitter;
 
@@ -39,11 +40,12 @@ use crate::links::interfaces::{
     InterfaceRxSubscriber, InterfaceTx, InterfaceTxPublisher, InterfaceTxSubscriber,
 };
 
+type UplinkItem = (u16, Result<UplinkCommand, MavResult>);
+
 /// Intentionally capacity of 1 for downlink to avoid stale messages backing up.
 pub static DOWNLINK: StaticCell<Channel<CriticalSectionRawMutex, (u16, DownlinkMessage), 1>> =
     StaticCell::new();
-pub static UPLINK: StaticCell<Channel<CriticalSectionRawMutex, UplinkCommand, 5>> =
-    StaticCell::new();
+pub static UPLINK: StaticCell<Channel<CriticalSectionRawMutex, UplinkItem, 5>> = StaticCell::new();
 
 /// How long an uplink statistic stays current (the ground station heartbeats at roughly 2 Hz)
 const UPLINK_STATS_TIMEOUT: Duration = Duration::from_millis(2000);
@@ -53,8 +55,9 @@ static TIME: Watch<CriticalSectionRawMutex, (Instant, u16), 3> = Watch::new();
 
 pub struct LoraHandle {
     tx: Sender<'static, CriticalSectionRawMutex, (u16, DownlinkMessage), 1>,
-    rx: Receiver<'static, CriticalSectionRawMutex, UplinkCommand, 5>,
+    rx: Receiver<'static, CriticalSectionRawMutex, UplinkItem, 5>,
     time_sender: embassy_sync::watch::Sender<'static, CriticalSectionRawMutex, (Instant, u16), 3>,
+    ack: CommandAck,
 }
 
 impl LoraHandle {
@@ -82,13 +85,33 @@ impl LoraHandle {
             tx: tx.sender(),
             rx: rx.receiver(),
             time_sender: TIME.sender(),
+            ack: CommandAck::NONE,
         }
     }
 }
 
 impl LoraHandle {
-    pub fn try_recv_command(&mut self) -> Option<UplinkCommand> {
-        self.rx.try_receive().ok()
+    pub fn try_recv_command(&mut self) -> Option<(u16, UplinkCommand)> {
+        while let Ok((seq, cmd)) = self.rx.try_receive() {
+            match cmd {
+                Ok(cmd) => return Some((seq, cmd)),
+                Err(result) => {
+                    self.ack = CommandAck {
+                        seq,
+                        result: Some(result),
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn note_command_result(&mut self, seq: u16, result: MavResult) {
+        self.ack = CommandAck {
+            seq,
+            result: Some(result),
+        };
     }
 
     pub fn send_telemetry_messages(&mut self, vehicle: &Vehicle) {
@@ -111,7 +134,7 @@ impl LoraHandle {
             },
         };
 
-        let Some(msg) = DownlinkMessage::for_tick(t, &vehicle.snapshot(), uplink) else {
+        let Some(msg) = DownlinkMessage::for_tick(t, &vehicle.snapshot(), uplink, self.ack) else {
             return;
         };
 
@@ -135,7 +158,7 @@ async fn run_uplink(
     receiver: HoppingReceiver<
         LoraTransceiver,
         UplinkMessage,
-        Sender<'static, CriticalSectionRawMutex, UplinkCommand, 5>,
+        Sender<'static, CriticalSectionRawMutex, UplinkItem, 5>,
     >,
     stat_sender: embassy_sync::watch::Sender<'static, CriticalSectionRawMutex, UplinkStats, 3>,
     time_receiver: embassy_sync::watch::Receiver<

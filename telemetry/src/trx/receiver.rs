@@ -10,14 +10,15 @@ use lora_phy::mod_traits::{IrqState, RadioKind};
 use lora_phy::{LoRa, RxMode};
 
 use links::Downlink;
+use rapid_dialect::rapid::enums::MavResult;
 use rapid_dialect::rapid::messages::RadioStatus;
 
 use utils::anychannel::AnySender;
 
 use crate::config::LinkConfig;
 use crate::messages::{
-    ConnectionContext, DOWNLINK_PACKET_SIZE, DOWNLINK_TIME_MASK, DownlinkMessage, TelemetryMessage,
-    UPLINK_SEQ_MODULO, UplinkMessage,
+    CommandAck, ConnectionContext, DOWNLINK_PACKET_SIZE, DOWNLINK_TIME_MASK, DownlinkMessage,
+    TelemetryMessage, UPLINK_SEQ_MODULO, UplinkMessage,
 };
 use crate::trx::MAX_CONSECUTIVE_ERRORS;
 use crate::{DOWNLINK_MESSAGE_INTERVAL_MS, UplinkCommand};
@@ -177,9 +178,13 @@ impl<RK: RadioKind, S: AnySender<Downlink>> HoppingReceiver<RK, DownlinkMessage,
         clippy::arithmetic_side_effects,
         reason = "bounded modular frequency-hop timing math"
     )]
-    pub async fn run_downlink<CONN: AnySender<Option<(Instant, u16)>>>(
+    pub async fn run_downlink<
+        CONN: AnySender<Option<(Instant, u16)>>,
+        ACK: AnySender<CommandAck>,
+    >(
         mut self,
         mut connection_sender: CONN,
+        mut ack_sender: ACK,
     ) -> ! {
         let mut consecutive_errors = 0;
         let channels = self.config.channels();
@@ -213,7 +218,7 @@ impl<RK: RadioKind, S: AnySender<Downlink>> HoppingReceiver<RK, DownlinkMessage,
                             .await;
 
                         defmt::info!("Received first packet, initializing connection.");
-                        self.handle_connection(time, msg, &mut connection_sender)
+                        self.handle_connection(time, msg, &mut connection_sender, &mut ack_sender)
                             .await;
 
                         defmt::warn!("Connection lost.");
@@ -260,15 +265,22 @@ impl<RK: RadioKind, S: AnySender<Downlink>> HoppingReceiver<RK, DownlinkMessage,
         clippy::arithmetic_side_effects,
         reason = "bounded modular frequency-hop timing math"
     )]
-    async fn handle_connection<CONN: AnySender<Option<(Instant, u16)>>>(
+    async fn handle_connection<
+        CONN: AnySender<Option<(Instant, u16)>>,
+        ACK: AnySender<CommandAck>,
+    >(
         &mut self,
         mut time: u16,
         initial_msg: DownlinkMessage,
         connection_sender: &mut CONN,
+        ack_sender: &mut ACK,
     ) {
         let mut last_packet = Instant::now();
 
         let mut context = ConnectionContext::init(time);
+        if let DownlinkMessage::Heartbeat(heartbeat) = &initial_msg {
+            ack_sender.anysend(heartbeat.command_ack()).await;
+        }
         initial_msg.unpack(&mut self.sender, &mut context).await;
 
         let timeout = Duration::from_millis(DOWNLINK_MESSAGE_INTERVAL_MS as u64);
@@ -303,6 +315,9 @@ impl<RK: RadioKind, S: AnySender<Downlink>> HoppingReceiver<RK, DownlinkMessage,
                     time = t;
 
                     context.advance(t);
+                    if let DownlinkMessage::Heartbeat(heartbeat) = &msg {
+                        ack_sender.anysend(heartbeat.command_ack()).await;
+                    }
                     msg.unpack(&mut self.sender, &mut context).await;
 
                     connection_sender.anysend(Some((last_packet, t))).await;
@@ -341,7 +356,9 @@ impl<RK: RadioKind, S: AnySender<Downlink>> HoppingReceiver<RK, DownlinkMessage,
     }
 }
 
-impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessage, S> {
+impl<RK: RadioKind, S: AnySender<(u16, Result<UplinkCommand, MavResult>)>>
+    HoppingReceiver<RK, UplinkMessage, S>
+{
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "bounded packet-loss counting and hop-timing math"
@@ -449,23 +466,23 @@ impl<RK: RadioKind, S: AnySender<UplinkCommand>> HoppingReceiver<RK, UplinkMessa
                 UplinkMessage::Heartbeat(()) => {
                     continue;
                 }
-                UplinkMessage::SetFlightMode(inner) => {
-                    let Ok(mode) = inner.mode.try_into() else {
-                        defmt::warn!("Discarding uplink command with invalid flight mode.");
-                        continue;
-                    };
-                    UplinkCommand::SetFlightMode(mode)
-                }
-                UplinkMessage::SetValve(inner) => {
-                    let Some((valve, command)) = inner.command() else {
-                        defmt::warn!("Discarding uplink command for an unknown valve.");
-                        continue;
-                    };
-                    UplinkCommand::CommandValve(valve, command)
-                }
+                UplinkMessage::SetFlightMode(inner) => match inner.mode.try_into() {
+                    Ok(mode) => Ok(UplinkCommand::SetFlightMode(mode)),
+                    Err(_) => {
+                        defmt::warn!("Rejecting uplink command with invalid flight mode.");
+                        Err(MavResult::Denied)
+                    }
+                },
+                UplinkMessage::SetValve(inner) => match inner.command() {
+                    Some((valve, command)) => Ok(UplinkCommand::CommandValve(valve, command)),
+                    None => {
+                        defmt::warn!("Rejecting uplink command for an unknown valve.");
+                        Err(MavResult::Denied)
+                    }
+                },
             };
 
-            self.sender.anysend(cmd).await;
+            self.sender.anysend((seq, cmd)).await;
         }
     }
 }

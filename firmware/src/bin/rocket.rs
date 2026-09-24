@@ -18,6 +18,7 @@ use firmware::Vehicle;
 use firmware::bus::BusHandler;
 use firmware::can::{CanRxSubscriber, CanTxPublisher};
 use firmware::links::{Links, UplinkCommand};
+use rapid_dialect::rapid::enums::MavResult;
 
 use {defmt_rtt as _, panic_probe as _};
 
@@ -121,25 +122,34 @@ pub async fn main_loop(
         vehicle.tick().await;
 
         // TODO: this belongs somewhere else
-        if let Some(cmd) = links.try_recv_command() {
-            match cmd {
+        if let Some((token, cmd)) = links.try_recv_command() {
+            let result = match cmd {
                 UplinkCommand::SetFlightMode(fm) => {
                     vehicle.set_mode(fm);
+                    MavResult::Accepted
                 }
                 UplinkCommand::CommandValve(valve_id, valve_cmd) => {
-                    if vehicle.try_command_valve(valve_id, valve_cmd).is_err() {
-                        defmt::warn!(
-                            "CommandValve {} {} rejected",
-                            defmt::Debug2Format(&valve_id),
-                            defmt::Debug2Format(&valve_cmd)
-                        );
+                    match vehicle.try_command_valve(valve_id, valve_cmd) {
+                        Ok(()) => MavResult::Accepted,
+                        Err(e) => {
+                            defmt::warn!(
+                                "CommandValve {} {} rejected: {}",
+                                defmt::Debug2Format(&valve_id),
+                                defmt::Debug2Format(&valve_cmd),
+                                defmt::Debug2Format(&e)
+                            );
+                            e.into()
+                        }
                     }
                 }
                 UplinkCommand::SetParam { id, raw } => {
                     vehicle.set_param(id, raw).await;
+                    MavResult::Accepted
                 }
-                _ => {}
-            }
+                _ => MavResult::Unsupported,
+            };
+
+            links.note_command_result(token, result);
         }
 
         links.send_telemetry_messages(&vehicle);

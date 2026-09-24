@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use links::Downlink;
 use mission::bus::IO_NODE_IDS;
 use mission::mavlink::{VehicleSnapshot, io_node_heartbeat};
+use rapid_dialect::rapid::enums::MavResult;
 use rapid_dialect::rapid::messages::RadioStatus;
 use rapid_dialect::{FlightMode, Rapid};
 use siphasher::sip::SipHasher;
@@ -47,6 +48,46 @@ const FULL_SCALE: f32 = (u8::MAX - 1) as f32;
 
 const TEMPERATURE_OFFSET_C: f32 = 60.0;
 const TEMPERATURE_CODES_PER_C: f32 = 2.0;
+
+/// Repeated in every heartbeat until the next command replaces it.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct CommandAck {
+    pub seq: u16,
+    /// `None` until the first command.
+    pub result: Option<MavResult>,
+}
+
+impl CommandAck {
+    pub const SEQ_MASK: u16 = 0b1_1111;
+    const RESULT_BITS: u8 = 3;
+    /// [`MavResult::CommandLongOnly`], which the vehicle never answers with.
+    const NO_RESULT: u8 = 0b111;
+
+    pub const NONE: Self = Self {
+        seq: 0,
+        result: None,
+    };
+
+    fn pack(self) -> u8 {
+        let result = match self.result {
+            Some(result) if (result as u8) < Self::NO_RESULT => result as u8,
+            Some(_) => MavResult::Failed as u8,
+            None => Self::NO_RESULT,
+        };
+        (((self.seq & Self::SEQ_MASK) as u8) << Self::RESULT_BITS) | result
+    }
+
+    fn unpack(byte: u8) -> Self {
+        let result = match byte & Self::NO_RESULT {
+            Self::NO_RESULT => None,
+            code => MavResult::try_from(code).ok(),
+        };
+        Self {
+            seq: u16::from(byte >> Self::RESULT_BITS),
+            result,
+        }
+    }
+}
 
 /// Stuff the telemetry receiver can just "keep in mind" based on previously received messages.
 /// These are used to enrich received data, especially when values can reasonably be converted or
@@ -147,6 +188,7 @@ impl DownlinkMessage {
         time_ms: u32,
         snapshot: &VehicleSnapshot<'_>,
         uplink: RadioStatus,
+        ack: CommandAck,
     ) -> Option<Self> {
         if time_ms % DOWNLINK_MESSAGE_INTERVAL_MS != 0 {
             return None;
@@ -171,7 +213,7 @@ impl DownlinkMessage {
             }
             14 => Self::Gps(GpsMessage::pack(snapshot)),
             // Every remaining slot, so the heartbeat keeps most of the link to itself.
-            _ => Self::Heartbeat(HeartbeatMessage::pack(snapshot)),
+            _ => Self::Heartbeat(HeartbeatMessage::pack((snapshot, ack))),
         })
     }
 }
@@ -454,9 +496,10 @@ pub(crate) mod tests {
         let snapshot = parts.snapshot();
 
         for time in (0..=u16::MAX).step_by(DOWNLINK_MESSAGE_INTERVAL_MS as usize) {
-            let packet = DownlinkMessage::Heartbeat(HeartbeatMessage::pack(&snapshot))
-                .encode(time, &[0x42; 16])
-                .expect("message did not fit its packet");
+            let packet =
+                DownlinkMessage::Heartbeat(HeartbeatMessage::pack((&snapshot, CommandAck::NONE)))
+                    .encode(time, &[0x42; 16])
+                    .expect("message did not fit its packet");
             let (decoded, _) =
                 DownlinkMessage::decode(packet, &[0x42; 16]).expect("packet did not decode");
 
@@ -495,7 +538,10 @@ pub(crate) mod tests {
         let parts = SnapshotParts::default();
 
         for time in (0..=u16::MAX).step_by(DOWNLINK_MESSAGE_INTERVAL_MS as usize) {
-            let msg = DownlinkMessage::Heartbeat(HeartbeatMessage::pack(&parts.snapshot()));
+            let msg = DownlinkMessage::Heartbeat(HeartbeatMessage::pack((
+                &parts.snapshot(),
+                CommandAck::NONE,
+            )));
             let packet = msg
                 .encode(time, &KEY)
                 .expect("message did not fit its packet");
@@ -556,9 +602,12 @@ pub(crate) mod tests {
 
             let mut built = 0;
             for time_ms in 0..(DownlinkMessage::SLOT_COUNT * DOWNLINK_MESSAGE_INTERVAL_MS * 2) {
-                let Some(msg) =
-                    DownlinkMessage::for_tick(time_ms, &snapshot, RadioStatus::default())
-                else {
+                let Some(msg) = DownlinkMessage::for_tick(
+                    time_ms,
+                    &snapshot,
+                    RadioStatus::default(),
+                    CommandAck::NONE,
+                ) else {
                     continue;
                 };
                 built += 1;
@@ -596,7 +645,7 @@ pub(crate) mod tests {
         fn lengths(parts: &SnapshotParts) -> [usize; 7] {
             let s = parts.snapshot();
             [
-                encoded_len(&HeartbeatMessage::pack(&s)),
+                encoded_len(&HeartbeatMessage::pack((&s, CommandAck::NONE))),
                 encoded_len(&StatusMessage::pack((&s, RadioStatus::default()))),
                 encoded_len(&PressuresMessage::pack(&s)),
                 encoded_len(&ExternalPressuresMessage::pack(&s)),
