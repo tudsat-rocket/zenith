@@ -5,12 +5,13 @@ use rapid_dialect::rapid::enums::ValveId;
 
 use state_estimator::StateEstimator;
 
-use crate::bus::{Bus, BusInputImage, BusOutputImage};
+use crate::bus::{Bus, BusInputImage, BusOutputImage, DataWithTime};
 use crate::flight_logic::FlightLogic;
 use crate::inventory::BinaryOutputId;
 use crate::leds::LedState;
 use crate::mavlink::VehicleSnapshot;
 use crate::params::{FailsafeParams, Params, PropulsionParams, StateMachineParams};
+use crate::tank_level::TankLevelEstimator;
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
 use crate::valves::{ValveCommand, ValveController, ValveError};
 
@@ -23,6 +24,7 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     state_machine_params: StateMachineParams,
     propulsion_params: PropulsionParams,
     failsafe_params: FailsafeParams,
+    tank_level: TankLevelEstimator,
     pub sensors: S,
     pub outputs: O,
     pub storage: F,
@@ -53,6 +55,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             state_machine_params: params.state_machine,
             propulsion_params: params.propulsion,
             failsafe_params: params.failsafe,
+            tank_level: TankLevelEstimator::new(params.tank_level),
             sensors,
             outputs,
             storage,
@@ -73,6 +76,10 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         // TODO: incorporate all IMUs, baros into the state estimator.
         self.readings = self.sensors.tick().await;
         self.bus_inputs = self.bus.get_input_image(self.time);
+        self.bus_inputs.ox_tank_level = self
+            .tank_level
+            .update(self.time, &self.bus_inputs)
+            .map(|level| DataWithTime::new(level, self.time));
         self.state_estimator.update(
             self.time,
             self.mode,
@@ -168,6 +175,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             state_machine: self.state_machine_params.clone(),
             propulsion: self.propulsion_params.clone(),
             failsafe: self.failsafe_params.clone(),
+            tank_level: self.tank_level.params().clone(),
         };
 
         params.set(descriptor.id, value);
@@ -176,6 +184,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.state_machine_params = params.state_machine;
         self.propulsion_params = params.propulsion;
         self.failsafe_params = params.failsafe;
+        self.tank_level.update_params(params.tank_level);
         self.state_estimator.update_params(params.state_estimator);
 
         self.storage.write_param(descriptor.id, value);

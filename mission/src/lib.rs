@@ -9,6 +9,7 @@ pub mod leds;
 pub mod mavlink;
 pub mod params;
 mod schedule;
+pub mod tank_level;
 mod traits;
 pub mod valves;
 mod vehicle;
