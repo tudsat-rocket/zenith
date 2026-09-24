@@ -321,15 +321,13 @@ impl SitlBus {
 }
 
 impl Bus for SitlBus {
-    fn get_input_image(&mut self) -> BusInputImage {
+    fn get_input_image(&mut self, now: Wrapping<u32>) -> BusInputImage {
         let sim = self.sim.lock().unwrap();
-
-        let t = (sim.physics.time * 1000.0) as u32;
 
         let temp_sens = TemperatureSensorMap::from_fn(|_id| {
             sim.hybrid
                 .tank_temperature(TankId::Oxidizer)
-                .map(|v| DataWithTime::new(v, Wrapping(t)))
+                .map(|v| DataWithTime::new(v, now))
         });
 
         // The external tanks are ground equipment read over the umbilical, which is severed at
@@ -353,13 +351,13 @@ impl Bus for SitlBus {
                 P::PReg1 | P::PReg2 => sim.hybrid.tank_pressure(TankId::RegulatedPressurant),
                 P::Nosecone | P::ExternalPressurant | P::ExternalOxidizer => return None,
             };
-            Some(DataWithTime::new(pressure, Wrapping(t)))
+            Some(DataWithTime::new(pressure, now))
         });
 
         let valve_state = ValveMap::from_fn(|id| {
             Some(DataWithTime::new(
                 ValveState::from_percent_open((100.0 * sim.hybrid.valve_state(id)) as u16),
-                Wrapping(t),
+                now,
             ))
         });
 
@@ -370,10 +368,7 @@ impl Bus for SitlBus {
         nodes.set(UMBILICAL_NODE, umbilical_connected);
 
         let ox_probes = OxProbeMap::from_fn(|id| {
-            Some(DataWithTime::new(
-                sim.hybrid.probe_temperature(id),
-                Wrapping(t),
-            ))
+            Some(DataWithTime::new(sim.hybrid.probe_temperature(id), now))
         });
 
         BusInputImage {
@@ -384,7 +379,7 @@ impl Bus for SitlBus {
             ox_probes,
             ox_tank_level: Some(DataWithTime::new(
                 sim.hybrid.tank_level(TankId::Oxidizer),
-                Wrapping(t),
+                now,
             )),
             nodes,
             // Nothing simulates a high-current supply; every board reports one whenever the

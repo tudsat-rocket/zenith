@@ -73,21 +73,20 @@ impl BusHandler {
 }
 
 impl Bus for BusHandler {
-    fn get_input_image(&mut self) -> BusInputImage {
-        let now = Instant::now();
-        let now_ms = Wrapping(now.as_millis() as u32);
+    fn get_input_image(&mut self, now: Wrapping<u32>) -> BusInputImage {
+        let received = Instant::now();
 
         while let Some(msg) = self.can.1.try_next_message_pure() {
-            if let Some(node_id) = try_injest_can_msg(&mut self.input, msg, now_ms)
+            if let Some(node_id) = try_injest_can_msg(&mut self.input, msg, now)
                 && let Some(slot) = self.last_node_frames.get_mut(node_id as usize)
             {
-                *slot = Some(now);
+                *slot = Some(received);
             }
         }
 
         for (node_id, last) in self.last_node_frames.iter().enumerate() {
             let present =
-                last.is_some_and(|t| now.saturating_duration_since(t) < NODE_PRESENCE_TIMEOUT);
+                last.is_some_and(|t| received.saturating_duration_since(t) < NODE_PRESENCE_TIMEOUT);
             self.input.nodes.set(node_id as u8, present);
         }
 
