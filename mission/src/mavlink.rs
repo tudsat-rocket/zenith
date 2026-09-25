@@ -12,7 +12,7 @@ use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::{
     GpsFixType, MavAutopilot, MavBatteryChargeState, MavBatteryFault, MavBatteryFunction,
     MavBatteryMode, MavBatteryType, MavModeFlag, MavProtocolCapability, MavState,
-    MavSysStatusSensor, MavSysStatusSensorExtended, MavType, RocketCapability,
+    MavSysStatusSensor, MavSysStatusSensorExtended, MavType, RocketCapability, ValveFlag,
 };
 use rapid_dialect::rapid::messages::{
     Attitude, AutopilotVersion, BatteryStatus, DebugFloatArray, GlobalPositionInt, GpsRawInt,
@@ -24,7 +24,7 @@ use state_estimator::StateEstimator;
 
 use crate::TelemetryLink;
 use crate::bus::{BusInputImage, BusOutputImage};
-use crate::inventory::{InventoryId, OxProbeId, TankId, ValveId};
+use crate::inventory::{InventoryId, OxProbeId, TankId, ValveId, valve_is_heated};
 use crate::params::StateMachineParams;
 use crate::schedule::downlink_schedule;
 use crate::traits::SensorReadings;
@@ -70,6 +70,13 @@ impl VehicleSnapshot<'_> {
             .as_ref()
             .map(|p| p.recovery_voltage > RECOVERY_ARMED_THRESHOLD_MV)
             .unwrap_or(false)
+    }
+
+    /// Whether the valve's heater is on, and its temperature in Celsius. `None` for a valve
+    /// without a heater.
+    // TODO: placeholders until the heater and its sensor are on the bus.
+    pub fn valve_heater(&self, valve: ValveId) -> Option<(bool, Option<f32>)> {
+        valve_is_heated(valve).then_some((self.mode == FlightMode::FillOxidizer, Some(20.0)))
     }
 }
 
@@ -318,6 +325,22 @@ impl Into<ScaledPressure3> for &VehicleSnapshot<'_> {
             temperature: (self.readings.baro3.temperature.unwrap_or_default() * 10.0) as i16,
             temperature_press_diff: 0,
         }
+    }
+}
+
+/// Celsius as MAVLink cdegC, `i16::MAX` if unknown. Also used by the telemetry receiver.
+pub fn centi_celsius(celsius: Option<f32>) -> i16 {
+    celsius
+        .map(|c| (c * 100.0).clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16)
+        .unwrap_or(i16::MAX)
+}
+
+/// VALVE flags of a heated valve. Also used by the telemetry receiver.
+pub fn valve_heater_flags(heater_on: bool) -> ValveFlag {
+    if heater_on {
+        ValveFlag::HEATED | ValveFlag::HEATER_ON
+    } else {
+        ValveFlag::HEATED
     }
 }
 
@@ -594,17 +617,17 @@ impl InstanceMessage<TankId> for PressureVessel {
             .map(|bar| (bar * 100.0).clamp(0.0, f32::from(u16::MAX)) as u16)
             .unwrap_or(u16::MAX);
 
-        let temperature1 = t_ids[0]
-            .map(|id| snap.input_image.temp_sens[id])
-            .and_then(|o| o.map(|d| d.data))
-            .map(|celsius| (celsius * 100.0).clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16)
-            .unwrap_or(i16::MAX);
+        let temperature1 = centi_celsius(
+            t_ids[0]
+                .map(|id| snap.input_image.temp_sens[id])
+                .and_then(|o| o.map(|d| d.data)),
+        );
 
-        let temperature2 = t_ids[1]
-            .map(|id| snap.input_image.temp_sens[id])
-            .and_then(|o| o.map(|d| d.data))
-            .map(|celsius| (celsius * 100.0).clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16)
-            .unwrap_or(i16::MAX);
+        let temperature2 = centi_celsius(
+            t_ids[1]
+                .map(|id| snap.input_image.temp_sens[id])
+                .and_then(|o| o.map(|d| d.data)),
+        );
 
         let level = (tank == TankId::Oxidizer)
             .then_some(snap.input_image.ox_tank_level.map(|d| d.data))
@@ -634,11 +657,17 @@ impl InstanceMessage<ValveId> for Valve {
             .map(|state| f32::from(state.data.promille()) / 1000.0)
             .unwrap_or(f32::NAN);
         let commanded = f32::from(snap.output_image.valve[valve].promille()) / 1000.0;
+        let (flags, temperature) = match snap.valve_heater(valve) {
+            Some((heater_on, celsius)) => (valve_heater_flags(heater_on), centi_celsius(celsius)),
+            None => (ValveFlag::empty(), i16::MAX),
+        };
 
         Some(Valve {
             id: valve,
             state,
             commanded,
+            flags,
+            temperature,
         })
     }
 }

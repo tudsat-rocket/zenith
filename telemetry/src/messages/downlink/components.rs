@@ -1,11 +1,30 @@
 use serde::{Deserialize, Serialize};
 
 use mission::bus::{NodeSet, ValveState};
-use mission::inventory::{InventoryId, ValveId};
-use mission::mavlink::VehicleSnapshot;
+use mission::inventory::{InventoryId, ValveId, valve_is_heated};
+use mission::mavlink::{VehicleSnapshot, centi_celsius, valve_heater_flags};
+use rapid_dialect::rapid::enums::ValveFlag;
 use rapid_dialect::rapid::messages::Valve;
 
-use super::{ConnectionContext, DownlinkTelemetryMessage};
+use super::{ConnectionContext, DownlinkTelemetryMessage, pack_temperature, unpack_temperature};
+
+// `ComponentsMessage` only has room for one valve temperature.
+#[allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "const-evaluated walk over a fixed-length array"
+)]
+const _: () = {
+    let mut heated = 0;
+    let mut i = 0;
+    while i < ValveId::ALL.len() {
+        if valve_is_heated(ValveId::ALL[i]) {
+            heated += 1;
+        }
+        i += 1;
+    }
+    assert!(heated <= 1);
+};
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u8)]
@@ -53,6 +72,10 @@ impl ValveCode {
         }
     }
 
+    /// Bits above the valve codes.
+    #[allow(clippy::arithmetic_side_effects, reason = "constant 2 * 9")]
+    const SPARE_SHIFT: usize = Self::BITS * ValveId::ALL.len();
+
     fn position(self) -> f32 {
         match self {
             Self::Closed => 0.0,
@@ -66,10 +89,12 @@ impl ValveCode {
 /// Valve and node state, with some room for other actuators
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ComponentsMessage {
-    /// One [`ValveCode`] per valve, as the bus reports it.
+    /// One [`ValveCode`] per valve, as the bus reports it, then the temperature code of the
+    /// heated valve.
     #[serde(with = "postcard::fixint::le")]
     reported: u32,
-    /// One [`ValveCode`] per valve, as the vehicle last resolved it.
+    /// One [`ValveCode`] per valve, as the vehicle last resolved it, then one heater bit per valve
+    /// at `SPARE_SHIFT + idx()`.
     #[serde(with = "postcard::fixint::le")]
     commanded: u32,
     /// Bit n is node id n.
@@ -86,24 +111,54 @@ impl DownlinkTelemetryMessage for ComponentsMessage {
     /// One per [`ValveId`], then the nodes on the bus and the armed subset of them.
     type Output = ([Valve; 9], NodeSet, NodeSet);
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "SPARE_SHIFT + idx() is at most 26, so the shift stays below 32"
+    )]
     fn pack(snapshot: Self::Input<'_>) -> Self {
+        let mut heaters = 0;
+        let mut temperature = None;
+        for valve in ValveId::ALL {
+            if let Some((heater_on, celsius)) = snapshot.valve_heater(valve) {
+                heaters |= u32::from(heater_on) << (ValveCode::SPARE_SHIFT + valve.idx());
+                temperature = celsius;
+            }
+        }
+
         Self {
             reported: ValveCode::pack_all(|valve| {
                 ValveCode::from_state(snapshot.input_image.valve_state[valve].map(|s| s.data))
-            }),
+            }) | u32::from(pack_temperature(temperature)) << ValveCode::SPARE_SHIFT,
             commanded: ValveCode::pack_all(|valve| {
                 ValveCode::from_state(Some(snapshot.output_image.valve[valve]))
-            }),
+            }) | heaters,
             node_presence: snapshot.input_image.nodes.bits(),
             node_armed: snapshot.input_image.nodes_armed.bits(),
         }
     }
 
+    #[allow(clippy::arithmetic_side_effects, reason = "same bound as `pack`")]
     fn unpack(self, _context: &mut ConnectionContext) -> Self::Output {
-        let valves = ValveId::ALL.map(|valve| Valve {
-            id: valve,
-            state: ValveCode::unpack_one(self.reported, valve).position(),
-            commanded: ValveCode::unpack_one(self.commanded, valve).position(),
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "the code is the byte above the valves"
+        )]
+        let temperature = unpack_temperature((self.reported >> ValveCode::SPARE_SHIFT) as u8);
+
+        let valves = ValveId::ALL.map(|valve| {
+            let (flags, temperature) = if valve_is_heated(valve) {
+                let heater_on = self.commanded >> (ValveCode::SPARE_SHIFT + valve.idx()) & 1 != 0;
+                (valve_heater_flags(heater_on), centi_celsius(temperature))
+            } else {
+                (ValveFlag::empty(), i16::MAX)
+            };
+            Valve {
+                id: valve,
+                state: ValveCode::unpack_one(self.reported, valve).position(),
+                commanded: ValveCode::unpack_one(self.commanded, valve).position(),
+                flags,
+                temperature,
+            }
         });
 
         (
@@ -122,6 +177,7 @@ pub(crate) mod tests {
     use core::num::Wrapping;
 
     use mission::bus::{BusOutputImage, DataWithTime};
+    use rapid_dialect::FlightMode;
 
     use crate::messages::DownlinkMessage;
 
@@ -169,6 +225,41 @@ pub(crate) mod tests {
         // Every valve gets its own slot, and the ids come back in order.
         for valve in ValveId::ALL {
             assert_eq!(by_id(valve).id, valve);
+        }
+    }
+
+    /// The heater bits sit above the valve codes, so neither may disturb the other.
+    #[test]
+    fn heater_survives_the_packet() {
+        for mode in [FlightMode::Idle, FlightMode::FillOxidizer] {
+            let mut parts = SnapshotParts {
+                mode,
+                ..SnapshotParts::default()
+            };
+            parts.outputs = saturated_outputs();
+
+            let msg = DownlinkMessage::Components(ComponentsMessage::pack(&parts.snapshot()));
+            let DownlinkMessage::Components(decoded) = through_packet(msg) else {
+                panic!("decoded as the wrong message")
+            };
+            let (valves, ..) = decoded.unpack(&mut ConnectionContext::init(0));
+
+            for valve in &valves {
+                assert_eq!(valve.commanded, 1.0, "{:?}", valve.id);
+                assert!(valve.state.is_nan(), "{:?}", valve.id);
+                if let Some((heater_on, celsius)) = parts.snapshot().valve_heater(valve.id) {
+                    assert_eq!(valve.flags, valve_heater_flags(heater_on));
+                    let expected = centi_celsius(celsius);
+                    assert!(
+                        (valve.temperature - expected).abs() <= 50,
+                        "{}",
+                        valve.temperature
+                    );
+                } else {
+                    assert_eq!(valve.flags, ValveFlag::empty(), "{:?}", valve.id);
+                    assert_eq!(valve.temperature, i16::MAX, "{:?}", valve.id);
+                }
+            }
         }
     }
 
