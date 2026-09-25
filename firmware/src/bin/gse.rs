@@ -16,7 +16,11 @@ use embassy_futures::select::{Either, select};
 use embassy_stm32::interrupt;
 use embassy_stm32::interrupt::{InterruptExt, Priority};
 use embassy_sync::pubsub::PubSubChannel;
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Instant, Ticker, Timer};
+
+use rapid_dialect::Rapid;
+use rapid_dialect::rapid::enums::{MavAutopilot, MavModeFlag, MavState, MavType};
+use rapid_dialect::rapid::messages::Heartbeat;
 
 use mission::bus::ValveState;
 use mission::inventory::{InventoryId, ValveId, ValveMap};
@@ -24,10 +28,10 @@ use mission::valves::ValveCommand;
 
 use firmware::can::CanTxPublisher;
 use firmware::links::UplinkCommand;
-use firmware::links::interfaces::InterfaceCommandSubscriber;
 use firmware::links::interfaces::ethernet::{
     CanForwarding, EthernetConfig, EthernetHandle, GSE_SYSTEM_ID,
 };
+use firmware::links::interfaces::{InterfaceCommandSubscriber, InterfaceTxPublisher};
 
 use firmware as fw;
 
@@ -68,11 +72,33 @@ async fn main(low_priority_spawner: Spawner) {
         low_priority_spawner,
     );
 
-    let (_eth_tx, eth_commands) = ethernet.split();
+    let (eth_tx, eth_commands) = ethernet.split();
 
+    low_priority_spawner.spawn(heartbeat(eth_tx)).unwrap();
     low_priority_spawner
         .spawn(manual_valves(eth_commands, can1_tx.publisher().unwrap()))
         .unwrap();
+}
+
+#[embassy_executor::task]
+async fn heartbeat(tx: InterfaceTxPublisher) -> ! {
+    let mut ticker = Ticker::every(Duration::from_secs(1));
+
+    loop {
+        let message = Rapid::Heartbeat(Heartbeat {
+            // The closest MAV_TYPE to stationary ground equipment.
+            type_: MavType::ChargingStation,
+            autopilot: MavAutopilot::Invalid,
+            base_mode: MavModeFlag::default(),
+            custom_mode: 0,
+            system_status: MavState::Active,
+            mavlink_version: 2,
+        });
+        if tx.try_publish(message.into()).is_err() {
+            defmt::warn!("downlink queue full, dropping heartbeat");
+        }
+        ticker.next().await;
+    }
 }
 
 #[embassy_executor::task]
