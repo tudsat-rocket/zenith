@@ -265,8 +265,8 @@ pub async fn init() -> Board {
     let mut can1 = CanConfigurator::new(p.FDCAN2, p.PB5, p.PB6, Irqs);
     let mut can2 = CanConfigurator::new(p.FDCAN1, p.PB8, p.PB9, Irqs);
 
-    can1.set_bitrate(125_000);
-    can2.set_bitrate(125_000);
+    can1.set_bitrate(500_000);
+    can2.set_bitrate(500_000);
 
     let can1 = can1.into_normal_mode();
     let can2 = can2.into_normal_mode();

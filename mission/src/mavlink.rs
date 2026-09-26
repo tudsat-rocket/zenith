@@ -74,9 +74,10 @@ impl VehicleSnapshot<'_> {
 
     /// Whether the valve's heater is on, and its temperature in Celsius. `None` for a valve
     /// without a heater.
-    // TODO: placeholders until the heater and its sensor are on the bus.
+    // TODO: heater state is a placeholder until the heater is on the bus.
     pub fn valve_heater(&self, valve: ValveId) -> Option<(bool, Option<f32>)> {
-        valve_is_heated(valve).then_some((self.mode == FlightMode::FillOxidizer, Some(20.0)))
+        let celsius = self.input_image.valve_temp.map(|d| d.data);
+        valve_is_heated(valve).then_some((self.mode == FlightMode::FillOxidizer, celsius))
     }
 }
 
