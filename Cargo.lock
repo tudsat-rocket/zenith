@@ -2208,11 +2208,13 @@ checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
 [[package]]
 name = "rapid-dialect"
 version = "0.1.0"
-source = "git+https://github.com/tudsat-rocket/rapid-dialect#d92a5106a72f98df47278165983b93a8925d7791"
+source = "git+https://github.com/tudsat-rocket/rapid-dialect#9f2d02e0e6274ec819683a70fa609cfe3ea18ed3"
 dependencies = [
  "heck",
  "mavinspect",
  "mavspec",
+ "miniz_oxide",
+ "postcard",
 ]
 
 [[package]]

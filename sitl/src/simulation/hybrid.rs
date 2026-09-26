@@ -378,6 +378,7 @@ impl Bus for SitlBus {
             binary_outputs: BinaryOutputMap::splat(None),
             ox_probes,
             ox_tank_level: None,
+            valve_temp: None,
             nodes,
             // Nothing simulates a high-current supply; every board reports one whenever the
             // vehicle is out of Idle, matching the recovery bus.

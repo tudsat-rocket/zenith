@@ -39,6 +39,8 @@ pub struct BusInputImage {
     /// Oxidizer fill level, 0 - 1. Derived from `ox_probes` by
     /// [`TankLevelEstimator`](crate::tank_level::TankLevelEstimator) rather than read off the bus.
     pub ox_tank_level: Option<DataWithTime<f32>>,
+    /// The heated valve's temperature (see [`valve_is_heated`](crate::inventory::valve_is_heated)).
+    pub valve_temp: Option<DataWithTime<f32>>,
     pub nodes: NodeSet,
     /// A subset of `nodes`: a board we cannot hear from tells us nothing.
     pub nodes_armed: NodeSet,
@@ -161,6 +163,7 @@ impl BusInputImage {
             binary_outputs: BinaryOutputMap::splat(None),
             ox_probes: OxProbeMap::splat(None),
             ox_tank_level: None,
+            valve_temp: None,
             nodes: NodeSet::NONE,
             nodes_armed: NodeSet::NONE,
         }

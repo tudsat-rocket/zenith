@@ -37,19 +37,19 @@ pub const VALVE_ID_MAP: ValveMap<IoAddr> = ValveMap::new([
     // Main = 4,
     IoAddr::new(6, VALVE_STORE_IDX, 1),
     // ExternalPressurantFill = 5,
-    IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
+    IoAddr::new(8, VALVE_STORE_IDX, 1),
     // ExternalOxidizerFill = 6,
-    IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
+    IoAddr::new(7, VALVE_STORE_IDX, 1),
     // ExternalPressurantVent = 7,
     IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
     // ExternalOxidizerVent = 8,
-    IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
+    IoAddr::new(7, VALVE_STORE_IDX, 2),
 ]);
 
 // TODO: change this map construction
 pub const BINARY_OUTPUT_ID_MAP: BinaryOutputMap<IoAddr> = BinaryOutputMap::new([
-    IoAddr::new(7, HC_OUTPUT_STORE_IDX, HCO3), // BinaryOutputId::Igniter1,
-    IoAddr::new(7, HC_OUTPUT_STORE_IDX, HCO4), // BinaryOutputId::Igniter2,
+    IoAddr::new(8, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Igniter1,
+    IoAddr::new(8, HC_OUTPUT_STORE_IDX, HCO2), // BinaryOutputId::Igniter2,
     IoAddr::new(2, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Camera1,
     IoAddr::new(2, HC_OUTPUT_STORE_IDX, HCO3), // BinaryOutputId::Camera2,
     IoAddr::new(3, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Camera3,
@@ -64,6 +64,9 @@ pub const TEMP_SENSOR_ID_MAP: TemperatureSensorMap<SensorAddr> = TemperatureSens
     SensorAddr::from_sensor_idx(5, 0).unwrap(), // TempSensId::OxTankUpper
     SensorAddr::from_sensor_idx(6, 2).unwrap(), // TempSensId::OxTankLower
 ]);
+
+/// The heated valve's temperature sensor. 0-indexed, since it arrives by tpdo
+pub const VALVE_TEMP_SENSOR: SensorAddr = SensorAddr::from_sensor_idx(4, 0).unwrap();
 
 /// The tank level probe row, bottom to top. Slots 8 and 9 arrive in the `Sensor3` frame, which no
 /// other board on this vehicle populates.
