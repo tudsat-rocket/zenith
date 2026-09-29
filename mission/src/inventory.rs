@@ -228,6 +228,11 @@ impl InventoryId<9> for ValveId {
     }
 }
 
+/// Whether the valve has a heater and temperature sensor.
+pub const fn valve_is_heated(valve: ValveId) -> bool {
+    matches!(valve, ValveId::OxidizerVent)
+}
+
 // ValveId comes from the Mavlink dialect, so make sure at compile-time that ALL is well-behaved.
 #[allow(
     clippy::indexing_slicing,

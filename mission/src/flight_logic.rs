@@ -172,7 +172,7 @@ mod tests {
     use state_estimator::StateEstimatorParams;
 
     const IDLE_TIMEOUT: u32 = 10_000;
-    const VENT_TIMEOUT: u32 = 120_000;
+    const VENT_TIMEOUT: u32 = 1_200_000;
 
     fn estimator() -> StateEstimator {
         StateEstimator::new(1000.0, StateEstimatorParams::default())

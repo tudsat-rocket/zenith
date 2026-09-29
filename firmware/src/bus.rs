@@ -38,8 +38,8 @@ mod mapping;
 mod pdo_mapping;
 
 pub const VERY_FRESH_DURATION: Duration = Duration::from_millis(50);
-pub const BINARY_OUTPUT_MESSAGE_INTERVAL: Duration = Duration::from_millis(500);
-pub const VALVE_MESSAGE_INTERVAL: Duration = Duration::from_millis(500);
+pub const BINARY_OUTPUT_MESSAGE_INTERVAL: Duration = Duration::from_millis(50);
+pub const VALVE_MESSAGE_INTERVAL: Duration = Duration::from_millis(50);
 
 /// The boards heartbeat once a second, so this rides out two missed beats.
 pub const NODE_PRESENCE_TIMEOUT: Duration = Duration::from_millis(3000);
@@ -211,6 +211,9 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
                     }
                     SensorReading::OxProbe(id, value) => {
                         image.ox_probes[id] = Some(DataWithTime::new(value, time));
+                    }
+                    SensorReading::ValveTemperature(value) => {
+                        image.valve_temp = Some(DataWithTime::new(value, time));
                     }
                 }
             }

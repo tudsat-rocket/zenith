@@ -101,7 +101,7 @@ pub struct FailsafeParams {
     #[param(id = 0x0400, name = "UPLINK_IDLE", default = 10_000)]
     pub uplink_idle_timeout: u32,
     /// Time (ms) without ground station contact after which the vehicle vents. 0 disables.
-    #[param(id = 0x0401, name = "UPLINK_VENT", default = 120_000)]
+    #[param(id = 0x0401, name = "UPLINK_VENT", default = 1_200_000)]
     pub uplink_vent_timeout: u32,
 }
 

@@ -12,7 +12,7 @@ use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::ValveId;
 
 const IDLE_TIMEOUT: u32 = 10_000;
-const VENT_TIMEOUT: u32 = 120_000;
+const VENT_TIMEOUT: u32 = 1_200_000;
 
 fn valve(h: &Harness, id: ValveId) -> f32 {
     h.sim.lock().unwrap().hybrid.valve_state(id)

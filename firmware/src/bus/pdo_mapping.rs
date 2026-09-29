@@ -15,6 +15,7 @@ use mission::{
 
 use crate::bus::mapping::{
     BINARY_OUTPUT_ID_MAP, OX_PROBE_ID_MAP, PRESS_SENSOR_ID_MAP, TEMP_SENSOR_ID_MAP, VALVE_ID_MAP,
+    VALVE_TEMP_SENSOR,
 };
 
 // TODO: this is very error prone
@@ -74,6 +75,8 @@ pub enum SensorReading {
     Pressure(PressSensId, f32),
     /// A rung of the oxidizer tank level probe row.
     OxProbe(OxProbeId, f32),
+    /// The heated valve's temperature.
+    ValveTemperature(f32),
 }
 
 /// Valve positions in promille, in the frame's slot order.
@@ -149,6 +152,8 @@ pub fn sensor_msg_to_readings(
             let _ = out.push(SensorReading::Pressure(id, f32::from(raw) / 100.0));
         } else if let Some(id) = ox_probe_id_for(node_id, slot) {
             let _ = out.push(SensorReading::OxProbe(id, f32::from(raw) / 100.0));
+        } else if (SensorAddr { node_id, slot }) == VALVE_TEMP_SENSOR {
+            let _ = out.push(SensorReading::ValveTemperature(f32::from(raw) / 100.0));
         }
     }
 
