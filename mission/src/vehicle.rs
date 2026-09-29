@@ -10,7 +10,7 @@ use crate::flight_logic::FlightLogic;
 use crate::inventory::BinaryOutputId;
 use crate::leds::LedState;
 use crate::mavlink::VehicleSnapshot;
-use crate::params::{FailsafeParams, Params, PropulsionParams, StateMachineParams};
+use crate::params::{FailsafeParams, MiscParams, Params, PropulsionParams, StateMachineParams};
 use crate::tank_level::TankLevelEstimator;
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
 use crate::valves::{ValveCommand, ValveController, ValveError};
@@ -25,6 +25,7 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     propulsion_params: PropulsionParams,
     failsafe_params: FailsafeParams,
     tank_level: TankLevelEstimator,
+    misc_params: MiscParams,
     pub sensors: S,
     pub outputs: O,
     pub storage: F,
@@ -56,6 +57,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             propulsion_params: params.propulsion,
             failsafe_params: params.failsafe,
             tank_level: TankLevelEstimator::new(params.tank_level),
+            misc_params: params.misc,
             sensors,
             outputs,
             storage,
@@ -176,6 +178,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             propulsion: self.propulsion_params.clone(),
             failsafe: self.failsafe_params.clone(),
             tank_level: self.tank_level.params().clone(),
+            misc: self.misc_params.clone(),
         };
 
         params.set(descriptor.id, value);
@@ -185,9 +188,14 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.propulsion_params = params.propulsion;
         self.failsafe_params = params.failsafe;
         self.tank_level.update_params(params.tank_level);
+        self.misc_params = params.misc;
         self.state_estimator.update_params(params.state_estimator);
 
         self.storage.write_param(descriptor.id, value);
+    }
+
+    pub fn misc_params(&self) -> &MiscParams {
+        &self.misc_params
     }
 
     pub fn snapshot(&self) -> VehicleSnapshot<'_> {

@@ -14,10 +14,11 @@ use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{Duration, Instant, Ticker};
 use static_cell::StaticCell;
 
-use firmware::Vehicle;
 use firmware::bus::BusHandler;
+use firmware::buzzer::alerts::Alerts;
 use firmware::can::{CanRxSubscriber, CanTxPublisher};
 use firmware::links::{Links, UplinkCommand};
+use firmware::{Vehicle, buzzer};
 use rapid_dialect::rapid::enums::MavResult;
 
 use {defmt_rtt as _, panic_probe as _};
@@ -79,12 +80,15 @@ async fn init(low_priority_spawner: Spawner) {
     )
     .await;
 
+    fw::buzzer::spawn(board.buzzer, low_priority_spawner);
+
     let can_tx_pub: CanTxPublisher = can1_tx.publisher().unwrap();
     let can_rx_sub: CanRxSubscriber = can1_rx.subscriber().unwrap();
     let bus = BusHandler::new(can_tx_pub, can_rx_sub);
 
     // Initialize main Vehicle & Linkss structs
     let vehicle = Vehicle::new(board.sensors, board.outputs, storage, bus).await;
+    buzzer::set_volume(vehicle.misc_params().buzzer_volume);
     let links = Links::init(
         board.ethernet,
         board.seed,
@@ -102,6 +106,7 @@ async fn init(low_priority_spawner: Spawner) {
     high_priority_spawner
         .spawn(main_loop(vehicle, links, board.iwdg))
         .unwrap();
+    buzzer::request_sound(buzzer::Sound::StartupTech);
 }
 
 #[embassy_executor::task]
@@ -111,6 +116,7 @@ pub async fn main_loop(
     mut iwdg: IndependentWatchdog<'static, IWDG1>,
 ) -> ! {
     let mut cpu = fw::cpu::CpuMonitor::new();
+    let mut alerts = Alerts::default();
     let mut ticker = Ticker::every(Duration::from_micros(1000));
     loop {
         let tick_started = Instant::now();
@@ -120,6 +126,12 @@ pub async fn main_loop(
         }
 
         vehicle.tick().await;
+
+        // Let the buzzer know about mode changes and the battery voltage.
+        alerts.update(
+            vehicle.mode(),
+            vehicle.readings.power.as_ref().map(|p| p.bus_main_voltage),
+        );
 
         // TODO: this belongs somewhere else
         if let Some((token, cmd)) = links.try_recv_command() {
@@ -144,7 +156,26 @@ pub async fn main_loop(
                 }
                 UplinkCommand::SetParam { id, raw } => {
                     vehicle.set_param(id, raw).await;
+                    buzzer::set_volume(vehicle.misc_params().buzzer_volume);
                     MavResult::Accepted
+                }
+                UplinkCommand::PlayTune(name) => {
+                    if alerts.alert_active() {
+                        // The ground must not be able to silence the pad hazard
+                        // warning or the landing beacon.
+                        defmt::warn!("Ignoring tune request while a buzzer alert is active");
+                        MavResult::TemporarilyRejected
+                    } else if name.is_empty() {
+                        // We take an empty tune to mean "stop the buzzer".
+                        buzzer::request_stop();
+                        MavResult::Accepted
+                    } else if let Some(sound) = buzzer::Sound::from_name(&name) {
+                        buzzer::request_sound(sound);
+                        MavResult::Accepted
+                    } else {
+                        defmt::warn!("Unknown tune {}", name.as_str());
+                        MavResult::Denied
+                    }
                 }
                 _ => MavResult::Unsupported,
             };
