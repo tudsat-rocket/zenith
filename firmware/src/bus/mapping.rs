@@ -9,6 +9,8 @@ use mission::inventory::{
 pub const VALVE_STORE_IDX: u16 = 0x2010;
 /// "high current outputs, digital level", one byte per output.
 pub const HC_OUTPUT_STORE_IDX: u16 = 0x2020;
+/// "payload go" flag on the payload node, a plain variable (sub 0).
+pub const PAYLOAD_GO_STORE_IDX: u16 = 0x2036;
 
 #[allow(dead_code)]
 const HCO1: u8 = 1;
@@ -76,6 +78,7 @@ pub const BINARY_OUTPUT_ID_MAP: BinaryOutputMap<IoAddr> = BinaryOutputMap::new([
     IoAddr::new(2, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Camera1,
     IoAddr::new(2, HC_OUTPUT_STORE_IDX, HCO3), // BinaryOutputId::Camera2,
     IoAddr::new(3, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Camera3,
+    IoAddr::new(3, PAYLOAD_GO_STORE_IDX, 0),   // BinaryOutputId::PayloadGo,
 ]);
 
 // Sensor slots, unlike the sub-indices above, are the protocol's own 0-based slot numbering:

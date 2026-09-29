@@ -71,6 +71,8 @@ pub enum BinaryOutputId {
     Camera1,
     Camera2,
     Camera3,
+    /// Tells the payload the vehicle is committed to flight.
+    PayloadGo,
 }
 
 /// Servo-driven actuators that are not valves. They speak the valve protocol on the bus.
@@ -102,7 +104,7 @@ pub type ValveMap<T> = InventoryMap<ValveId, T, 9>;
 pub type TemperatureSensorMap<T> = InventoryMap<TempSensId, T, 2>;
 pub type OxProbeMap<T> = InventoryMap<OxProbeId, T, { OxProbeId::COUNT }>;
 pub type PressureSensorMap<T> = InventoryMap<PressSensId, T, 10>;
-pub type BinaryOutputMap<T> = InventoryMap<BinaryOutputId, T, 5>;
+pub type BinaryOutputMap<T> = InventoryMap<BinaryOutputId, T, 6>;
 pub type TankMap<T> = InventoryMap<TankId, T, 6>;
 pub type ServoMap<T> = InventoryMap<ServoId, T, 4>;
 pub type PowerBoardMap<T> = InventoryMap<PowerBoardId, T, 3>;
@@ -355,13 +357,14 @@ impl InventoryId<10> for PressSensId {
     }
 }
 
-impl InventoryId<5> for BinaryOutputId {
-    const ALL: [Self; 5] = [
+impl InventoryId<6> for BinaryOutputId {
+    const ALL: [Self; 6] = [
         Self::Igniter1,
         Self::Igniter2,
         Self::Camera1,
         Self::Camera2,
         Self::Camera3,
+        Self::PayloadGo,
     ];
 
     fn idx(self) -> usize {
@@ -542,7 +545,7 @@ mod tests {
         check::<TempSensId, 2>();
         check::<OxProbeId, { OxProbeId::COUNT }>();
         check::<PressSensId, 10>();
-        check::<BinaryOutputId, 5>();
+        check::<BinaryOutputId, 6>();
         check::<TankId, 6>();
         check::<ServoId, 4>();
         check::<PowerBoardId, 3>();

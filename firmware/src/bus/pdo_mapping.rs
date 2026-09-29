@@ -14,8 +14,8 @@ use mission::{
 };
 
 use crate::bus::mapping::{
-    BINARY_OUTPUT_ID_MAP, OX_PROBE_ID_MAP, PRESS_SENSOR_ID_MAP, SERVO_ID_MAP, TEMP_SENSOR_ID_MAP,
-    VALVE_ID_MAP, VALVE_TEMP_SENSOR,
+    BINARY_OUTPUT_ID_MAP, HC_OUTPUT_STORE_IDX, OX_PROBE_ID_MAP, PRESS_SENSOR_ID_MAP, SERVO_ID_MAP,
+    TEMP_SENSOR_ID_MAP, VALVE_ID_MAP, VALVE_TEMP_SENSOR,
 };
 
 // TODO: this is very error prone
@@ -157,7 +157,12 @@ pub fn hco_msg_to_binary_outputs(
 fn bo_id_for(node_id: u8, slot: usize) -> Option<BinaryOutputId> {
     BINARY_OUTPUT_ID_MAP
         .iter()
-        .find(|(_, addr)| addr.node_id == node_id && subindex_to_slot(addr.subindex) == Some(slot))
+        .find(|(_, addr)| {
+            // Other binary outputs on the same node (e.g. payload go) are not in the HCO frame.
+            addr.index == HC_OUTPUT_STORE_IDX
+                && addr.node_id == node_id
+                && subindex_to_slot(addr.subindex) == Some(slot)
+        })
         .map(|(id, _)| id)
 }
 

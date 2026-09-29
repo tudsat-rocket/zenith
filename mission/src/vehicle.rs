@@ -200,6 +200,17 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             self.bus_outputs.binary_output[BinaryOutputId::Camera3] = true;
             self.tx_power_armed = true;
         }
+
+        // Payload go is set on entering Pressurize and only cleared again once Landed.
+        match mode {
+            FlightMode::Pressurize => {
+                self.bus_outputs.binary_output[BinaryOutputId::PayloadGo] = true;
+            }
+            FlightMode::Landed => {
+                self.bus_outputs.binary_output[BinaryOutputId::PayloadGo] = false;
+            }
+            _ => {}
+        }
     }
 
     pub fn note_uplink(&mut self) {
