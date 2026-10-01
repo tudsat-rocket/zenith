@@ -339,11 +339,12 @@ impl TelemetryMessage for DownlinkMessage {
                 }
             }
             Self::Components(inner) => {
-                let (valves, nodes, armed) = inner.unpack(context);
+                let (valves, servos, nodes, armed) = inner.unpack(context);
 
                 for valve in valves {
                     sender.anysend(Downlink::from_self(valve)).await;
                 }
+                sender.anysend(Downlink::from_self(servos)).await;
 
                 // The wired links send these from the schedule; rebuilding them here makes a
                 // board look the same either way.

@@ -4,8 +4,8 @@ use core::time::Duration;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use siphasher::sip::SipHasher;
 
-use mission::inventory::{InventoryId, ValveId};
-use rapid_dialect::rapid::enums::MavResult;
+use mission::inventory::{InventoryId, ServoId, ValveId};
+use rapid_dialect::rapid::enums::{MavCmd, MavResult};
 use rapid_dialect::{FlightMode, ValveCommand};
 
 use crate::messages::{ParamEntry, TelemetryMessage};
@@ -24,6 +24,7 @@ pub enum UplinkMessage {
     SetValve(SetValveMessage),
     ParamSet(ParamSetMessage),
     ParamRequest(ParamRequestMessage),
+    SetServo(SetServoMessage),
 }
 
 impl TelemetryMessage for UplinkMessage {
@@ -43,6 +44,7 @@ impl TelemetryMessage for UplinkMessage {
             Self::SetValve(inner) => (SetValveMessage::ID, inner.serialize()?),
             Self::ParamSet(inner) => (ParamSetMessage::ID, inner.serialize()?),
             Self::ParamRequest(inner) => (ParamRequestMessage::ID, inner.serialize()?),
+            Self::SetServo(inner) => (SetServoMessage::ID, inner.serialize()?),
         };
 
         let mut buffer = [0x00; UPLINK_PACKET_SIZE];
@@ -101,6 +103,7 @@ impl TelemetryMessage for UplinkMessage {
             SetValveMessage::ID => UplinkMessage::SetValve(postcard::from_bytes(payload)?),
             ParamSetMessage::ID => UplinkMessage::ParamSet(postcard::from_bytes(payload)?),
             ParamRequestMessage::ID => UplinkMessage::ParamRequest(postcard::from_bytes(payload)?),
+            SetServoMessage::ID => UplinkMessage::SetServo(postcard::from_bytes(payload)?),
             id => {
                 return Err(TelemetryError::UnknownMessageId(id));
             }
@@ -142,6 +145,10 @@ impl UplinkMessage {
             Self::ParamRequest(inner) => Ok(UplinkCommand::RequestParams {
                 first: inner.first,
                 mask: inner.mask,
+            }),
+            Self::SetServo(inner) => inner.command().ok_or_else(|| {
+                defmt::warn!("Rejecting uplink command for an unknown servo.");
+                MavResult::Denied
             }),
         })
     }
@@ -296,6 +303,39 @@ impl UplinkTelemetryMessage for ParamRequestMessage {
     const ID: u8 = 0x05;
 }
 
+/// 0x06: SetServo
+///
+/// Positions one servo, the RF counterpart of MAV_CMD_DO_SET_SERVO.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetServoMessage {
+    /// [`ServoId`] discriminant.
+    servo: u8,
+    /// 0 to 1000.
+    #[serde(with = "postcard::fixint::le")]
+    promille: u16,
+}
+
+impl UplinkTelemetryMessage for SetServoMessage {
+    const ID: u8 = 0x06;
+}
+
+impl SetServoMessage {
+    pub fn new(servo: u8, promille: u16) -> Self {
+        Self { servo, promille }
+    }
+
+    /// The command this packet asks for, or `None` if it names a servo we do not have.
+    pub fn command(&self) -> Option<UplinkCommand> {
+        ServoId::ALL.get(usize::from(self.servo))?;
+
+        Some(UplinkCommand::SetServo {
+            command: MavCmd::DoSetServo,
+            servo: self.servo,
+            promille: self.promille,
+        })
+    }
+}
+
 // TODO: messages for:
 //  - log/storage management
 //  -
@@ -351,6 +391,10 @@ mod tests {
             lengths.iter().all(|l| *l == UPLINK_PAYLOAD_SIZE),
             "{lengths:?} should all be {UPLINK_PAYLOAD_SIZE}"
         );
+
+        let servos = [(0, 0), (u8::MAX, u16::MAX)]
+            .map(|(servo, promille)| payload_len(&SetServoMessage { servo, promille }));
+        assert_eq!(servos[0], servos[1]);
     }
 
     /// The sequence number is 11 bits on the wire, so a receiver comparing two of them has to
@@ -409,6 +453,32 @@ mod tests {
             panic!("decoded as the wrong message")
         };
         assert_eq!((request.first, request.mask), (32, 0x8000_0001));
+    }
+
+    #[test]
+    fn servo_commands_survive_the_packet() {
+        for servo in ServoId::ALL {
+            let sent = SetServoMessage::new(servo as u8, 730);
+            let UplinkMessage::SetServo(decoded) = through_packet(UplinkMessage::SetServo(sent))
+            else {
+                panic!("decoded as the wrong message")
+            };
+
+            assert_eq!(
+                decoded.command(),
+                Some(UplinkCommand::SetServo {
+                    command: MavCmd::DoSetServo,
+                    servo: servo as u8,
+                    promille: 730,
+                }),
+                "{servo:?}"
+            );
+        }
+
+        assert_eq!(
+            SetServoMessage::new(ServoId::ALL.len() as u8, 0).command(),
+            None
+        );
     }
 
     /// A valve id or command kind we do not recognise must not reach the vehicle.

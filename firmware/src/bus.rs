@@ -26,11 +26,14 @@ use mission::bus::{
     Bus, BusDataError, BusInputImage, BusOutputImage, DataWithTime, IoAddr, NODE_ID_COUNT,
     ValveState,
 };
-use mission::inventory::{BinaryOutputId, BinaryOutputMap, InventoryId, ValveMap};
+use mission::inventory::{
+    BinaryOutputId, BinaryOutputMap, InventoryId, ServoId, ServoMap, ValveMap,
+};
 
-use crate::bus::mapping::{BINARY_OUTPUT_ID_MAP, VALVE_ID_MAP};
+use crate::bus::mapping::{BINARY_OUTPUT_ID_MAP, SERVO_ID_MAP, VALVE_ID_MAP};
 use crate::bus::pdo_mapping::{
-    SensorReading, hco_msg_to_binary_outputs, sensor_msg_to_readings, valve_msg_to_valve,
+    SensorReading, hco_msg_to_binary_outputs, sensor_msg_to_readings, valve_msg_to_servo,
+    valve_msg_to_valve,
 };
 use crate::can::{CanRxSubscriber, CanTxPublisher};
 
@@ -56,6 +59,7 @@ pub struct BusHandler {
     pub can: (CanTxPublisher, CanRxSubscriber),
     last_binary_output_messages: BinaryOutputMap<Option<Instant>>,
     last_valve_messages: ValveMap<Option<Instant>>,
+    last_servo_messages: ServoMap<Option<Instant>>,
     last_node_frames: [Option<Instant>; NODE_ID_COUNT],
 }
 
@@ -67,6 +71,7 @@ impl BusHandler {
             can: (can_tx_pub, can_rx_sub),
             last_binary_output_messages: BinaryOutputMap::splat(None),
             last_valve_messages: ValveMap::splat(None),
+            last_servo_messages: ServoMap::splat(None),
             last_node_frames: [None; NODE_ID_COUNT],
         }
     }
@@ -159,6 +164,33 @@ impl Bus for BusHandler {
             self.last_valve_messages[i] = Some(now);
         }
 
+        for i in ServoId::ALL {
+            let Some(state) = outputs.servo[i] else {
+                continue;
+            };
+            let last_message = self.last_servo_messages[i];
+            let is_due = last_message
+                .map(|t| now.saturating_duration_since(t) > VALVE_MESSAGE_INTERVAL)
+                .unwrap_or(true);
+            let has_changed = outputs.servo[i] != self.outputs_last.servo[i];
+
+            if !has_changed {
+                if !is_due || !may_refresh {
+                    continue;
+                }
+                may_refresh = false;
+            }
+
+            let frame = servo_sdo_frame(i, state);
+
+            if self.can.0.try_publish(frame).is_err() {
+                // Can't log here, too noisy.
+                self.can.0.publish_immediate(frame);
+            }
+
+            self.last_servo_messages[i] = Some(now);
+        }
+
         self.outputs_last = outputs;
     }
 }
@@ -191,6 +223,9 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
         TpdoFrame::ValveMeasured(positions) => {
             for (id, state) in valve_msg_to_valve(node_id, positions) {
                 image.valve_state[id] = Some(DataWithTime::new(state, time));
+            }
+            for (id, state) in valve_msg_to_servo(node_id, positions) {
+                image.servo_state[id] = Some(DataWithTime::new(state, time));
             }
         }
         // Digital level and PWM width share one frame now; the outputs we drive as binary
@@ -301,6 +336,14 @@ pub fn set_boolean_msg(state: bool, device: &IoAddr) -> CanMessage {
 }
 
 pub fn valve_sdo_frame(valve: ValveId, state: ValveState) -> Frame {
+    position_sdo_frame(VALVE_ID_MAP[valve], state)
+}
+
+pub fn servo_sdo_frame(servo: ServoId, state: ValveState) -> Frame {
+    position_sdo_frame(SERVO_ID_MAP[servo], state)
+}
+
+fn position_sdo_frame(addr: IoAddr, state: ValveState) -> Frame {
     let data = heapless::Vec::from_slice(&state.promille().to_le_bytes()).unwrap();
-    can_msg_to_frame(&sdo_write_msg(&data, &VALVE_ID_MAP[valve]))
+    can_msg_to_frame(&sdo_write_msg(&data, &addr))
 }

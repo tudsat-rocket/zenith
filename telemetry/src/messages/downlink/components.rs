@@ -1,14 +1,16 @@
+use core::num::Wrapping;
+
 use serde::{Deserialize, Serialize};
 
 use mission::bus::{NodeSet, ValveState};
-use mission::inventory::{InventoryId, ValveId, valve_is_heated};
-use mission::mavlink::{VehicleSnapshot, centi_celsius, valve_heater_flags};
+use mission::inventory::{InventoryId, ServoId, ServoMap, ValveId, valve_is_heated};
+use mission::mavlink::{VehicleSnapshot, centi_celsius, servo_output_raw, valve_heater_flags};
 use rapid_dialect::rapid::enums::ValveFlag;
-use rapid_dialect::rapid::messages::Valve;
+use rapid_dialect::rapid::messages::{ServoOutputRaw, Valve};
 
 use super::{ConnectionContext, DownlinkTelemetryMessage, pack_temperature, unpack_temperature};
 
-// `ComponentsMessage` only has room for one valve temperature.
+// `ComponentsMessage` only has room for one valve temperature and one heater bit.
 #[allow(
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,
@@ -26,19 +28,42 @@ const _: () = {
     assert!(heated <= 1);
 };
 
+const _: () = assert!(
+    ValveCode::HEATER_SHIFT < u32::BITS as usize,
+    "valve codes, servo codes and the heater bit no longer fit one word"
+);
+
+/// Where each servo's code goes in `commanded`: after the valves, one [`ValveCode::BITS`] slot
+/// each.
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "idx() is 0..4 by the InventoryId contract"
+)]
+fn servo_slot(servo: ServoId) -> usize {
+    ValveId::ALL.len() + servo.idx()
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u8)]
 enum ValveCode {
     Closed = 0b00,
     Open = 0b01,
     Partial = 0b10,
-    /// No reading on the bus. Only reachable for the measured state.
+    /// No reading on the bus, or a servo never commanded.
     Unknown = 0b11,
 }
 
 impl ValveCode {
     const BITS: usize = 2;
     const MASK: u32 = 0b11;
+
+    /// Bits above the valve codes.
+    #[allow(clippy::arithmetic_side_effects, reason = "constant 2 * 9")]
+    const SPARE_SHIFT: usize = Self::BITS * ValveId::ALL.len();
+
+    /// Bit above the servo codes.
+    #[allow(clippy::arithmetic_side_effects, reason = "constant 2 * (9 + 4)")]
+    const HEATER_SHIFT: usize = Self::BITS * (ValveId::ALL.len() + ServoId::ALL.len());
 
     fn from_state(state: Option<ValveState>) -> Self {
         match state.map(|s| s.promille()) {
@@ -49,22 +74,20 @@ impl ValveCode {
         }
     }
 
-    /// One code per valve, at `BITS * idx()`, so eighteen of the thirty-two bits are used.
+    /// Each code at `BITS * slot`.
     #[allow(
         clippy::arithmetic_side_effects,
-        reason = "idx() is 0..9 by the InventoryId contract, so the shift stays below 32"
+        reason = "slots are valve idx() or servo_slot(), which the const assert keeps below 32"
     )]
-    fn pack_all(mut f: impl FnMut(ValveId) -> Self) -> u32 {
-        let mut bits = 0;
-        for valve in ValveId::ALL {
-            bits |= (f(valve) as u32) << (Self::BITS * valve.idx());
-        }
-        bits
+    fn pack(codes: impl IntoIterator<Item = (usize, Self)>) -> u32 {
+        codes.into_iter().fold(0, |bits, (slot, code)| {
+            bits | (code as u32) << (Self::BITS * slot)
+        })
     }
 
-    #[allow(clippy::arithmetic_side_effects, reason = "same bound as `pack_all`")]
-    fn unpack_one(bits: u32, valve: ValveId) -> Self {
-        match (bits >> (Self::BITS * valve.idx())) & Self::MASK {
+    #[allow(clippy::arithmetic_side_effects, reason = "same bound as `pack`")]
+    fn unpack_one(bits: u32, slot: usize) -> Self {
+        match (bits >> (Self::BITS * slot)) & Self::MASK {
             0b00 => Self::Closed,
             0b01 => Self::Open,
             0b10 => Self::Partial,
@@ -72,16 +95,21 @@ impl ValveCode {
         }
     }
 
-    /// Bits above the valve codes.
-    #[allow(clippy::arithmetic_side_effects, reason = "constant 2 * 9")]
-    const SPARE_SHIFT: usize = Self::BITS * ValveId::ALL.len();
-
     fn position(self) -> f32 {
         match self {
             Self::Closed => 0.0,
             Self::Open => 1.0,
             Self::Partial => 0.5,
             Self::Unknown => f32::NAN,
+        }
+    }
+
+    fn state(self) -> Option<ValveState> {
+        match self {
+            Self::Closed => Some(ValveState::fully_closed()),
+            Self::Open => Some(ValveState::fully_open()),
+            Self::Partial => Some(ValveState::from_promille_clamped(500)),
+            Self::Unknown => None,
         }
     }
 }
@@ -93,8 +121,8 @@ pub struct ComponentsMessage {
     /// heated valve.
     #[serde(with = "postcard::fixint::le")]
     reported: u32,
-    /// One [`ValveCode`] per valve, as the vehicle last resolved it, then one heater bit per valve
-    /// at `SPARE_SHIFT + idx()`.
+    /// One [`ValveCode`] per valve and servo, as the vehicle last resolved it, then the heater
+    /// bit of the heated valve.
     #[serde(with = "postcard::fixint::le")]
     commanded: u32,
     /// Bit n is node id n.
@@ -108,61 +136,73 @@ pub struct ComponentsMessage {
 impl DownlinkTelemetryMessage for ComponentsMessage {
     const ID: u8 = 0x04;
     type Input<'a> = &'a VehicleSnapshot<'a>;
-    /// One per [`ValveId`], then the nodes on the bus and the armed subset of them.
-    type Output = ([Valve; 9], NodeSet, NodeSet);
+    /// One per [`ValveId`], the commanded servos, then the nodes on the bus and the armed subset
+    /// of them.
+    type Output = ([Valve; 9], ServoOutputRaw, NodeSet, NodeSet);
 
-    #[allow(
-        clippy::arithmetic_side_effects,
-        reason = "SPARE_SHIFT + idx() is at most 26, so the shift stays below 32"
-    )]
     fn pack(snapshot: Self::Input<'_>) -> Self {
-        let mut heaters = 0;
+        let mut heater = false;
         let mut temperature = None;
         for valve in ValveId::ALL {
             if let Some((heater_on, celsius)) = snapshot.valve_heater(valve) {
-                heaters |= u32::from(heater_on) << (ValveCode::SPARE_SHIFT + valve.idx());
+                heater = heater_on;
                 temperature = celsius;
             }
         }
 
+        let reported = ValveCode::pack(ValveId::ALL.map(|valve| {
+            let state = snapshot.input_image.valve_state[valve].map(|s| s.data);
+            (valve.idx(), ValveCode::from_state(state))
+        }));
+        let commanded_valves = ValveCode::pack(ValveId::ALL.map(|valve| {
+            let state = Some(snapshot.output_image.valve[valve]);
+            (valve.idx(), ValveCode::from_state(state))
+        }));
+        let commanded_servos = ValveCode::pack(ServoId::ALL.map(|servo| {
+            let state = snapshot.output_image.servo[servo];
+            (servo_slot(servo), ValveCode::from_state(state))
+        }));
+
         Self {
-            reported: ValveCode::pack_all(|valve| {
-                ValveCode::from_state(snapshot.input_image.valve_state[valve].map(|s| s.data))
-            }) | u32::from(pack_temperature(temperature)) << ValveCode::SPARE_SHIFT,
-            commanded: ValveCode::pack_all(|valve| {
-                ValveCode::from_state(Some(snapshot.output_image.valve[valve]))
-            }) | heaters,
+            reported: reported | u32::from(pack_temperature(temperature)) << ValveCode::SPARE_SHIFT,
+            commanded: commanded_valves
+                | commanded_servos
+                | u32::from(heater) << ValveCode::HEATER_SHIFT,
             node_presence: snapshot.input_image.nodes.bits(),
             node_armed: snapshot.input_image.nodes_armed.bits(),
         }
     }
 
-    #[allow(clippy::arithmetic_side_effects, reason = "same bound as `pack`")]
-    fn unpack(self, _context: &mut ConnectionContext) -> Self::Output {
+    fn unpack(self, context: &mut ConnectionContext) -> Self::Output {
         #[allow(
             clippy::cast_possible_truncation,
             reason = "the code is the byte above the valves"
         )]
         let temperature = unpack_temperature((self.reported >> ValveCode::SPARE_SHIFT) as u8);
+        let heater_on = self.commanded >> ValveCode::HEATER_SHIFT & 1 != 0;
 
         let valves = ValveId::ALL.map(|valve| {
             let (flags, temperature) = if valve_is_heated(valve) {
-                let heater_on = self.commanded >> (ValveCode::SPARE_SHIFT + valve.idx()) & 1 != 0;
                 (valve_heater_flags(heater_on), centi_celsius(temperature))
             } else {
                 (ValveFlag::empty(), i16::MAX)
             };
             Valve {
                 id: valve,
-                state: ValveCode::unpack_one(self.reported, valve).position(),
-                commanded: ValveCode::unpack_one(self.commanded, valve).position(),
+                state: ValveCode::unpack_one(self.reported, valve.idx()).position(),
+                commanded: ValveCode::unpack_one(self.commanded, valve.idx()).position(),
                 flags,
                 temperature,
             }
         });
 
+        let servos = ServoMap::from_fn(|servo| {
+            ValveCode::unpack_one(self.commanded, servo_slot(servo)).state()
+        });
+
         (
             valves,
+            servo_output_raw(Wrapping(context.time), &servos),
             NodeSet::from_bits(self.node_presence),
             NodeSet::from_bits(self.node_armed),
         )
@@ -174,8 +214,6 @@ pub(crate) mod tests {
     use super::super::tests::{SnapshotParts, through_packet};
     use super::*;
 
-    use core::num::Wrapping;
-
     use mission::bus::{BusOutputImage, DataWithTime};
     use rapid_dialect::FlightMode;
 
@@ -186,6 +224,9 @@ pub(crate) mod tests {
         let mut outputs = BusOutputImage::default();
         for valve in ValveId::ALL {
             outputs.valve[valve] = ValveState::fully_open();
+        }
+        for servo in ServoId::ALL {
+            outputs.servo[servo] = Some(ValveState::fully_open());
         }
         outputs
     }
@@ -228,7 +269,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// The heater bits sit above the valve codes, so neither may disturb the other.
+    /// The heater bit and temperature share words with the valve and servo codes, so none may
+    /// disturb the others.
     #[test]
     fn heater_survives_the_packet() {
         for mode in [FlightMode::Idle, FlightMode::FillOxidizer] {
@@ -242,8 +284,17 @@ pub(crate) mod tests {
             let DownlinkMessage::Components(decoded) = through_packet(msg) else {
                 panic!("decoded as the wrong message")
             };
-            let (valves, ..) = decoded.unpack(&mut ConnectionContext::init(0));
+            let (valves, servos, ..) = decoded.unpack(&mut ConnectionContext::init(0));
 
+            assert_eq!(
+                [
+                    servos.servo1_raw,
+                    servos.servo2_raw,
+                    servos.servo3_raw,
+                    servos.servo4_raw
+                ],
+                [2000; 4]
+            );
             for valve in &valves {
                 assert_eq!(valve.commanded, 1.0, "{:?}", valve.id);
                 assert!(valve.state.is_nan(), "{:?}", valve.id);
@@ -295,7 +346,7 @@ pub(crate) mod tests {
         let DownlinkMessage::Components(decoded) = through_packet(msg) else {
             panic!("decoded as the wrong message")
         };
-        let (_, nodes, armed) = decoded.unpack(&mut ConnectionContext::init(0));
+        let (_, _, nodes, armed) = decoded.unpack(&mut ConnectionContext::init(0));
 
         for node_id in 0..16 {
             assert_eq!(
@@ -311,34 +362,61 @@ pub(crate) mod tests {
         }
     }
 
-    /// Codes must not bleed into their neighbours: nine of them share one word.
     #[test]
-    fn valve_codes_do_not_overlap() {
-        for subject in ValveId::ALL {
+    fn commanded_servos_survive_the_packet() {
+        let mut parts = SnapshotParts::default();
+        parts.outputs.servo[ServoId::OxidizerDisconnect] = Some(ValveState::fully_open());
+        parts.outputs.servo[ServoId::PressurantRetract] = Some(ValveState::fully_closed());
+        parts.outputs.servo[ServoId::OxidizerRetract] = Some(ValveState::from_percent_open(20));
+
+        let msg = DownlinkMessage::Components(ComponentsMessage::pack(&parts.snapshot()));
+        let DownlinkMessage::Components(decoded) = through_packet(msg) else {
+            panic!("decoded as the wrong message")
+        };
+        let (_, servos, ..) = decoded.unpack(&mut ConnectionContext::init(0));
+
+        assert_eq!(
+            [
+                servos.servo1_raw,
+                servos.servo2_raw,
+                servos.servo3_raw,
+                servos.servo4_raw
+            ],
+            [0, 2000, 1000, 1500]
+        );
+    }
+
+    /// Codes must not bleed into their neighbours: nine valves and four servos share a word.
+    #[test]
+    fn codes_do_not_overlap() {
+        let slots = || {
+            ValveId::ALL
+                .into_iter()
+                .map(|valve| valve.idx())
+                .chain(ServoId::ALL.into_iter().map(servo_slot))
+        };
+
+        for subject in slots() {
             for code in [
                 ValveCode::Closed,
                 ValveCode::Open,
                 ValveCode::Partial,
                 ValveCode::Unknown,
             ] {
-                let bits = ValveCode::pack_all(|valve| {
-                    if valve == subject {
+                let at = |slot| {
+                    if slot == subject {
                         code
                     } else {
                         ValveCode::Closed
                     }
-                });
+                };
+                let bits = ValveCode::pack(slots().map(|slot| (slot, at(slot))));
 
-                for other in ValveId::ALL {
-                    let expected = if other == subject {
-                        code
-                    } else {
-                        ValveCode::Closed
-                    };
+                for other in slots() {
                     assert_eq!(
                         ValveCode::unpack_one(bits, other),
-                        expected,
-                        "{code:?} on {subject:?} leaked into {other:?}"
+                        at(other),
+                        "{code:?} in slot {subject} leaked into slot {other}"
                     );
                 }
             }

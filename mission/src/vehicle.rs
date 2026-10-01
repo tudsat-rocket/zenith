@@ -1,13 +1,13 @@
 use core::num::Wrapping;
 
 use rapid_dialect::FlightMode;
-use rapid_dialect::rapid::enums::ValveId;
+use rapid_dialect::rapid::enums::{MavResult, ValveId};
 
 use state_estimator::StateEstimator;
 
-use crate::bus::{Bus, BusInputImage, BusOutputImage, DataWithTime};
+use crate::bus::{Bus, BusInputImage, BusOutputImage, DataWithTime, ValveState};
 use crate::flight_logic::FlightLogic;
-use crate::inventory::BinaryOutputId;
+use crate::inventory::{BinaryOutputId, InventoryId, ServoId};
 use crate::leds::LedState;
 use crate::mavlink::VehicleSnapshot;
 use crate::params::{FailsafeParams, MiscParams, Params, PropulsionParams, StateMachineParams};
@@ -188,6 +188,15 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         cmd: ValveCommand,
     ) -> Result<(), ValveError> {
         self.valves.try_command(valve, cmd, self.time)
+    }
+
+    /// `servo` indexes [`ServoId::ALL`].
+    pub fn try_command_servo(&mut self, servo: u8, promille: u16) -> Result<(), MavResult> {
+        let servo = ServoId::ALL
+            .get(usize::from(servo))
+            .ok_or(MavResult::Denied)?;
+        self.bus_outputs.servo[*servo] = Some(ValveState::from_promille_clamped(promille));
+        Ok(())
     }
 
     pub async fn set_param(&mut self, id: u16, raw: u32) {
