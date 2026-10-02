@@ -11,8 +11,8 @@ use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::ValveId;
 
 use mission::inventory::{
-    BinaryOutputId, BinaryOutputMap, InventoryId, OxProbeId, OxProbeMap, PressSensId,
-    PressureSensorMap, TankId, TemperatureSensorMap, ValveMap,
+    BinaryOutputId, BinaryOutputMap, InventoryId, OxProbeId, OxProbeMap, PowerBoardMap,
+    PressSensId, PressureSensorMap, TankId, TemperatureSensorMap, ValveMap,
 };
 use mission::valves::ValveCommand;
 
@@ -387,6 +387,7 @@ impl Bus for SitlBus {
             } else {
                 nodes
             },
+            power_boards: PowerBoardMap::splat(None),
         }
     }
 
