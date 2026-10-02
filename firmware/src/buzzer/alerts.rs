@@ -99,6 +99,8 @@ impl Alerts {
             | FlightMode::FillPressurant
             | FlightMode::FillOxidizer
             | FlightMode::Vent
+            | FlightMode::Disconnect
+            | FlightMode::Retract
             | FlightMode::Burn
             | FlightMode::Coast
             | FlightMode::DeployDrogue

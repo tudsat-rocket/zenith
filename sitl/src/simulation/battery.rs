@@ -55,6 +55,8 @@ impl Battery {
             | FlightMode::Pressurize
             | FlightMode::Hold
             | FlightMode::Vent
+            | FlightMode::Disconnect
+            | FlightMode::Retract
             | FlightMode::DetectLaunch => 0.3,
             FlightMode::Ignite => 4.8,
             FlightMode::Burn

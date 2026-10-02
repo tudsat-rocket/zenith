@@ -408,6 +408,8 @@ impl StateEstimator {
             | FlightMode::FillPressurant
             | FlightMode::FillOxidizer
             | FlightMode::Vent
+            | FlightMode::Disconnect
+            | FlightMode::Retract
             | FlightMode::Pressurize
             | FlightMode::Hold
             | FlightMode::DetectLaunch

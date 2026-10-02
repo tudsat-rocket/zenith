@@ -35,6 +35,8 @@ impl LedState {
             FlightMode::FillPressurant => (0, 0xff, 0b0000_0001),
             FlightMode::FillOxidizer => (0, 0xff, 0b0000_0101),
             FlightMode::Vent => (0b0000_0100, 0xff, 0b0000_0001),
+            FlightMode::Disconnect => (0b0000_0101, 0xff, 0),
+            FlightMode::Retract => (0b0001_0101, 0xff, 0),
             FlightMode::Pressurize => (0b0000_0001, 0xff, 0),
             FlightMode::Hold => (0b0000_0001, 0xff, 0b0000_0001),
             FlightMode::DetectLaunch => (0xff, 0b0000_0001, 0),
