@@ -1,7 +1,10 @@
 use core::num::Wrapping;
 
+use rapid_dialect::rapid::enums::MavBatteryChargeState;
+
 use crate::inventory::{
-    BinaryOutputMap, OxProbeMap, PressureSensorMap, ServoMap, TemperatureSensorMap, ValveMap,
+    BinaryOutputMap, InventoryId, OxProbeMap, PowerBoardId, PowerBoardMap, PressureSensorMap,
+    ServoMap, TemperatureSensorMap, ValveMap,
 };
 
 pub trait Bus {
@@ -45,6 +48,17 @@ pub struct BusInputImage {
     pub nodes: NodeSet,
     /// A subset of `nodes`: a board we cannot hear from tells us nothing.
     pub nodes_armed: NodeSet,
+    /// `None` while the board is not present.
+    pub power_boards: PowerBoardMap<Option<PowerBoardReading>>,
+}
+
+/// One power board's battery pack. Each field arrives in a frame of its own.
+#[derive(Clone, Copy, Default)]
+pub struct PowerBoardReading {
+    pub voltage_mv: Option<u16>,
+    /// Positive while discharging.
+    pub current_ma: Option<i32>,
+    pub charge_state: MavBatteryChargeState,
 }
 
 /// The IO board protocol's node id field is four bits wide.
@@ -69,6 +83,15 @@ pub const IO_NODE_IDS: [u8; NODE_ID_COUNT - 2] = {
     }
     ids
 };
+
+/// As flashed by power_board_firmware's `justfile`.
+pub const POWER_BOARD_NODE_IDS: PowerBoardMap<u8> = PowerBoardMap::new([11, 12, 13]);
+
+pub fn power_board(node_id: u8) -> Option<PowerBoardId> {
+    PowerBoardId::ALL
+        .into_iter()
+        .find(|&id| POWER_BOARD_NODE_IDS[id] == node_id)
+}
 
 /// A set of IO board node ids. Bit n is node id n, which is also the LoRa downlink's encoding,
 /// so [`Self::bits`] goes straight onto the wire.
@@ -169,6 +192,7 @@ impl BusInputImage {
             valve_temp: None,
             nodes: NodeSet::NONE,
             nodes_armed: NodeSet::NONE,
+            power_boards: PowerBoardMap::splat(None),
         }
     }
 }

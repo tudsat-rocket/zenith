@@ -20,17 +20,17 @@ use iocan_proto::{TpdoFrame, TpdoKind, decode_pdo};
 use num_traits::float::Float;
 use zencan_common::{CanId, CanMessage, sdo::SdoRequest};
 
-use rapid_dialect::rapid::enums::{ValveId, valve_id};
+use rapid_dialect::rapid::enums::{MavBatteryChargeState, ValveId, valve_id};
 
 use mission::bus::{
     Bus, BusDataError, BusInputImage, BusOutputImage, DataWithTime, IoAddr, NODE_ID_COUNT,
-    ValveState,
+    POWER_BOARD_NODE_IDS, ValveState, power_board,
 };
 use mission::inventory::{
-    BinaryOutputId, BinaryOutputMap, InventoryId, ServoId, ServoMap, ValveMap,
+    BinaryOutputId, BinaryOutputMap, InventoryId, PowerBoardId, ServoId, ServoMap, ValveMap,
 };
 
-use crate::bus::mapping::{BINARY_OUTPUT_ID_MAP, SERVO_ID_MAP, VALVE_ID_MAP};
+use crate::bus::mapping::{BINARY_OUTPUT_ID_MAP, SERVO_ID_MAP, VALVE_ID_MAP, charger_bits};
 use crate::bus::pdo_mapping::{
     SensorReading, hco_msg_to_binary_outputs, sensor_msg_to_readings, valve_msg_to_servo,
     valve_msg_to_valve,
@@ -97,6 +97,12 @@ impl Bus for BusHandler {
 
         // A board gone quiet would otherwise keep claiming its last rail reading.
         self.input.nodes_armed = self.input.nodes_armed.intersection(self.input.nodes);
+        let nodes = self.input.nodes;
+        self.input.power_boards.update(|id, reading| {
+            if !nodes.contains(POWER_BOARD_NODE_IDS[id]) {
+                *reading = None;
+            }
+        });
 
         self.input.clone()
     }
@@ -214,7 +220,14 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
         return Some(node_id);
     };
 
-    match TpdoFrame::decode(kind, data) {
+    let frame = TpdoFrame::decode(kind, data);
+
+    if let Some(board) = power_board(node_id) {
+        injest_power_board_frame(image, board, frame);
+        return Some(node_id);
+    }
+
+    match frame {
         // The measured position is where the valve actually is; commanded and target are the
         // node echoing back what it was asked for, which we already know.
         TpdoFrame::ValveMeasured(positions) => {
@@ -275,6 +288,36 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
     }
 
     Some(node_id)
+}
+
+fn injest_power_board_frame(image: &mut BusInputImage, board: PowerBoardId, frame: TpdoFrame) {
+    let reading = image.power_boards[board].get_or_insert_default();
+
+    match frame {
+        TpdoFrame::RailVoltage([pack_mv, _, _]) => reading.voltage_mv = Some(pack_mv),
+        TpdoFrame::RailCurrent([charge_ma, discharge_ma, _]) => {
+            reading.current_ma = Some(i32::from(discharge_ma) - i32::from(charge_ma));
+        }
+        // `raw_debug` is the charger's I2C health; without it every other field is stale.
+        TpdoFrame::Status {
+            raw_debug: i2c_ok,
+            stalled_mask: bits,
+            ..
+        } => {
+            let phase =
+                (bits & charger_bits::CHARGE_STATE_MASK) >> charger_bits::CHARGE_STATE_SHIFT;
+            reading.charge_state = if !i2c_ok {
+                MavBatteryChargeState::Undefined
+            } else if bits & charger_bits::FAULT != 0 {
+                MavBatteryChargeState::Failed
+            } else if (1..=6).contains(&phase) {
+                MavBatteryChargeState::Charging
+            } else {
+                MavBatteryChargeState::Ok
+            };
+        }
+        _ => (),
+    }
 }
 
 // technically const
