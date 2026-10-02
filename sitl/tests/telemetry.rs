@@ -12,7 +12,7 @@ use links::SELF_COMPONENT_ID;
 use mission::TankId;
 use mission::inventory::InventoryId;
 use rapid_dialect::Rapid;
-use rapid_dialect::rapid::enums::{MavModeFlag, ValveId};
+use rapid_dialect::rapid::enums::{MavModeFlag, MavType, ValveId};
 
 /// Two full cycles of the slowest (2000 ms) interval, so every combination of phases that can
 /// coincide has had the chance to. Every interval in the schedule has to divide this, or the
@@ -39,6 +39,12 @@ macro_rules! assert_rates {
     };
 }
 
+/// One per simulated power board, or the flight computer's own when there are none.
+#[cfg(feature = "hybrid")]
+const BATTERY_IDS: [u8; 3] = [1, 2, 3];
+#[cfg(not(feature = "hybrid"))]
+const BATTERY_IDS: [u8; 1] = [1];
+
 #[test]
 fn every_message_goes_out_at_its_intended_rate() {
     block_on(async {
@@ -58,7 +64,6 @@ fn every_message_goes_out_at_its_intended_rate() {
             ScaledImu every 100,
             ScaledImu2 every 100,
             ScaledImu3 every 100,
-            BatteryStatus every 200,
             LocalPositionNed every 200,
             ScaledPressure every 200,
             ScaledPressure2 every 200,
@@ -87,6 +92,25 @@ fn every_message_goes_out_at_its_intended_rate() {
             );
         }
 
+        for id in BATTERY_IDS {
+            let reports = sent
+                .iter()
+                .filter(|m| {
+                    m.component_id == SELF_COMPONENT_ID
+                        && matches!(&m.message, Rapid::BatteryStatus(b) if b.id == id)
+                })
+                .count();
+            assert_eq!(
+                reports, propulsion_reports,
+                "battery {id} reported {reports} times"
+            );
+        }
+        let batteries = sent
+            .iter()
+            .filter(|m| matches!(m.message, Rapid::BatteryStatus(_)))
+            .count();
+        assert_eq!(batteries, BATTERY_IDS.len() * propulsion_reports);
+
         for valve in ValveId::ALL {
             let reports = sent
                 .iter()
@@ -106,6 +130,11 @@ fn every_message_goes_out_at_its_intended_rate() {
 const SIMULATED_NODES: [u8; 7] = [2, 3, 4, 5, 6, 7, 8];
 #[cfg(not(feature = "hybrid"))]
 const SIMULATED_NODES: [u8; 0] = [];
+/// Heartbeat like the io boards, but have no high-current rail to arm.
+#[cfg(feature = "hybrid")]
+const SIMULATED_POWER_BOARD_NODES: [u8; 3] = [11, 12, 13];
+#[cfg(not(feature = "hybrid"))]
+const SIMULATED_POWER_BOARD_NODES: [u8; 0] = [];
 
 /// A publisher that forgets which component it speaks for would show up as a phantom board.
 #[test]
@@ -142,14 +171,20 @@ fn every_present_io_board_node_heartbeats_as_its_own_component() {
         }
 
         for message in sent.iter().filter(|m| m.component_id != SELF_COMPONENT_ID) {
+            let expected_type = if SIMULATED_POWER_BOARD_NODES.contains(&message.component_id) {
+                MavType::Battery
+            } else {
+                MavType::Servo
+            };
             assert!(
-                matches!(message.message, Rapid::Heartbeat(_)),
-                "component {} sent something other than a heartbeat",
+                matches!(&message.message, Rapid::Heartbeat(h) if h.type_ == expected_type),
+                "component {} sent something other than a {expected_type:?} heartbeat",
                 message.component_id
             );
             assert!(
-                SIMULATED_NODES.contains(&message.component_id),
-                "component {} is not a simulated io board node",
+                SIMULATED_NODES.contains(&message.component_id)
+                    || SIMULATED_POWER_BOARD_NODES.contains(&message.component_id),
+                "component {} is not a simulated bus node",
                 message.component_id
             );
         }

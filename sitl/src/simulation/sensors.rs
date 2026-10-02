@@ -12,6 +12,7 @@ use nalgebra::Vector3;
 use rand::Rng;
 use rapid_dialect::FlightMode;
 
+use mission::inventory::PowerBoardId;
 use mission::{AdcData, BaroReading, SensorReadings, Sensors};
 use state_estimator::GpsDatum;
 
@@ -302,6 +303,8 @@ impl StdSensors {
 impl Sensors for StdSensors {
     async fn tick(&mut self) -> SensorReadings {
         let sim = self.sim.lock().unwrap();
-        self.sensor_model.sample(&sim.physics, &sim.battery)
+        // Which pack feeds the flight computer is arbitrary.
+        self.sensor_model
+            .sample(&sim.physics, &sim.batteries[PowerBoardId::Board1])
     }
 }

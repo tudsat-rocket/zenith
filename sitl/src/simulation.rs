@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use mission::inventory::{PowerBoardId, PowerBoardMap};
 use rapid_dialect::FlightMode;
 
 pub mod battery;
@@ -22,7 +23,8 @@ use hybrid::HybridSimulation;
 
 pub struct Simulation {
     pub physics: FlightPhysics,
-    pub battery: Battery,
+    /// One pack per power board.
+    pub batteries: PowerBoardMap<Battery>,
     #[cfg(feature = "hybrid")]
     pub hybrid: HybridSimulation,
 }
@@ -33,7 +35,7 @@ impl Simulation {
     pub fn new(flags: RecoveryFlags) -> Self {
         Self {
             physics: FlightPhysics::new(flags),
-            battery: Battery::new(),
+            batteries: new_batteries(),
             #[cfg(feature = "hybrid")]
             hybrid: HybridSimulation::new(),
         }
@@ -46,7 +48,7 @@ impl Simulation {
         self.hybrid.set_flight_mode(mode);
 
         if mode == FlightMode::Idle && prev != FlightMode::Idle {
-            self.battery = Battery::new();
+            self.batteries = new_batteries();
             #[cfg(feature = "hybrid")]
             {
                 self.hybrid = HybridSimulation::new();
@@ -56,7 +58,8 @@ impl Simulation {
 
     pub fn tick(&mut self) {
         self.physics.tick();
-        self.battery.tick(DT, self.physics.mode);
+        let mode = self.physics.mode;
+        self.batteries.update(|_, battery| battery.tick(DT, mode));
 
         #[cfg(feature = "hybrid")]
         self.hybrid.tick(DT);
@@ -64,4 +67,15 @@ impl Simulation {
         self.physics
             .set_chamber_pressure(self.hybrid.chamber_pressure);
     }
+}
+
+/// Charged differently, so the packs can be told apart. The levels are arbitrary.
+fn new_batteries() -> PowerBoardMap<Battery> {
+    PowerBoardMap::from_fn(|id| {
+        Battery::new(match id {
+            PowerBoardId::Board1 => 0.90,
+            PowerBoardId::Board2 => 0.80,
+            PowerBoardId::Board3 => 0.70,
+        })
+    })
 }

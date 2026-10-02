@@ -6,9 +6,12 @@
 
 use std::num::Wrapping;
 
-use mission::bus::{Bus, BusInputImage, BusOutputImage, DataWithTime, NodeSet, ValveState};
+use mission::bus::{
+    Bus, BusInputImage, BusOutputImage, DataWithTime, NodeSet, POWER_BOARD_NODE_IDS,
+    PowerBoardReading, ValveState,
+};
 use rapid_dialect::FlightMode;
-use rapid_dialect::rapid::enums::ValveId;
+use rapid_dialect::rapid::enums::{MavBatteryChargeState, ValveId};
 
 use mission::inventory::{
     BinaryOutputId, BinaryOutputMap, InventoryId, OxProbeId, OxProbeMap, PowerBoardMap,
@@ -361,11 +364,30 @@ impl Bus for SitlBus {
             ))
         });
 
-        let mut nodes = NodeSet::NONE;
+        let mut io_nodes = NodeSet::NONE;
         for node_id in ONBOARD_NODES {
+            io_nodes.set(node_id, true);
+        }
+        io_nodes.set(UMBILICAL_NODE, umbilical_connected);
+
+        let mut nodes = io_nodes;
+        // No high-current rail, so never armed.
+        for &node_id in POWER_BOARD_NODE_IDS.values() {
             nodes.set(node_id, true);
         }
-        nodes.set(UMBILICAL_NODE, umbilical_connected);
+
+        let power_boards = PowerBoardMap::from_fn(|id| {
+            let battery = &sim.batteries[id];
+            Some(PowerBoardReading {
+                voltage_mv: Some((battery.voltage * 1000.0) as u16),
+                current_ma: Some((battery.current * 1000.0) as i32),
+                charge_state: if battery.current < 0.0 {
+                    MavBatteryChargeState::Charging
+                } else {
+                    MavBatteryChargeState::Ok
+                },
+            })
+        });
 
         let ox_probes = OxProbeMap::from_fn(|id| {
             Some(DataWithTime::new(sim.hybrid.probe_temperature(id), now))
@@ -386,9 +408,9 @@ impl Bus for SitlBus {
             nodes_armed: if sim.hybrid.flight_mode == FlightMode::Idle {
                 NodeSet::NONE
             } else {
-                nodes
+                io_nodes
             },
-            power_boards: PowerBoardMap::splat(None),
+            power_boards,
         }
     }
 
