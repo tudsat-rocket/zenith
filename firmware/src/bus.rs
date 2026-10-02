@@ -165,9 +165,6 @@ impl Bus for BusHandler {
         }
 
         for i in ServoId::ALL {
-            let Some(state) = outputs.servo[i] else {
-                continue;
-            };
             let last_message = self.last_servo_messages[i];
             let is_due = last_message
                 .map(|t| now.saturating_duration_since(t) > VALVE_MESSAGE_INTERVAL)
@@ -181,7 +178,7 @@ impl Bus for BusHandler {
                 may_refresh = false;
             }
 
-            let frame = servo_sdo_frame(i, state);
+            let frame = servo_sdo_frame(i, outputs.servo[i]);
 
             if self.can.0.try_publish(frame).is_err() {
                 // Can't log here, too noisy.

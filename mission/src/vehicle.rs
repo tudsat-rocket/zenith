@@ -10,7 +10,10 @@ use crate::flight_logic::FlightLogic;
 use crate::inventory::{BinaryOutputId, InventoryId, ServoId};
 use crate::leds::LedState;
 use crate::mavlink::VehicleSnapshot;
-use crate::params::{FailsafeParams, MiscParams, Params, PropulsionParams, StateMachineParams};
+use crate::params::{
+    FailsafeParams, MiscParams, Params, PropulsionParams, QdParams, StateMachineParams,
+};
+use crate::servos::ServoController;
 use crate::tank_level::TankLevelEstimator;
 use crate::traits::{Outputs, SensorReadings, Sensors, Storage};
 use crate::valves::{ValveCommand, ValveController, ValveError};
@@ -23,6 +26,7 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     flight_logic: FlightLogic,
     state_machine_params: StateMachineParams,
     propulsion_params: PropulsionParams,
+    qd_params: QdParams,
     failsafe_params: FailsafeParams,
     tank_level: TankLevelEstimator,
     misc_params: MiscParams,
@@ -35,6 +39,7 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     pub bus_inputs: BusInputImage,
     pub bus_outputs: BusOutputImage,
     pub valves: ValveController,
+    pub servos: ServoController,
 }
 
 impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
@@ -55,6 +60,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             flight_logic: FlightLogic::default(),
             state_machine_params: params.state_machine,
             propulsion_params: params.propulsion,
+            qd_params: params.qd,
             failsafe_params: params.failsafe,
             tank_level: TankLevelEstimator::new(params.tank_level),
             misc_params: params.misc,
@@ -67,6 +73,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             bus_inputs: BusInputImage::default(),
             bus_outputs: BusOutputImage::default(),
             valves: ValveController::new(),
+            servos: ServoController::new(),
         }
     }
 
@@ -120,6 +127,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
 
         // Determine the intended state of all valves and push it out on the vehicle bus.
         self.bus_outputs.valve = self.valves.resolve(self.time, &self.propulsion_params);
+        self.bus_outputs.servo = self.servos.resolve(self.time, &self.qd_params);
         self.bus.set_output_image(self.bus_outputs);
 
         self.time += 1;
@@ -169,6 +177,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
 
         self.flight_logic.set_mode(self.time, mode);
         self.valves.set_mode(mode, self.time);
+        self.servos.set_mode(mode, self.time);
 
         // Camera outputs are turned on automatically, but are not automatically turned
         // back off.
@@ -195,7 +204,8 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         let servo = ServoId::ALL
             .get(usize::from(servo))
             .ok_or(MavResult::Denied)?;
-        self.bus_outputs.servo[*servo] = Some(ValveState::from_promille_clamped(promille));
+        self.servos
+            .command(*servo, ValveState::from_promille_clamped(promille));
         Ok(())
     }
 
@@ -213,6 +223,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             state_estimator: self.state_estimator.params().clone(),
             state_machine: self.state_machine_params.clone(),
             propulsion: self.propulsion_params.clone(),
+            qd: self.qd_params.clone(),
             failsafe: self.failsafe_params.clone(),
             tank_level: self.tank_level.params().clone(),
             misc: self.misc_params.clone(),
@@ -223,6 +234,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         log::info!("Applying param {} (id {id:#x})", descriptor.name);
         self.state_machine_params = params.state_machine;
         self.propulsion_params = params.propulsion;
+        self.qd_params = params.qd;
         self.failsafe_params = params.failsafe;
         self.tank_level.update_params(params.tank_level);
         self.misc_params = params.misc;

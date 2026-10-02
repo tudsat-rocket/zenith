@@ -117,12 +117,11 @@ impl NodeSet {
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct BusOutputImage {
     pub valve: ValveMap<ValveState>,
-    /// `None` until first commanded: nothing is sent for a servo before then.
-    pub servo: ServoMap<Option<ValveState>>,
+    pub servo: ServoMap<ValveState>,
     pub binary_output: BinaryOutputMap<bool>,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct ValveState {
     /// 0 = fully closed, 1000 = fully open
     promille: u16,
@@ -178,7 +177,7 @@ impl BusOutputImage {
     pub const fn default() -> Self {
         Self {
             valve: ValveMap::splat(ValveState::fully_closed()),
-            servo: ServoMap::splat(None),
+            servo: ServoMap::splat(ValveState::fully_closed()),
             binary_output: BinaryOutputMap::splat(false),
         }
     }
