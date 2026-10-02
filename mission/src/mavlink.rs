@@ -560,10 +560,15 @@ pub fn autopilot_version() -> AutopilotVersion {
 
 /// Shared because the ground station rebuilds these from the LoRa downlink, and both paths have
 /// to produce the same message.
-pub fn io_node_heartbeat(armed: bool) -> Heartbeat {
+pub fn io_node_heartbeat(node_id: u8, armed: bool) -> Heartbeat {
     Heartbeat {
-        // The closest MAV_TYPE to an io board; the spec identifies components by type, not by id.
-        type_: MavType::Servo,
+        // The spec identifies components by type, not by id. Servo is the closest MAV_TYPE to an
+        // io board.
+        type_: if crate::bus::power_board(node_id).is_some() {
+            MavType::Battery
+        } else {
+            MavType::Servo
+        },
         autopilot: MavAutopilot::Invalid,
         base_mode: if armed {
             MavModeFlag::SAFETY_ARMED
@@ -588,7 +593,7 @@ impl InstanceMessage<u8> for Heartbeat {
         snap.input_image
             .nodes
             .contains(node_id)
-            .then(|| io_node_heartbeat(snap.input_image.nodes_armed.contains(node_id)))
+            .then(|| io_node_heartbeat(node_id, snap.input_image.nodes_armed.contains(node_id)))
     }
 }
 

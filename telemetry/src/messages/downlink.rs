@@ -349,7 +349,7 @@ impl TelemetryMessage for DownlinkMessage {
                 // The wired links send these from the schedule; rebuilding them here makes a
                 // board look the same either way.
                 for node_id in IO_NODE_IDS.into_iter().filter(|id| nodes.contains(*id)) {
-                    let heartbeat = io_node_heartbeat(armed.contains(node_id));
+                    let heartbeat = io_node_heartbeat(node_id, armed.contains(node_id));
                     sender.anysend(Downlink::new(node_id, heartbeat)).await;
                 }
             }
