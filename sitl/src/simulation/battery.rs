@@ -31,15 +31,8 @@ pub struct Battery {
     pub voltage: f32,
 }
 
-impl Default for Battery {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Battery {
-    pub fn new() -> Self {
-        let soc = 0.90;
+    pub fn new(soc: f32) -> Self {
         Self {
             soc,
             current: 0.0,
