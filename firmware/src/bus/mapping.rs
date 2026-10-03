@@ -1,7 +1,7 @@
 use crate::bus::pdo_mapping::SensorAddr;
 use mission::bus::IoAddr;
 use mission::inventory::{
-    BinaryOutputMap, OxProbeMap, PressureSensorMap, TemperatureSensorMap, ValveMap,
+    BinaryOutputMap, OxProbeMap, PressureSensorMap, ServoMap, TemperatureSensorMap, ValveMap,
 };
 
 // Io-board store index
@@ -44,6 +44,18 @@ pub const VALVE_ID_MAP: ValveMap<IoAddr> = ValveMap::new([
     IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
     // ExternalOxidizerVent = 8,
     IoAddr::new(7, VALVE_STORE_IDX, 2),
+]);
+
+// TODO: wiring
+pub const SERVO_ID_MAP: ServoMap<IoAddr> = ServoMap::new([
+    // PressurantDisconnect
+    IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
+    // OxidizerDisconnect
+    IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
+    // PressurantRetract
+    IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
+    // OxidizerRetract
+    IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
 ]);
 
 // TODO: change this map construction

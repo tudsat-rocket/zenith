@@ -73,6 +73,16 @@ pub enum BinaryOutputId {
     Camera3,
 }
 
+/// Servo-driven actuators that are not valves. They speak the valve protocol on the bus.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[repr(u8)]
+pub enum ServoId {
+    PressurantDisconnect,
+    OxidizerDisconnect,
+    PressurantRetract,
+    OxidizerRetract,
+}
+
 /// A fixed-size array indexed by an id enum instead of a raw usize.
 pub struct InventoryMap<I, T, const N: usize> {
     values: [T; N],
@@ -85,6 +95,7 @@ pub type OxProbeMap<T> = InventoryMap<OxProbeId, T, { OxProbeId::COUNT }>;
 pub type PressureSensorMap<T> = InventoryMap<PressSensId, T, 10>;
 pub type BinaryOutputMap<T> = InventoryMap<BinaryOutputId, T, 5>;
 pub type TankMap<T> = InventoryMap<TankId, T, 6>;
+pub type ServoMap<T> = InventoryMap<ServoId, T, 4>;
 
 /// An id enum that can key an [`InventoryMap`]: N variants, each mapping to a unique dense index
 /// in 0..N.
@@ -323,6 +334,19 @@ impl InventoryId<5> for BinaryOutputId {
     }
 }
 
+impl InventoryId<4> for ServoId {
+    const ALL: [Self; 4] = [
+        Self::PressurantDisconnect,
+        Self::OxidizerDisconnect,
+        Self::PressurantRetract,
+        Self::OxidizerRetract,
+    ];
+
+    fn idx(self) -> usize {
+        self as usize
+    }
+}
+
 impl InventoryId<6> for TankId {
     const ALL: [Self; 6] = [
         Self::Pressurant,
@@ -471,6 +495,7 @@ mod tests {
         check::<PressSensId, 10>();
         check::<BinaryOutputId, 5>();
         check::<TankId, 6>();
+        check::<ServoId, 4>();
     }
 
     /// The two halves of the inventory travel in separate telemetry messages, so a tank whose

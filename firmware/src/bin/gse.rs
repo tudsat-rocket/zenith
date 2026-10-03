@@ -23,7 +23,7 @@ use rapid_dialect::rapid::enums::{MavAutopilot, MavModeFlag, MavState, MavType};
 use rapid_dialect::rapid::messages::Heartbeat;
 
 use mission::bus::ValveState;
-use mission::inventory::{InventoryId, ValveId, ValveMap};
+use mission::inventory::{InventoryId, ServoId, ValveId, ValveMap};
 use mission::valves::ValveCommand;
 
 use firmware::can::CanTxPublisher;
@@ -76,7 +76,7 @@ async fn main(low_priority_spawner: Spawner) {
 
     low_priority_spawner.spawn(heartbeat(eth_tx)).unwrap();
     low_priority_spawner
-        .spawn(manual_valves(eth_commands, can1_tx.publisher().unwrap()))
+        .spawn(manual_outputs(eth_commands, can1_tx.publisher().unwrap()))
         .unwrap();
 }
 
@@ -102,7 +102,7 @@ async fn heartbeat(tx: InterfaceTxPublisher) -> ! {
 }
 
 #[embassy_executor::task]
-async fn manual_valves(mut commands: InterfaceCommandSubscriber, can_tx: CanTxPublisher) -> ! {
+async fn manual_outputs(mut commands: InterfaceCommandSubscriber, can_tx: CanTxPublisher) -> ! {
     // A command is written once and never refreshed, so nothing needs remembering except when to
     // close a pulse again.
     let mut pulse_deadlines: ValveMap<Option<Instant>> = ValveMap::splat(None);
@@ -113,18 +113,27 @@ async fn manual_valves(mut commands: InterfaceCommandSubscriber, can_tx: CanTxPu
             .filter_map(|valve| pulse_deadlines[valve])
             .min();
 
-        if let Either::First(UplinkCommand::CommandValve(valve, cmd)) =
-            select(commands.next_message_pure(), wait_until(next_deadline)).await
-        {
-            pulse_deadlines[valve] = match cmd {
-                ValveCommand::PulseOpen(duration) => {
-                    let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
-                    Instant::now().checked_add(Duration::from_millis(millis))
-                }
-                ValveCommand::Open | ValveCommand::Partial(_) | ValveCommand::Close => None,
-            };
+        match select(commands.next_message_pure(), wait_until(next_deadline)).await {
+            Either::First(UplinkCommand::CommandValve(valve, cmd)) => {
+                pulse_deadlines[valve] = match cmd {
+                    ValveCommand::PulseOpen(duration) => {
+                        let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+                        Instant::now().checked_add(Duration::from_millis(millis))
+                    }
+                    ValveCommand::Open | ValveCommand::Partial(_) | ValveCommand::Close => None,
+                };
 
-            write_valve(&can_tx, valve, ValveState::from(cmd));
+                write_valve(&can_tx, valve, ValveState::from(cmd));
+            }
+            Either::First(UplinkCommand::SetServo {
+                servo, promille, ..
+            }) => match ServoId::ALL.get(usize::from(servo)) {
+                Some(&servo) => {
+                    write_servo(&can_tx, servo, ValveState::from_promille_clamped(promille));
+                }
+                None => defmt::warn!("Ignoring command for unknown servo {}", servo),
+            },
+            Either::First(_) | Either::Second(()) => {}
         }
 
         let now = Instant::now();
@@ -152,6 +161,19 @@ fn write_valve(can_tx: &CanTxPublisher, valve: ValveId, state: ValveState) {
     );
 
     let frame = fw::bus::valve_sdo_frame(valve, state);
+    if can_tx.try_publish(frame).is_err() {
+        can_tx.publish_immediate(frame);
+    }
+}
+
+fn write_servo(can_tx: &CanTxPublisher, servo: ServoId, state: ValveState) {
+    defmt::info!(
+        "Writing servo {} at {} promille",
+        defmt::Debug2Format(&servo),
+        state.promille()
+    );
+
+    let frame = fw::bus::servo_sdo_frame(servo, state);
     if can_tx.try_publish(frame).is_err() {
         can_tx.publish_immediate(frame);
     }

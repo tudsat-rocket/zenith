@@ -81,6 +81,12 @@ pub enum UplinkCommand {
     RequestAvailableModes(usize),
     RequestCanForwarding,
     CommandValve(ValveId, ValveCommand),
+    /// `servo` is 0-based; `command` is the MAVLink command it came from, to be acked as.
+    SetServo {
+        command: MavCmd,
+        servo: u8,
+        promille: u16,
+    },
     SetParam {
         id: u16,
         raw: u32,
@@ -101,6 +107,7 @@ impl UplinkCommand {
         match self {
             Self::SetFlightMode(_) => Some(MavCmd::DoSetMode),
             Self::CommandValve(..) => Some(MavCmd::CommandValve),
+            Self::SetServo { command, .. } => Some(*command),
             Self::RequestAvailableModes(_)
             | Self::RequestCanForwarding
             | Self::SetParam { .. }

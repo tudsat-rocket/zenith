@@ -17,14 +17,14 @@ use rapid_dialect::rapid::enums::{
 use rapid_dialect::rapid::messages::{
     Attitude, AutopilotVersion, BatteryStatus, DebugFloatArray, GlobalPositionInt, GpsRawInt,
     Heartbeat, LocalPositionNed, PressureVessel, RocketInfo, ScaledImu, ScaledImu2, ScaledImu3,
-    ScaledPressure, ScaledPressure2, ScaledPressure3, SysStatus, Valve, VfrHud,
+    ScaledPressure, ScaledPressure2, ScaledPressure3, ServoOutputRaw, SysStatus, Valve, VfrHud,
 };
 
 use state_estimator::StateEstimator;
 
 use crate::TelemetryLink;
-use crate::bus::{BusInputImage, BusOutputImage};
-use crate::inventory::{InventoryId, OxProbeId, TankId, ValveId, valve_is_heated};
+use crate::bus::{BusInputImage, BusOutputImage, ValveState};
+use crate::inventory::{InventoryId, OxProbeId, ServoMap, TankId, ValveId, valve_is_heated};
 use crate::params::StateMachineParams;
 use crate::schedule::downlink_schedule;
 use crate::traits::SensorReadings;
@@ -54,7 +54,7 @@ impl VehicleSnapshot<'_> {
             every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt, DebugFloatArray;
             every 2000 ms => RocketInfo, AutopilotVersion;
             // One message per component
-            every 200 ms => PressureVessel[TankId::ALL], Valve[ValveId::ALL];
+            every 200 ms => PressureVessel[TankId::ALL], Valve[ValveId::ALL], ServoOutputRaw;
             every 1000 ms => Heartbeat[crate::bus::IO_NODE_IDS];
         }
     }
@@ -109,6 +109,31 @@ impl From<&VehicleSnapshot<'_>> for Heartbeat {
             system_status: snap.mode.into(),
             mavlink_version: 2,
         }
+    }
+}
+
+impl From<&VehicleSnapshot<'_>> for ServoOutputRaw {
+    fn from(snap: &VehicleSnapshot<'_>) -> Self {
+        servo_output_raw(snap.time, &snap.output_image.servo)
+    }
+}
+
+/// The commanded servo positions on the 1000 - 2000 us scale SERVO_OUTPUT_RAW defines, servo 1
+/// being [`ServoId::ALL`](crate::inventory::ServoId::ALL)`[0]`.
+pub fn servo_output_raw(time: Wrapping<u32>, commanded: &ServoMap<ValveState>) -> ServoOutputRaw {
+    let raw = commanded
+        .values()
+        .map(|state| state.promille().saturating_add(1000));
+    let [servo1_raw, servo2_raw, servo3_raw, servo4_raw] = raw;
+
+    ServoOutputRaw {
+        time_usec: time.0.wrapping_mul(1000),
+        port: 0,
+        servo1_raw,
+        servo2_raw,
+        servo3_raw,
+        servo4_raw,
+        ..Default::default()
     }
 }
 

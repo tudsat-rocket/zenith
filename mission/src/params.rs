@@ -22,6 +22,7 @@ pub struct Params {
     pub state_estimator: StateEstimatorParams,
     pub state_machine: StateMachineParams,
     pub propulsion: PropulsionParams,
+    pub qd: QdParams,
     pub failsafe: FailsafeParams,
     pub tank_level: TankLevelParams,
     pub misc: MiscParams,
@@ -78,6 +79,28 @@ pub struct PropulsionParams {
     /// Delay (ms) after ignition mode is entered after which main valve is opened
     #[param(id = 0x0301, name = "MAIN_DELAY", default = 700)]
     pub main_valve_delay: u32,
+}
+
+/// Quick disconnect and release arm sequence parameters, exposed over MAVLink as `QD_*`.
+#[derive(Debug, Clone, macros::ParameterGroup)]
+#[param_group(prefix = "QD")]
+pub struct QdParams {
+    /// Time (ms) the disconnect servos are actuated in disconnect mode before the retract servos
+    /// move to DISC_RETR_PR / DISC_RETR_OX
+    #[param(id = 0x0600, name = "DISC_HOLD_T", default = 1000)]
+    pub disconnect_hold_time: u32,
+    /// Position (percent, 0-100) the pressurant retract servo moves to in disconnect mode. Values
+    /// above 100 are clamped.
+    #[param(id = 0x0601, name = "DISC_RETR_PR", default = 10)]
+    pub disconnect_retract_pressurant: u32,
+    /// Position (percent, 0-100) the oxidizer retract servo moves to in disconnect mode. Values
+    /// above 100 are clamped.
+    #[param(id = 0x0602, name = "DISC_RETR_OX", default = 10)]
+    pub disconnect_retract_oxidizer: u32,
+    /// Time (ms) after the retract servos moved in disconnect mode after which the disconnect
+    /// servos are released
+    #[param(id = 0x0603, name = "DISC_RETR_T", default = 1000)]
+    pub disconnect_retract_time: u32,
 }
 
 /// Oxidizer tank level parameters, exposed over MAVLink as `OXL_*`.
@@ -338,6 +361,7 @@ mod tests {
         assert_eq!(s.misc.buzzer_volume, 50);
         assert_eq!(s.state_machine.main_on_time, 500);
         assert_eq!(s.state_machine.main_pulses, 2);
+        assert_eq!(s.qd.disconnect_retract_pressurant, 10);
     }
 
     #[test]

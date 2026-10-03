@@ -121,8 +121,8 @@ impl ValveController {
             // Hold: every valve commandable
             M::Hold => true,
 
-            // Both vent valves manually openable during either fill for relief.
-            M::FillPressurant | M::FillOxidizer => {
+            // Both vent valves manually openable during either fill or the disconnect for relief.
+            M::FillPressurant | M::FillOxidizer | M::Disconnect | M::Retract => {
                 matches!(valve, V::PressurantVent | V::OxidizerVent)
             }
 
@@ -228,7 +228,7 @@ impl ValveController {
             M::Hold => return None,
 
             // Inert ground modes: everything closed.
-            M::Idle | M::DetectLaunch => closed,
+            M::Idle | M::Disconnect | M::Retract | M::DetectLaunch => closed,
 
             // On-pad modes
             M::FillPressurant => match valve {

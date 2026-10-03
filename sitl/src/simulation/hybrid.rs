@@ -12,7 +12,7 @@ use rapid_dialect::rapid::enums::ValveId;
 
 use mission::inventory::{
     BinaryOutputId, BinaryOutputMap, InventoryId, OxProbeId, OxProbeMap, PressSensId,
-    PressureSensorMap, TankId, TemperatureSensorMap, ValveMap,
+    PressureSensorMap, ServoMap, TankId, TemperatureSensorMap, ValveMap,
 };
 use mission::valves::ValveCommand;
 
@@ -375,6 +375,7 @@ impl Bus for SitlBus {
             temp_sens,
             press_sens,
             valve_state,
+            servo_state: ServoMap::splat(None),
             binary_outputs: BinaryOutputMap::splat(None),
             ox_probes,
             ox_tank_level: None,
