@@ -23,12 +23,9 @@ use rapid_dialect::FlightMode;
 use super::{Sound, request_loop, request_sound};
 
 /// Bus voltage below which the battery is considered low [mV].
-///
-/// The flight computer runs off a 3S LiPo, i.e. 12.6V fully charged and 9.9V
-/// empty. 11.5V is ~3.83V per cell, 10.0V is ~3.33V per cell.
-const BATTERY_LOW_MV: u16 = 11_500;
+const BATTERY_LOW_MV: u16 = 9_600; // 3*3.2V => 20%
 /// Bus voltage below which the battery is considered nearly empty [mV].
-const BATTERY_EXTREME_LOW_MV: u16 = 10_000;
+const BATTERY_EXTREME_LOW_MV: u16 = 9_000; // 3*3V => 10%
 /// Hysteresis applied when recovering from a warning [mV], so that a voltage
 /// hovering around a threshold does not toggle the warning back and forth.
 const BATTERY_HYSTERESIS_MV: u16 = 300;
