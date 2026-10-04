@@ -10,12 +10,12 @@ use iocan_proto::{HcoOutput, TpdoKind};
 
 use mission::{
     bus::ValveState,
-    inventory::{BinaryOutputId, OxProbeId, PressSensId, TempSensId, ValveId},
+    inventory::{BinaryOutputId, OxProbeId, PressSensId, ServoId, TempSensId, ValveId},
 };
 
 use crate::bus::mapping::{
-    BINARY_OUTPUT_ID_MAP, OX_PROBE_ID_MAP, PRESS_SENSOR_ID_MAP, TEMP_SENSOR_ID_MAP, VALVE_ID_MAP,
-    VALVE_TEMP_SENSOR,
+    BINARY_OUTPUT_ID_MAP, OX_PROBE_ID_MAP, PRESS_SENSOR_ID_MAP, SERVO_ID_MAP, TEMP_SENSOR_ID_MAP,
+    VALVE_ID_MAP, VALVE_TEMP_SENSOR,
 };
 
 // TODO: this is very error prone
@@ -95,6 +95,27 @@ pub fn valve_msg_to_valve(
 
 fn valve_id_for(node_id: u8, slot: usize) -> Option<ValveId> {
     VALVE_ID_MAP
+        .iter()
+        .find(|(_, addr)| addr.node_id == node_id && subindex_to_slot(addr.subindex) == Some(slot))
+        .map(|(id, _)| id)
+}
+
+/// Servo positions in promille, in the frame's slot order. Servos share the valves' frames.
+pub fn valve_msg_to_servo(
+    node_id: u8,
+    positions: [u16; 4],
+) -> heapless::Vec<(ServoId, ValveState), 4> {
+    let mut out = heapless::Vec::new();
+    for (slot, &promille) in positions.iter().enumerate() {
+        if let Some(id) = servo_id_for(node_id, slot) {
+            let _ = out.push((id, ValveState::from_promille_clamped(promille)));
+        }
+    }
+    out
+}
+
+fn servo_id_for(node_id: u8, slot: usize) -> Option<ServoId> {
+    SERVO_ID_MAP
         .iter()
         .find(|(_, addr)| addr.node_id == node_id && subindex_to_slot(addr.subindex) == Some(slot))
         .map(|(id, _)| id)

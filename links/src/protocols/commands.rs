@@ -11,7 +11,7 @@ use embassy_sync::watch::Sender;
 use embassy_time::{Duration, Instant, Timer};
 
 use rapid_dialect::rapid::enums::{MavCmd, MavResult, TuneFormat, ValveId};
-use rapid_dialect::rapid::messages::{AvailableModes, CommandAck, SupportedTunes};
+use rapid_dialect::rapid::messages::{AvailableModes, CommandAck, CommandLong, SupportedTunes};
 use rapid_dialect::{FlightMode, Rapid, ValveCommand};
 
 use crate::protocols::link_quality::LinkQuality;
@@ -172,6 +172,13 @@ pub async fn run(
                             MavResult::Denied
                         }
                     }
+                    MavCmd::DoSetServo | MavCmd::DoSetActuator => match servo_command(&cmd) {
+                        Ok(servo_cmd) => {
+                            cmd_tx.publish(servo_cmd).await;
+                            MavResult::InProgress
+                        }
+                        Err(result) => result,
+                    },
                     _ => MavResult::Unsupported,
                 };
 
@@ -278,6 +285,51 @@ pub async fn run(
     }
 }
 
+/// DO_SET_SERVO addresses a servo by 1-based instance with a pulse width in microseconds.
+/// DO_SET_ACTUATOR addresses six per set, with -1..1 values and NaN to skip one; only one of them
+/// may be set.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "values are clamped to 0..=1000 first; float-to-int casts saturate"
+)]
+fn servo_command(cmd: &CommandLong) -> Result<UplinkCommand, MavResult> {
+    let (servo, promille) = match cmd.command {
+        MavCmd::DoSetServo => {
+            if !cmd.param1.is_finite() || !cmd.param2.is_finite() {
+                return Err(MavResult::Denied);
+            }
+            let servo = (cmd.param1 as u8).checked_sub(1).ok_or(MavResult::Denied)?;
+            (servo, (cmd.param2 - 1000.0).clamp(0.0, 1000.0) as u16)
+        }
+        MavCmd::DoSetActuator => {
+            let values = [
+                cmd.param1, cmd.param2, cmd.param3, cmd.param4, cmd.param5, cmd.param6,
+            ];
+            let mut set = values.into_iter().zip(0u8..).filter(|(v, _)| !v.is_nan());
+            let (value, offset) = set.next().ok_or(MavResult::Denied)?;
+            if set.next().is_some() {
+                return Err(MavResult::Unsupported);
+            }
+            if !cmd.param7.is_finite() {
+                return Err(MavResult::Denied);
+            }
+            let servo = (cmd.param7 as u8)
+                .checked_mul(6)
+                .and_then(|base| base.checked_add(offset))
+                .ok_or(MavResult::Denied)?;
+            (servo, ((value.clamp(-1.0, 1.0) + 1.0) * 500.0) as u16)
+        }
+        _ => return Err(MavResult::Unsupported),
+    };
+
+    Ok(UplinkCommand::SetServo {
+        command: cmd.command,
+        servo,
+        promille,
+    })
+}
+
 async fn reboot() {
     log::warn!("rebooting");
     Timer::after(Duration::from_millis(250)).await;
@@ -287,4 +339,77 @@ async fn reboot() {
 
     #[cfg(not(target_os = "none"))]
     log::error!("no MCU to reset on this platform, ignoring");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn servo(command: MavCmd, params: [f32; 7]) -> Result<UplinkCommand, MavResult> {
+        let [param1, param2, param3, param4, param5, param6, param7] = params;
+        servo_command(&CommandLong {
+            command,
+            param1,
+            param2,
+            param3,
+            param4,
+            param5,
+            param6,
+            param7,
+            ..Default::default()
+        })
+    }
+
+    fn set_servo(command: MavCmd, servo: u8, promille: u16) -> Result<UplinkCommand, MavResult> {
+        Ok(UplinkCommand::SetServo {
+            command,
+            servo,
+            promille,
+        })
+    }
+
+    #[test]
+    fn set_servo_maps_pulse_width_onto_promille() {
+        let cmd = MavCmd::DoSetServo;
+        let at = |instance, pwm| servo(cmd, [instance, pwm, 0.0, 0.0, 0.0, 0.0, 0.0]);
+
+        assert_eq!(at(1.0, 1000.0), set_servo(cmd, 0, 0));
+        assert_eq!(at(3.0, 1500.0), set_servo(cmd, 2, 500));
+        assert_eq!(at(2.0, 900.0), set_servo(cmd, 1, 0));
+        assert_eq!(at(2.0, 2500.0), set_servo(cmd, 1, 1000));
+
+        // Instances are 1-based.
+        assert_eq!(at(0.0, 1500.0), Err(MavResult::Denied));
+        assert_eq!(at(1.0, f32::NAN), Err(MavResult::Denied));
+        assert_eq!(at(f32::NAN, 1500.0), Err(MavResult::Denied));
+    }
+
+    #[test]
+    fn set_actuator_takes_the_one_value_set() {
+        let cmd = MavCmd::DoSetActuator;
+        let nan = f32::NAN;
+
+        assert_eq!(
+            servo(cmd, [nan, nan, -1.0, nan, nan, nan, 0.0]),
+            set_servo(cmd, 2, 0)
+        );
+        assert_eq!(
+            servo(cmd, [nan, 2.0, nan, nan, nan, nan, 0.0]),
+            set_servo(cmd, 1, 1000)
+        );
+        assert_eq!(
+            servo(cmd, [0.5, nan, nan, nan, nan, nan, 1.0]),
+            set_servo(cmd, 6, 750)
+        );
+
+        assert_eq!(
+            servo(cmd, [0.0, nan, 0.0, nan, nan, nan, 0.0]),
+            Err(MavResult::Unsupported)
+        );
+        assert_eq!(servo(cmd, [nan; 7]), Err(MavResult::Denied));
+        assert_eq!(
+            servo(cmd, [0.0, nan, nan, nan, nan, nan, 100.0]),
+            Err(MavResult::Denied)
+        );
+    }
 }

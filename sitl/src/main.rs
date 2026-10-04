@@ -95,6 +95,15 @@ async fn main_loop(mut vehicle: Vehicle, mut links: Links, sim: SharedSimulation
                     vehicle.set_param(id, raw).await;
                     MavResult::Accepted
                 }
+                UplinkCommand::SetServo {
+                    servo, promille, ..
+                } => match vehicle.try_command_servo(servo, promille) {
+                    Ok(()) => MavResult::Accepted,
+                    Err(e) => {
+                        log::warn!("SetServo {servo} {promille} rejected: {e:?}");
+                        e
+                    }
+                },
                 #[cfg(feature = "hybrid")]
                 UplinkCommand::CommandValve(valve, valve_cmd) => {
                     match vehicle.try_command_valve(valve, valve_cmd) {

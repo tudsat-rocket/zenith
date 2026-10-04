@@ -1,7 +1,7 @@
 use core::num::Wrapping;
 
 use crate::inventory::{
-    BinaryOutputMap, OxProbeMap, PressureSensorMap, TemperatureSensorMap, ValveMap,
+    BinaryOutputMap, OxProbeMap, PressureSensorMap, ServoMap, TemperatureSensorMap, ValveMap,
 };
 
 pub trait Bus {
@@ -33,6 +33,7 @@ pub struct BusInputImage {
     pub temp_sens: TemperatureSensorMap<Option<DataWithTime<f32>>>,
     pub press_sens: PressureSensorMap<Option<DataWithTime<f32>>>,
     pub valve_state: ValveMap<Option<DataWithTime<ValveState>>>,
+    pub servo_state: ServoMap<Option<DataWithTime<ValveState>>>,
     pub binary_outputs: BinaryOutputMap<Option<DataWithTime<bool>>>,
     /// The tank level probe row, as it arrives from the bus.
     pub ox_probes: OxProbeMap<Option<DataWithTime<f32>>>,
@@ -116,10 +117,11 @@ impl NodeSet {
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct BusOutputImage {
     pub valve: ValveMap<ValveState>,
+    pub servo: ServoMap<ValveState>,
     pub binary_output: BinaryOutputMap<bool>,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct ValveState {
     /// 0 = fully closed, 1000 = fully open
     promille: u16,
@@ -160,6 +162,7 @@ impl BusInputImage {
             temp_sens: TemperatureSensorMap::splat(None),
             press_sens: PressureSensorMap::splat(None),
             valve_state: ValveMap::splat(None),
+            servo_state: ServoMap::splat(None),
             binary_outputs: BinaryOutputMap::splat(None),
             ox_probes: OxProbeMap::splat(None),
             ox_tank_level: None,
@@ -174,6 +177,7 @@ impl BusOutputImage {
     pub const fn default() -> Self {
         Self {
             valve: ValveMap::splat(ValveState::fully_closed()),
+            servo: ServoMap::splat(ValveState::fully_closed()),
             binary_output: BinaryOutputMap::splat(false),
         }
     }

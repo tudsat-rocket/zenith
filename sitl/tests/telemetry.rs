@@ -63,6 +63,7 @@ fn every_message_goes_out_at_its_intended_rate() {
             ScaledPressure every 200,
             ScaledPressure2 every 200,
             ScaledPressure3 every 200,
+            ServoOutputRaw every 200,
             Heartbeat every 500,
             SysStatus every 500,
             GlobalPositionInt every 500,
