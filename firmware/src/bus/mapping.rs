@@ -19,6 +19,11 @@ const HCO3: u8 = 3;
 #[allow(dead_code)]
 const HCO4: u8 = 4;
 
+const SOLENOID: u8 = 3;
+const STEPPER: u8 = 4;
+const SERVO_LOWER: u8 = 1;
+const SERVO_UPPER: u8 = 2;
+
 // These are CANopen sub-indices, so they are 1-based: sub 0 of an array object is the entry
 // count, the elements start at sub 1. The TPDO frames carry the same elements 0-indexed, so
 // decoding converts (see `pdo_mapping::subindex_to_slot`) rather than these being written twice.
@@ -36,32 +41,33 @@ pub const VALVE_ID_MAP: ValveMap<IoAddr> = ValveMap::new([
     IoAddr::new(6, VALVE_STORE_IDX, 2),
     // Main = 4,
     IoAddr::new(6, VALVE_STORE_IDX, 1),
+    // EXTERNAL:
     // ExternalPressurantFill = 5,
-    IoAddr::new(8, VALVE_STORE_IDX, 1),
+    IoAddr::new(15, VALVE_STORE_IDX, SERVO_UPPER),
     // ExternalOxidizerFill = 6,
-    IoAddr::new(7, VALVE_STORE_IDX, 1),
+    IoAddr::new(14, VALVE_STORE_IDX, SOLENOID),
     // ExternalPressurantVent = 7,
-    IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
+    IoAddr::new(15, VALVE_STORE_IDX, SERVO_LOWER),
     // ExternalOxidizerVent = 8,
-    IoAddr::new(7, VALVE_STORE_IDX, 2),
+    IoAddr::new(15, VALVE_STORE_IDX, SOLENOID),
 ]);
 
 // TODO: wiring
 pub const SERVO_ID_MAP: ServoMap<IoAddr> = ServoMap::new([
     // PressurantDisconnect
-    IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
+    IoAddr::new(14, VALVE_STORE_IDX, SERVO_LOWER),
     // OxidizerDisconnect
-    IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
+    IoAddr::new(14, VALVE_STORE_IDX, SERVO_UPPER),
     // PressurantRetract
-    IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
+    IoAddr::new(14, VALVE_STORE_IDX, STEPPER),
     // OxidizerRetract
-    IoAddr::new(0xff, VALVE_STORE_IDX, 0xff),
+    IoAddr::new(15, VALVE_STORE_IDX, STEPPER),
 ]);
 
 // TODO: change this map construction
 pub const BINARY_OUTPUT_ID_MAP: BinaryOutputMap<IoAddr> = BinaryOutputMap::new([
-    IoAddr::new(8, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Igniter1,
-    IoAddr::new(8, HC_OUTPUT_STORE_IDX, HCO2), // BinaryOutputId::Igniter2,
+    IoAddr::new(7, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Igniter1,
+    IoAddr::new(7, HC_OUTPUT_STORE_IDX, HCO2), // BinaryOutputId::Igniter2,
     IoAddr::new(2, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Camera1,
     IoAddr::new(2, HC_OUTPUT_STORE_IDX, HCO3), // BinaryOutputId::Camera2,
     IoAddr::new(3, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Camera3,
