@@ -359,7 +359,7 @@ mod tests {
         assert_eq!(s.state_machine.main_deploy_altitude, 400.0);
         assert_eq!(s.state_machine.min_time_to_drogue, 1000);
         assert_eq!(s.misc.buzzer_volume, 50);
-        assert_eq!(s.state_machine.main_on_time, 500);
+        assert_eq!(s.state_machine.main_on_time, 300);
         assert_eq!(s.state_machine.main_pulses, 2);
         assert_eq!(s.qd.disconnect_retract_pressurant, 10);
     }

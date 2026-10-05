@@ -24,10 +24,21 @@ use state_estimator::StateEstimator;
 
 use crate::TelemetryLink;
 use crate::bus::{BusInputImage, BusOutputImage, ValveState};
-use crate::inventory::{InventoryId, OxProbeId, ServoMap, TankId, ValveId, valve_is_heated};
+use crate::inventory::{
+    InventoryId, OxProbeId, PowerBoardId, ServoMap, TankId, ValveId, valve_is_heated,
+};
 use crate::params::StateMachineParams;
 use crate::schedule::downlink_schedule;
 use crate::traits::SensorReadings;
+
+/// `None` is the flight computer's own power monitor, which only reports while no power board is
+/// present.
+const BATTERY_SOURCES: [Option<PowerBoardId>; 4] = [
+    None,
+    Some(PowerBoardId::Board1),
+    Some(PowerBoardId::Board2),
+    Some(PowerBoardId::Board3),
+];
 
 /// Everything the vehicle exposes about one tick, borrowed rather than copied. Built by
 /// `Vehicle::snapshot`; the conversions in this module read nothing else.
@@ -49,7 +60,7 @@ impl VehicleSnapshot<'_> {
     pub fn send_telemetry(&self, link: &mut impl TelemetryLink) {
         downlink_schedule! { self.time.0, self, link:
             every 100 ms => Attitude, VfrHud, ScaledImu, ScaledImu2, ScaledImu3;
-            every 200 ms => BatteryStatus, LocalPositionNed,
+            every 200 ms => BatteryStatus[BATTERY_SOURCES], LocalPositionNed,
                 ScaledPressure, ScaledPressure2, ScaledPressure3;
             every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt, DebugFloatArray;
             every 2000 ms => RocketInfo, AutopilotVersion;
@@ -526,51 +537,6 @@ impl Into<RocketInfo> for &VehicleSnapshot<'_> {
     }
 }
 
-impl Into<BatteryStatus> for &VehicleSnapshot<'_> {
-    #[allow(
-        clippy::arithmetic_side_effects,
-        reason = "bounded i32 sensor math with nonzero constant divisors, cannot over/underflow or divide by zero"
-    )]
-    fn into(self) -> BatteryStatus {
-        const CELLS: usize = 3;
-
-        let adc = self.readings.power.as_ref();
-
-        let mut voltages: [u16; 10] = [u16::MAX; 10];
-        if let Some(pack_mv) = adc.map(|d| d.bus_main_voltage) {
-            voltages[0] = pack_mv;
-        }
-
-        let current_battery = adc
-            .map(|d| (d.fc_current / 10).clamp(i16::MIN as i32, i16::MAX as i32) as i16)
-            .unwrap_or(-1);
-
-        let battery_remaining = adc
-            .map(|d| {
-                let cell_mv = i32::from(d.bus_main_voltage) / CELLS as i32;
-                (((cell_mv - 3300) * 100) / (4200 - 3300)).clamp(0, 100) as i8
-            })
-            .unwrap_or(-1);
-
-        BatteryStatus {
-            id: 0x01,
-            type_: MavBatteryType::Lion,
-            battery_function: MavBatteryFunction::Avionics,
-            temperature: i16::MAX,
-            voltages,
-            current_battery,
-            current_consumed: -1,
-            energy_consumed: -1,
-            battery_remaining,
-            time_remaining: 0,
-            charge_state: MavBatteryChargeState::Undefined,
-            voltages_ext: [u16::MAX; 4],
-            mode: MavBatteryMode::Unknown,
-            fault_bitmask: MavBatteryFault::default(),
-        }
-    }
-}
-
 /// A message the flight computer sends one of per component. `None` leaves that slot silent.
 trait InstanceMessage<I: Copy>: Sized {
     fn component_id(_id: I) -> u8 {
@@ -594,10 +560,15 @@ pub fn autopilot_version() -> AutopilotVersion {
 
 /// Shared because the ground station rebuilds these from the LoRa downlink, and both paths have
 /// to produce the same message.
-pub fn io_node_heartbeat(armed: bool) -> Heartbeat {
+pub fn io_node_heartbeat(node_id: u8, armed: bool) -> Heartbeat {
     Heartbeat {
-        // The closest MAV_TYPE to an io board; the spec identifies components by type, not by id.
-        type_: MavType::Servo,
+        // The spec identifies components by type, not by id. Servo is the closest MAV_TYPE to an
+        // io board.
+        type_: if crate::bus::power_board(node_id).is_some() {
+            MavType::Battery
+        } else {
+            MavType::Servo
+        },
         autopilot: MavAutopilot::Invalid,
         base_mode: if armed {
             MavModeFlag::SAFETY_ARMED
@@ -622,7 +593,94 @@ impl InstanceMessage<u8> for Heartbeat {
         snap.input_image
             .nodes
             .contains(node_id)
-            .then(|| io_node_heartbeat(snap.input_image.nodes_armed.contains(node_id)))
+            .then(|| io_node_heartbeat(node_id, snap.input_image.nodes_armed.contains(node_id)))
+    }
+}
+
+impl InstanceMessage<Option<PowerBoardId>> for BatteryStatus {
+    fn build(snap: &VehicleSnapshot<'_>, source: Option<PowerBoardId>) -> Option<Self> {
+        let boards = &snap.input_image.power_boards;
+
+        let (id, voltage_mv, current_ma, charge_state) = match source {
+            Some(board) => {
+                let reading = boards[board]?;
+                (
+                    battery_id(board),
+                    reading.voltage_mv,
+                    reading.current_ma,
+                    reading.charge_state,
+                )
+            }
+            None => {
+                if boards.iter().any(|(_, reading)| reading.is_some()) {
+                    return None;
+                }
+                let adc = snap.readings.power.as_ref();
+                (
+                    1,
+                    adc.map(|d| d.bus_main_voltage),
+                    adc.map(|d| d.fc_current),
+                    MavBatteryChargeState::Undefined,
+                )
+            }
+        };
+
+        Some(battery_status(id, voltage_mv, current_ma, charge_state))
+    }
+}
+
+pub fn battery_id(board: PowerBoardId) -> u8 {
+    match board {
+        PowerBoardId::Board1 => 1,
+        PowerBoardId::Board2 => 2,
+        PowerBoardId::Board3 => 3,
+    }
+}
+
+/// A 3S Li-ion pack.
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "bounded i32 sensor math with nonzero constant divisors, cannot over/underflow or divide by zero"
+)]
+pub fn battery_status(
+    id: u8,
+    voltage_mv: Option<u16>,
+    current_ma: Option<i32>,
+    charge_state: MavBatteryChargeState,
+) -> BatteryStatus {
+    const CELLS: i32 = 3;
+
+    let mut voltages: [u16; 10] = [u16::MAX; 10];
+    if let Some(pack_mv) = voltage_mv {
+        voltages[0] = pack_mv;
+    }
+
+    let current_battery = current_ma
+        .map(|ma| (ma / 10).clamp(i16::MIN as i32, i16::MAX as i32) as i16)
+        .unwrap_or(-1);
+
+    let battery_remaining = voltage_mv
+        .map(|mv| {
+            let cell_mv = i32::from(mv) / CELLS;
+            (((cell_mv - 3300) * 100) / (4200 - 3300)).clamp(0, 100) as i8
+        })
+        .unwrap_or(-1);
+
+    BatteryStatus {
+        id,
+        type_: MavBatteryType::Lion,
+        battery_function: MavBatteryFunction::Avionics,
+        temperature: i16::MAX,
+        voltages,
+        current_battery,
+        current_consumed: -1,
+        energy_consumed: -1,
+        battery_remaining,
+        time_remaining: 0,
+        charge_state,
+        voltages_ext: [u16::MAX; 4],
+        mode: MavBatteryMode::Unknown,
+        fault_bitmask: MavBatteryFault::default(),
     }
 }
 

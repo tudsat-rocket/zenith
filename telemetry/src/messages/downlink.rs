@@ -16,6 +16,7 @@ use crate::DOWNLINK_MESSAGE_INTERVAL_MS;
 use crate::TelemetryError;
 use crate::messages::TelemetryMessage;
 
+mod battery;
 mod components;
 mod gps;
 mod heartbeat;
@@ -24,6 +25,7 @@ mod pressures;
 mod sensors;
 mod status;
 
+pub use battery::BatteryMessage;
 pub use components::ComponentsMessage;
 pub use gps::GpsMessage;
 pub use heartbeat::HeartbeatMessage;
@@ -170,6 +172,7 @@ pub enum DownlinkMessage {
     Sensors(SensorsMessage),
     Gps(GpsMessage),
     ParamValues(ParamValuesMessage),
+    Battery(BatteryMessage),
 }
 
 impl DownlinkMessage {
@@ -207,12 +210,14 @@ impl DownlinkMessage {
         )]
         let slot = (time_ms / DOWNLINK_MESSAGE_INTERVAL_MS) % Self::SLOT_COUNT;
 
-        // The four packed messages repeat over each half of the cycle, so the GPS and external
-        // pressure slots are paid for out of the heartbeat's share alone.
+        // The packed messages repeat over each half of the cycle, so the GPS and external
+        // pressure slots are paid for out of the heartbeat's share alone. Status changes slowest,
+        // so its second slot goes to the batteries instead.
         Some(match slot {
             1 | 9 => Self::Pressures(PressuresMessage::pack(snapshot)),
             3 | 11 => Self::Components(ComponentsMessage::pack(snapshot)),
-            5 | 13 => Self::Status(StatusMessage::pack((snapshot, uplink))),
+            5 => Self::Status(StatusMessage::pack((snapshot, uplink))),
+            13 => Self::Battery(BatteryMessage::pack(snapshot)),
             7 | 15 => Self::Sensors(SensorsMessage::pack(snapshot)),
             // The umbilical is severed at liftoff, so the ground side hands its slot back.
             6 if snapshot.mode < FlightMode::Burn => {
@@ -250,6 +255,7 @@ impl TelemetryMessage for DownlinkMessage {
             Self::Sensors(inner) => (SensorsMessage::ID, inner.serialize()?),
             Self::Gps(inner) => (GpsMessage::ID, inner.serialize()?),
             Self::ParamValues(inner) => (ParamValuesMessage::ID, inner.serialize()?),
+            Self::Battery(inner) => (BatteryMessage::ID, inner.serialize()?),
         };
 
         let mut buffer = [0x00; DOWNLINK_PACKET_SIZE];
@@ -299,6 +305,7 @@ impl TelemetryMessage for DownlinkMessage {
             SensorsMessage::ID => DownlinkMessage::Sensors(postcard::from_bytes(payload)?),
             GpsMessage::ID => DownlinkMessage::Gps(postcard::from_bytes(payload)?),
             ParamValuesMessage::ID => DownlinkMessage::ParamValues(postcard::from_bytes(payload)?),
+            BatteryMessage::ID => DownlinkMessage::Battery(postcard::from_bytes(payload)?),
             id => {
                 return Err(TelemetryError::UnknownMessageId(id));
             }
@@ -349,7 +356,7 @@ impl TelemetryMessage for DownlinkMessage {
                 // The wired links send these from the schedule; rebuilding them here makes a
                 // board look the same either way.
                 for node_id in IO_NODE_IDS.into_iter().filter(|id| nodes.contains(*id)) {
-                    let heartbeat = io_node_heartbeat(armed.contains(node_id));
+                    let heartbeat = io_node_heartbeat(node_id, armed.contains(node_id));
                     sender.anysend(Downlink::new(node_id, heartbeat)).await;
                 }
             }
@@ -366,6 +373,11 @@ impl TelemetryMessage for DownlinkMessage {
             Self::ParamValues(inner) => {
                 for value in inner.unpack(context) {
                     sender.anysend(Downlink::from_self(value)).await;
+                }
+            }
+            Self::Battery(inner) => {
+                for status in inner.unpack(context).into_iter().flatten() {
+                    sender.anysend(Downlink::from_self(status)).await;
                 }
             }
         }
@@ -640,7 +652,8 @@ pub(crate) mod tests {
                 let expected = match slot {
                     1 | 9 => PressuresMessage::ID,
                     3 | 11 => ComponentsMessage::ID,
-                    5 | 13 => StatusMessage::ID,
+                    5 => StatusMessage::ID,
+                    13 => BatteryMessage::ID,
                     7 | 15 => SensorsMessage::ID,
                     6 if mode < FlightMode::Burn => ExternalPressuresMessage::ID,
                     14 => GpsMessage::ID,
@@ -667,7 +680,7 @@ pub(crate) mod tests {
     /// the bench. This is what catches a field that lost its `fixint` annotation.
     #[test]
     fn no_payload_length_depends_on_its_values() {
-        fn lengths(parts: &SnapshotParts, param: ParamEntry) -> [usize; 8] {
+        fn lengths(parts: &SnapshotParts, param: ParamEntry) -> [usize; 9] {
             let s = parts.snapshot();
             [
                 encoded_len(&HeartbeatMessage::pack((&s, CommandAck::NONE))),
@@ -678,6 +691,7 @@ pub(crate) mod tests {
                 encoded_len(&SensorsMessage::pack(&s)),
                 encoded_len(&GpsMessage::pack(&s)),
                 encoded_len(&ParamValuesMessage::pack([param; 2])),
+                encoded_len(&BatteryMessage::pack(&s)),
             ]
         }
 
@@ -687,6 +701,7 @@ pub(crate) mod tests {
         // Every reading present and large, which is where varints would have grown.
         parts.readings = sensors::tests::saturated_readings();
         parts.inputs = pressures::tests::saturated_inputs();
+        battery::tests::saturate_power_boards(&mut parts.inputs);
         parts.outputs = components::tests::saturated_outputs();
         parts.estimator = heartbeat::tests::flying_estimator();
         // After the readings, which the line above replaces wholesale.

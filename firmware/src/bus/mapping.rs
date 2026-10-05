@@ -127,3 +127,12 @@ pub const PRESS_SENSOR_ID_MAP: PressureSensorMap<SensorAddr> = PressureSensorMap
         slot: 0xff,
     }, // PressSensId::ExternalOxidizer
 ]);
+
+/// The power boards' `Status` frame repurposes `stalled_mask` for charger state. Restated from
+/// power_board_firmware's `src/can/tpdo.rs`.
+pub mod charger_bits {
+    pub const FAULT: u8 = 1 << 0;
+    /// REG1C.CHG_STAT: 0 not charging, 1..=6 charging phases, 7 done.
+    pub const CHARGE_STATE_SHIFT: u8 = 4;
+    pub const CHARGE_STATE_MASK: u8 = 0b0111 << CHARGE_STATE_SHIFT;
+}
