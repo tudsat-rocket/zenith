@@ -4,7 +4,7 @@ use core::time::Duration;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use siphasher::sip::SipHasher;
 
-use mission::inventory::{InventoryId, ServoId, ValveId};
+use mission::inventory::{BinaryOutputId, InventoryId, ServoId, ValveId};
 use rapid_dialect::rapid::enums::{MavCmd, MavResult};
 use rapid_dialect::{FlightMode, ValveCommand};
 
@@ -25,6 +25,7 @@ pub enum UplinkMessage {
     ParamSet(ParamSetMessage),
     ParamRequest(ParamRequestMessage),
     SetServo(SetServoMessage),
+    SetCamera(SetCameraMessage),
 }
 
 impl TelemetryMessage for UplinkMessage {
@@ -45,6 +46,7 @@ impl TelemetryMessage for UplinkMessage {
             Self::ParamSet(inner) => (ParamSetMessage::ID, inner.serialize()?),
             Self::ParamRequest(inner) => (ParamRequestMessage::ID, inner.serialize()?),
             Self::SetServo(inner) => (SetServoMessage::ID, inner.serialize()?),
+            Self::SetCamera(inner) => (SetCameraMessage::ID, inner.serialize()?),
         };
 
         let mut buffer = [0x00; UPLINK_PACKET_SIZE];
@@ -104,6 +106,7 @@ impl TelemetryMessage for UplinkMessage {
             ParamSetMessage::ID => UplinkMessage::ParamSet(postcard::from_bytes(payload)?),
             ParamRequestMessage::ID => UplinkMessage::ParamRequest(postcard::from_bytes(payload)?),
             SetServoMessage::ID => UplinkMessage::SetServo(postcard::from_bytes(payload)?),
+            SetCameraMessage::ID => UplinkMessage::SetCamera(postcard::from_bytes(payload)?),
             id => {
                 return Err(TelemetryError::UnknownMessageId(id));
             }
@@ -148,6 +151,10 @@ impl UplinkMessage {
             }),
             Self::SetServo(inner) => inner.command().ok_or_else(|| {
                 defmt::warn!("Rejecting uplink command for an unknown servo.");
+                MavResult::Denied
+            }),
+            Self::SetCamera(inner) => inner.command().ok_or_else(|| {
+                defmt::warn!("Rejecting uplink command for an unknown camera.");
                 MavResult::Denied
             }),
         })
@@ -336,6 +343,39 @@ impl SetServoMessage {
     }
 }
 
+/// 0x07: SetCamera
+///
+/// Starts or stops camera recording, the RF counterpart of MAV_CMD_VIDEO_START_CAPTURE and
+/// MAV_CMD_VIDEO_STOP_CAPTURE.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetCameraMessage {
+    /// MAVLink camera id, 0 for all cameras.
+    camera: u8,
+    recording: bool,
+}
+
+impl UplinkTelemetryMessage for SetCameraMessage {
+    const ID: u8 = 0x07;
+}
+
+impl SetCameraMessage {
+    pub fn new(camera: u8, recording: bool) -> Self {
+        Self { camera, recording }
+    }
+
+    /// The command this packet asks for, or `None` if it names a camera we do not have.
+    pub fn command(&self) -> Option<UplinkCommand> {
+        if self.camera != 0 {
+            BinaryOutputId::camera(self.camera)?;
+        }
+
+        Some(UplinkCommand::SetCameraRecording {
+            camera: self.camera,
+            recording: self.recording,
+        })
+    }
+}
+
 // TODO: messages for:
 //  - log/storage management
 //  -
@@ -477,6 +517,31 @@ mod tests {
 
         assert_eq!(
             SetServoMessage::new(ServoId::ALL.len() as u8, 0).command(),
+            None
+        );
+    }
+
+    #[test]
+    fn camera_commands_survive_the_packet() {
+        for camera in 0..=BinaryOutputId::CAMERAS.len() as u8 {
+            for recording in [false, true] {
+                let sent = SetCameraMessage::new(camera, recording);
+                let UplinkMessage::SetCamera(decoded) =
+                    through_packet(UplinkMessage::SetCamera(sent))
+                else {
+                    panic!("decoded as the wrong message")
+                };
+
+                assert_eq!(
+                    decoded.command(),
+                    Some(UplinkCommand::SetCameraRecording { camera, recording }),
+                    "camera {camera}"
+                );
+            }
+        }
+
+        assert_eq!(
+            SetCameraMessage::new(BinaryOutputId::CAMERAS.len() as u8 + 1, true).command(),
             None
         );
     }

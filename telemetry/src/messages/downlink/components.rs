@@ -3,10 +3,14 @@ use core::num::Wrapping;
 use serde::{Deserialize, Serialize};
 
 use mission::bus::{NodeSet, ValveState};
-use mission::inventory::{InventoryId, ServoId, ServoMap, ValveId, valve_is_heated};
-use mission::mavlink::{VehicleSnapshot, centi_celsius, servo_output_raw, valve_heater_flags};
+use mission::inventory::{
+    BinaryOutputId, InventoryId, ServoId, ServoMap, ValveId, valve_is_heated,
+};
+use mission::mavlink::{
+    VehicleSnapshot, camera_capture_status, centi_celsius, servo_output_raw, valve_heater_flags,
+};
 use rapid_dialect::rapid::enums::ValveFlag;
-use rapid_dialect::rapid::messages::{ServoOutputRaw, Valve};
+use rapid_dialect::rapid::messages::{CameraCaptureStatus, ServoOutputRaw, Valve};
 
 use super::{ConnectionContext, DownlinkTelemetryMessage, pack_temperature, unpack_temperature};
 
@@ -32,6 +36,22 @@ const _: () = assert!(
     ValveCode::HEATER_SHIFT < u32::BITS as usize,
     "valve codes, servo codes and the heater bit no longer fit one word"
 );
+
+#[allow(clippy::arithmetic_side_effects, reason = "small constants")]
+const _: () = assert!(
+    ValveCode::BITS * (ValveCode::CAMERA_SLOT + BinaryOutputId::CAMERAS.len())
+        <= u32::BITS as usize,
+    "valve codes, the valve temperature and the camera codes no longer fit one word"
+);
+
+/// Where each camera's code goes in `reported`, by MAVLink camera id.
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "camera ids are 1..=CAMERAS.len(), which the const assert keeps in the word"
+)]
+fn camera_slot(camera_device_id: u8) -> usize {
+    ValveCode::CAMERA_SLOT + usize::from(camera_device_id) - 1
+}
 
 /// Where each servo's code goes in `commanded`: after the valves, one [`ValveCode::BITS`] slot
 /// each.
@@ -61,6 +81,10 @@ impl ValveCode {
     #[allow(clippy::arithmetic_side_effects, reason = "constant 2 * 9")]
     const SPARE_SHIFT: usize = Self::BITS * ValveId::ALL.len();
 
+    /// First slot above the valve temperature byte in `reported`.
+    #[allow(clippy::arithmetic_side_effects, reason = "constant (18 + 8) / 2")]
+    const CAMERA_SLOT: usize = (Self::SPARE_SHIFT + u8::BITS as usize) / Self::BITS;
+
     /// Bit above the servo codes.
     #[allow(clippy::arithmetic_side_effects, reason = "constant 2 * (9 + 4)")]
     const HEATER_SHIFT: usize = Self::BITS * (ValveId::ALL.len() + ServoId::ALL.len());
@@ -71,6 +95,23 @@ impl ValveCode {
             Some(0) => Self::Closed,
             Some(1000) => Self::Open,
             Some(_) => Self::Partial,
+        }
+    }
+
+    /// A camera output's code: `Closed` for off, `Open` for on.
+    fn from_switch(state: Option<bool>) -> Self {
+        match state {
+            None => Self::Unknown,
+            Some(false) => Self::Closed,
+            Some(true) => Self::Open,
+        }
+    }
+
+    fn switch(self) -> Option<bool> {
+        match self {
+            Self::Closed => Some(false),
+            Self::Open => Some(true),
+            Self::Partial | Self::Unknown => None,
         }
     }
 
@@ -118,7 +159,7 @@ impl ValveCode {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ComponentsMessage {
     /// One [`ValveCode`] per valve, as the bus reports it, then the temperature code of the
-    /// heated valve.
+    /// heated valve, then one per camera output as the bus reports it.
     #[serde(with = "postcard::fixint::le")]
     reported: u32,
     /// One [`ValveCode`] per valve and servo, as the vehicle last resolved it, then the heater
@@ -136,9 +177,15 @@ pub struct ComponentsMessage {
 impl DownlinkTelemetryMessage for ComponentsMessage {
     const ID: u8 = 0x04;
     type Input<'a> = &'a VehicleSnapshot<'a>;
-    /// One per [`ValveId`], the commanded servos, then the nodes on the bus and the armed subset
-    /// of them.
-    type Output = ([Valve; 9], ServoOutputRaw, NodeSet, NodeSet);
+    /// One per [`ValveId`], the commanded servos, the nodes on the bus and the armed subset of
+    /// them, then one per camera the bus reports on.
+    type Output = (
+        [Valve; 9],
+        ServoOutputRaw,
+        NodeSet,
+        NodeSet,
+        [Option<CameraCaptureStatus>; BinaryOutputId::CAMERAS.len()],
+    );
 
     fn pack(snapshot: Self::Input<'_>) -> Self {
         let mut heater = false;
@@ -163,8 +210,18 @@ impl DownlinkTelemetryMessage for ComponentsMessage {
             (servo_slot(servo), ValveCode::from_state(state))
         }));
 
+        let cameras = ValveCode::pack(BinaryOutputId::CAMERAS.into_iter().filter_map(|camera| {
+            let state = snapshot.input_image.binary_outputs[camera].map(|s| s.data);
+            Some((
+                camera_slot(camera.camera_device_id()?),
+                ValveCode::from_switch(state),
+            ))
+        }));
+
         Self {
-            reported: reported | u32::from(pack_temperature(temperature)) << ValveCode::SPARE_SHIFT,
+            reported: reported
+                | u32::from(pack_temperature(temperature)) << ValveCode::SPARE_SHIFT
+                | cameras,
             commanded: commanded_valves
                 | commanded_servos
                 | u32::from(heater) << ValveCode::HEATER_SHIFT,
@@ -200,11 +257,18 @@ impl DownlinkTelemetryMessage for ComponentsMessage {
             ValveCode::unpack_one(self.commanded, servo_slot(servo)).commanded_state()
         });
 
+        let cameras = BinaryOutputId::CAMERAS.map(|camera| {
+            let id = camera.camera_device_id()?;
+            let recording = ValveCode::unpack_one(self.reported, camera_slot(id)).switch()?;
+            Some(camera_capture_status(Wrapping(context.time), id, recording))
+        });
+
         (
             valves,
             servo_output_raw(Wrapping(context.time), &servos),
             NodeSet::from_bits(self.node_presence),
             NodeSet::from_bits(self.node_armed),
+            cameras,
         )
     }
 }
@@ -346,7 +410,7 @@ pub(crate) mod tests {
         let DownlinkMessage::Components(decoded) = through_packet(msg) else {
             panic!("decoded as the wrong message")
         };
-        let (_, _, nodes, armed) = decoded.unpack(&mut ConnectionContext::init(0));
+        let (_, _, nodes, armed, _) = decoded.unpack(&mut ConnectionContext::init(0));
 
         for node_id in 0..16 {
             assert_eq!(
@@ -360,6 +424,43 @@ pub(crate) mod tests {
                 "node {node_id} arming"
             );
         }
+    }
+
+    /// The camera codes sit in the top bits of `reported`, right above the valve temperature.
+    #[test]
+    fn camera_states_survive_the_packet() {
+        let mut parts = SnapshotParts::default();
+        parts.inputs.valve_temp = Some(DataWithTime::new(-20.0, Wrapping(0)));
+        parts.inputs.binary_outputs[BinaryOutputId::Camera1] =
+            Some(DataWithTime::new(true, Wrapping(0)));
+        parts.inputs.binary_outputs[BinaryOutputId::Camera3] =
+            Some(DataWithTime::new(false, Wrapping(0)));
+        // Camera2 deliberately left unreported.
+
+        let msg = DownlinkMessage::Components(ComponentsMessage::pack(&parts.snapshot()));
+        let DownlinkMessage::Components(decoded) = through_packet(msg) else {
+            panic!("decoded as the wrong message")
+        };
+        let (valves, .., cameras) = decoded.unpack(&mut ConnectionContext::init(0));
+
+        let status = |camera: &Option<CameraCaptureStatus>| {
+            camera
+                .as_ref()
+                .map(|c| (c.camera_device_id, c.video_status))
+        };
+        assert_eq!(
+            cameras.each_ref().map(status),
+            [Some((1, 1)), None, Some((3, 0))]
+        );
+
+        let Some(heated) = valves.iter().find(|v| valve_is_heated(v.id)) else {
+            panic!("no heated valve")
+        };
+        assert!(
+            (heated.temperature + 2000).abs() <= 50,
+            "{}",
+            heated.temperature
+        );
     }
 
     #[test]

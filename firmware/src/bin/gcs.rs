@@ -26,8 +26,8 @@ use embassy_time::{Duration, Instant, Ticker, Timer, with_deadline};
 
 use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG};
 use telemetry::messages::{
-    CommandAck, DownlinkMessage, ParamEntry, ParamRequestMessage, ParamSetMessage, SetServoMessage,
-    SetValveMessage, UplinkMessage,
+    CommandAck, DownlinkMessage, ParamEntry, ParamRequestMessage, ParamSetMessage,
+    SetCameraMessage, SetServoMessage, SetValveMessage, UplinkMessage,
 };
 use telemetry::trx::receiver::HoppingReceiver;
 use telemetry::trx::transmitter::HoppingTransmitter;
@@ -371,6 +371,9 @@ async fn join_uplink(
                     UplinkCommand::SetServo {
                         servo, promille, ..
                     } => UplinkMessage::SetServo(SetServoMessage::new(servo, promille)),
+                    UplinkCommand::SetCameraRecording { camera, recording } => {
+                        UplinkMessage::SetCamera(SetCameraMessage::new(camera, recording))
+                    }
                     UplinkCommand::SetParam { id, raw } => {
                         UplinkMessage::ParamSet(ParamSetMessage(ParamEntry { id, raw }))
                     }
