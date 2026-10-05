@@ -203,9 +203,9 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         // Camera outputs and the armed transmit power are switched on automatically, but are not
         // automatically switched back off.
         if mode >= FlightMode::DetectLaunch {
-            self.bus_outputs.binary_output[BinaryOutputId::Camera1] = true;
-            self.bus_outputs.binary_output[BinaryOutputId::Camera2] = true;
-            self.bus_outputs.binary_output[BinaryOutputId::Camera3] = true;
+            for camera in BinaryOutputId::CAMERAS {
+                self.bus_outputs.binary_output[camera] = true;
+            }
             self.tx_power_armed = true;
         }
 
