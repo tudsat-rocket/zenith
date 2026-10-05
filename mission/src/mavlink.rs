@@ -604,13 +604,8 @@ impl InstanceMessage<Option<PowerBoardId>> for BatteryStatus {
         let (id, voltage_mv, current_ma, charge_state) = match source {
             Some(board) => {
                 let reading = boards[board]?;
-                let id = match board {
-                    PowerBoardId::Board1 => 1,
-                    PowerBoardId::Board2 => 2,
-                    PowerBoardId::Board3 => 3,
-                };
                 (
-                    id,
+                    battery_id(board),
                     reading.voltage_mv,
                     reading.current_ma,
                     reading.charge_state,
@@ -634,12 +629,20 @@ impl InstanceMessage<Option<PowerBoardId>> for BatteryStatus {
     }
 }
 
+pub fn battery_id(board: PowerBoardId) -> u8 {
+    match board {
+        PowerBoardId::Board1 => 1,
+        PowerBoardId::Board2 => 2,
+        PowerBoardId::Board3 => 3,
+    }
+}
+
 /// A 3S Li-ion pack.
 #[allow(
     clippy::arithmetic_side_effects,
     reason = "bounded i32 sensor math with nonzero constant divisors, cannot over/underflow or divide by zero"
 )]
-fn battery_status(
+pub fn battery_status(
     id: u8,
     voltage_mv: Option<u16>,
     current_ma: Option<i32>,
