@@ -230,6 +230,31 @@ impl PressSensId {
     }
 }
 
+const _: () = assert!(
+    BinaryOutputId::CAMERAS.len() <= 6,
+    "MAVLink numbers autopilot-attached cameras 1 to 6"
+);
+
+impl BinaryOutputId {
+    /// The RunCam outputs. Powering one starts its camera recording.
+    pub const CAMERAS: [Self; 3] = [Self::Camera1, Self::Camera2, Self::Camera3];
+
+    /// The MAVLink `camera_device_id` of a camera output: its position in [`Self::CAMERAS`],
+    /// 1-based.
+    pub fn camera_device_id(self) -> Option<u8> {
+        Self::CAMERAS
+            .into_iter()
+            .zip(1..)
+            .find_map(|(camera, id)| (camera == self).then_some(id))
+    }
+
+    /// Inverse of [`Self::camera_device_id`].
+    pub fn camera(device_id: u8) -> Option<Self> {
+        let i = usize::from(device_id).checked_sub(1)?;
+        Self::CAMERAS.get(i).copied()
+    }
+}
+
 impl InventoryId<9> for ValveId {
     // The MavLink type has enum values Extra{1..10} with higher values, we simply ignore those
     const ALL: [Self; 9] = [
