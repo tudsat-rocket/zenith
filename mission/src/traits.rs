@@ -17,6 +17,16 @@ pub struct AdcData {
     pub temperature: i32,
 }
 
+impl AdcData {
+    /// Recovery voltage above which the recovery system is considered armed [mV].
+    const RECOVERY_ARMED_THRESHOLD_MV: u16 = 6000;
+
+    /// Whether the recovery voltage is applied, i.e. the arming pins/switches are thrown.
+    pub fn recovery_armed(&self) -> bool {
+        self.recovery_voltage > Self::RECOVERY_ARMED_THRESHOLD_MV
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct BaroReading {
     pub pressure: Option<f32>,

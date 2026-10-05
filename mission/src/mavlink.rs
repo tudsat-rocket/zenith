@@ -27,7 +27,7 @@ use crate::bus::{BusInputImage, BusOutputImage, ValveState};
 use crate::inventory::{InventoryId, OxProbeId, ServoMap, TankId, ValveId, valve_is_heated};
 use crate::params::StateMachineParams;
 use crate::schedule::downlink_schedule;
-use crate::traits::SensorReadings;
+use crate::traits::{AdcData, SensorReadings};
 
 /// Everything the vehicle exposes about one tick, borrowed rather than copied. Built by
 /// `Vehicle::snapshot`; the conversions in this module read nothing else.
@@ -63,13 +63,10 @@ impl VehicleSnapshot<'_> {
     /// thrown. This is orthogonal to the flight mode and is what MAVLink SAFETY_ARMED reflects.
     /// The IO boards report their own arming separately, as their own components.
     fn is_physically_armed(&self) -> bool {
-        const RECOVERY_ARMED_THRESHOLD_MV: u16 = 6000;
-
         self.readings
             .power
             .as_ref()
-            .map(|p| p.recovery_voltage > RECOVERY_ARMED_THRESHOLD_MV)
-            .unwrap_or(false)
+            .is_some_and(AdcData::recovery_armed)
     }
 
     /// Whether the valve's heater is on, and its temperature in Celsius. `None` for a valve

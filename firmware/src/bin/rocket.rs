@@ -127,10 +127,16 @@ pub async fn main_loop(
 
         vehicle.tick().await;
 
-        // Let the buzzer know about mode changes and the battery voltage.
+        // Let the buzzer know about mode changes, the battery voltage and
+        // the recovery arming state.
         alerts.update(
             vehicle.mode(),
             vehicle.readings.power.as_ref().map(|p| p.bus_main_voltage),
+            vehicle
+                .readings
+                .power
+                .as_ref()
+                .is_some_and(mission::AdcData::recovery_armed),
         );
 
         // TODO: this belongs somewhere else

@@ -88,6 +88,28 @@ static MODE_CHANGE: [Note; 4] = [
     Note::pause(120),
 ];
 
+/// Fast rising arpeggio ending on a long high note, played when the recovery
+/// voltage is applied, i.e. the recovery system is physically armed.
+static RECOVERY_ARMED: [Note; 8] = [
+    Note::new(C, 6, 90),
+    Note::pause(30),
+    Note::new(E, 6, 90),
+    Note::pause(30),
+    Note::new(G, 6, 90),
+    Note::pause(30),
+    Note::new(C, 7, 400),
+    Note::pause(150),
+];
+
+/// Two long falling notes, played when the recovery voltage is removed again.
+/// Lower and slower than [`BATTERY_LOW`], so the two are not mixed up.
+static RECOVERY_DISARMED: [Note; 4] = [
+    Note::new(G, 5, 300),
+    Note::pause(40),
+    Note::new(C, 5, 500),
+    Note::pause(150),
+];
+
 /// Two-tone hazard warning, looped while the vehicle is pressurized. Kept
 /// deliberately unpleasant and gapless: it means "do not approach the rocket".
 static PRESSURIZED: [Note; 4] = [
@@ -113,6 +135,8 @@ pub enum Sound {
     BatteryLow,
     BatteryExtremeLow,
     ModeChange,
+    RecoveryArmed,
+    RecoveryDisarmed,
     Pressurized,
     Landed,
     Mario,
@@ -120,11 +144,13 @@ pub enum Sound {
 
 impl Sound {
     /// The sounds that can be requested by name, e.g. over `PLAY_TUNE_V2`.
-    const NAMED: [(&'static str, Sound); 7] = [
+    const NAMED: [(&'static str, Sound); 9] = [
         ("startup", Sound::StartupTech),
         ("battery_low", Sound::BatteryLow),
         ("battery_extreme_low", Sound::BatteryExtremeLow),
         ("mode_change", Sound::ModeChange),
+        ("recovery_armed", Sound::RecoveryArmed),
+        ("recovery_disarmed", Sound::RecoveryDisarmed),
         ("pressurized", Sound::Pressurized),
         ("landed", Sound::Landed),
         ("mario", Sound::Mario),
@@ -145,6 +171,8 @@ fn get_song_notes(sound: Sound) -> &'static [Note] {
         Sound::BatteryLow => &BATTERY_LOW,
         Sound::BatteryExtremeLow => &BATTERY_EXTREME_LOW,
         Sound::ModeChange => &MODE_CHANGE,
+        Sound::RecoveryArmed => &RECOVERY_ARMED,
+        Sound::RecoveryDisarmed => &RECOVERY_DISARMED,
         Sound::Pressurized => &PRESSURIZED,
         Sound::Landed => &LANDED,
         Sound::Mario => &MARIO,

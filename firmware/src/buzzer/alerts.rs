@@ -1,10 +1,12 @@
-//! Decides what the buzzer plays, based on the flight mode and the battery
-//! voltage.
+//! Decides what the buzzer plays, based on the flight mode, the battery
+//! voltage and the recovery arming state.
 //!
 //! [`Alerts::update`] is called from the main loop on every tick. It emits
 //! two kinds of requests:
 //!
 //! * A short chirp on every flight mode change ([`Sound::ModeChange`]).
+//! * The arming indicator: [`Sound::RecoveryArmed`] when the recovery voltage
+//!   is applied, [`Sound::RecoveryDisarmed`] when it is removed again.
 //! * A continuous *alert loop*, for conditions that last longer than a single
 //!   sound. Only one can be active at a time, in order of priority:
 //!   1. [`Sound::Landed`] - locator beacon, so the rocket can be found.
@@ -39,6 +41,10 @@ const BATTERY_LOW_INTERVAL: Duration = Duration::from_secs(30);
 /// How often the nearly empty battery warning repeats.
 const BATTERY_EXTREME_LOW_INTERVAL: Duration = Duration::from_secs(10);
 
+/// How long the recovery arming state has to be stable before it is announced,
+/// so that a bouncing arming switch does not make the buzzer stutter.
+const RECOVERY_DEBOUNCE: Duration = Duration::from_millis(200);
+
 #[derive(Clone, Copy, Default, PartialEq, Eq, Format)]
 enum BatteryState {
     #[default]
@@ -62,18 +68,25 @@ pub struct Alerts {
     battery_pending: Option<(BatteryState, Instant)>,
     /// When the current battery warning was last played.
     battery_warned_at: Option<Instant>,
+    /// Whether the recovery voltage is applied, as last announced.
+    recovery_armed: bool,
+    /// Since when the recovery arming state has differed from the announced one.
+    recovery_pending: Option<Instant>,
     /// The alert loop currently requested, so it is only sent once.
     alert_loop: Option<Sound>,
 }
 
 impl Alerts {
-    /// Update the buzzer with the current flight mode and main bus voltage
-    /// (`None` if the ADC has no reading yet).
-    pub fn update(&mut self, mode: FlightMode, battery_mv: Option<u16>) {
+    /// Update the buzzer with the current flight mode, main bus voltage
+    /// (`None` if the ADC has no reading yet) and whether the recovery voltage
+    /// is applied.
+    pub fn update(&mut self, mode: FlightMode, battery_mv: Option<u16>, recovery_armed: bool) {
         if mode != self.mode {
             self.mode = mode;
             self.mode_changed(mode);
         }
+
+        self.update_recovery(recovery_armed);
 
         self.update_battery(battery_mv);
         self.warn_about_battery();
@@ -131,6 +144,30 @@ impl Alerts {
         if sound != self.alert_loop {
             self.alert_loop = sound;
             request_loop(sound);
+        }
+    }
+
+    /// Announce a change of the recovery arming state, once it has been stable
+    /// for [`RECOVERY_DEBOUNCE`].
+    fn update_recovery(&mut self, armed: bool) {
+        if armed == self.recovery_armed {
+            self.recovery_pending = None;
+            return;
+        }
+
+        let since = *self.recovery_pending.get_or_insert_with(Instant::now);
+        if since.elapsed() >= RECOVERY_DEBOUNCE {
+            info!(
+                "Buzzer: recovery armed {} -> {}",
+                self.recovery_armed, armed
+            );
+            self.recovery_armed = armed;
+            self.recovery_pending = None;
+            request_sound(if armed {
+                Sound::RecoveryArmed
+            } else {
+                Sound::RecoveryDisarmed
+            });
         }
     }
 
