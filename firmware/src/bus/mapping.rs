@@ -19,9 +19,14 @@ const HCO3: u8 = 3;
 #[allow(dead_code)]
 const HCO4: u8 = 4;
 
+// Hco mapping for engine board as mounted in GSE
+#[allow(dead_code)]
 const SOLENOID: u8 = 3;
+#[allow(dead_code)]
 const STEPPER: u8 = 4;
+#[allow(dead_code)]
 const SERVO_LOWER: u8 = 1;
+#[allow(dead_code)]
 const SERVO_UPPER: u8 = 2;
 
 // These are CANopen sub-indices, so they are 1-based: sub 0 of an array object is the entry
@@ -108,7 +113,7 @@ pub const OX_PROBE_ID_MAP: OxProbeMap<SensorAddr> = OxProbeMap::new([
 pub const PRESS_SENSOR_ID_MAP: PressureSensorMap<SensorAddr> = PressureSensorMap::new([
     // node_id, sensor slot
     SensorAddr::from_sensor_idx(2, 0).unwrap(), // PressSensId::Nosecone
-    SensorAddr::from_sensor_idx(5, 4).unwrap(), // PressSensId::PressurantTank
+    SensorAddr::from_sensor_idx(4, 4).unwrap(), // PressSensId::PressurantTank
     SensorAddr::from_sensor_idx(5, 1).unwrap(), // PressSensId::PReg1
     SensorAddr::from_sensor_idx(5, 2).unwrap(), // PressSensId::PReg2
     SensorAddr::from_sensor_idx(4, 1).unwrap(), // PressSensId::OxTankUpper
