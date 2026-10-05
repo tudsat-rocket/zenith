@@ -66,7 +66,10 @@ impl PackedBoard {
         }
     }
 
-    #[allow(clippy::arithmetic_side_effects, reason = "bounded by the u8/i16 codes")]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "bounded by the u8/i16 codes"
+    )]
     fn unpack(self) -> Option<PowerBoardReading> {
         if self.charge_state == BOARD_ABSENT {
             return None;
@@ -105,7 +108,10 @@ impl DownlinkTelemetryMessage for BatteryMessage {
 
     fn unpack(self, _context: &mut ConnectionContext) -> Self::Output {
         PowerBoardId::ALL.map(|board| {
-            #[allow(clippy::indexing_slicing, reason = "idx() is 0..3 by the InventoryId contract")]
+            #[allow(
+                clippy::indexing_slicing,
+                reason = "idx() is 0..3 by the InventoryId contract"
+            )]
             let reading = self.boards[board.idx()].unpack()?;
             Some(battery_status(
                 battery_id(board),
