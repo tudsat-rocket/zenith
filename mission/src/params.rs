@@ -58,14 +58,14 @@ pub struct StateMachineParams {
     #[param(id = 0x0206, name = "LODEC_T", default = 50)]
     pub liftoff_detection_time: u32,
     /// Time (ms) the main output is high within each firing pulse
-    #[param(id = 0x0207, name = "MAIN_ON_T", default = 300)]
+    #[param(id = 0x0207, name = "MAIN_ON_T", default = 250)]
     pub main_on_time: u32,
     /// Time (ms) the main output is low between firing pulses
     #[param(id = 0x0208, name = "MAIN_GAP_T", default = 100)]
     pub main_pulse_gap: u32,
     /// Number of main firing pulses. The whole train must fit inside the time the
     /// vehicle spends in `DeployMain`, which can be as short as 3 seconds.
-    #[param(id = 0x0209, name = "MAIN_PULSES", default = 2)]
+    #[param(id = 0x0209, name = "MAIN_PULSES", default = 1)]
     pub main_pulses: u32,
 }
 
