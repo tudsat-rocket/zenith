@@ -87,6 +87,12 @@ pub enum UplinkCommand {
         servo: u8,
         promille: u16,
     },
+    /// Power a camera output, which starts or stops its recording. `camera` is 0 for all cameras
+    /// or a 1-based MAVLink camera id.
+    SetCameraRecording {
+        camera: u8,
+        recording: bool,
+    },
     SetParam {
         id: u16,
         raw: u32,
@@ -108,6 +114,11 @@ impl UplinkCommand {
             Self::SetFlightMode(_) => Some(MavCmd::DoSetMode),
             Self::CommandValve(..) => Some(MavCmd::CommandValve),
             Self::SetServo { command, .. } => Some(*command),
+            Self::SetCameraRecording { recording, .. } => Some(if *recording {
+                MavCmd::VideoStartCapture
+            } else {
+                MavCmd::VideoStopCapture
+            }),
             Self::RequestAvailableModes(_)
             | Self::RequestCanForwarding
             | Self::SetParam { .. }

@@ -179,6 +179,15 @@ pub async fn run(
                         }
                         Err(result) => result,
                     },
+                    MavCmd::VideoStartCapture | MavCmd::VideoStopCapture => {
+                        match camera_command(&cmd) {
+                            Ok(camera_cmd) => {
+                                cmd_tx.publish(camera_cmd).await;
+                                MavResult::InProgress
+                            }
+                            Err(result) => result,
+                        }
+                    }
                     _ => MavResult::Unsupported,
                 };
 
@@ -330,6 +339,30 @@ fn servo_command(cmd: &CommandLong) -> Result<UplinkCommand, MavResult> {
     })
 }
 
+/// VIDEO_START_CAPTURE and VIDEO_STOP_CAPTURE carry the target camera id in different params; 0
+/// targets all cameras. The stream id and status frequency are ignored: the cameras have no
+/// streams, and their status goes out on a fixed schedule.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    reason = "the cast saturates; comparing it back exactly rejects anything but a whole id"
+)]
+fn camera_command(cmd: &CommandLong) -> Result<UplinkCommand, MavResult> {
+    let (param, recording) = match cmd.command {
+        MavCmd::VideoStartCapture => (cmd.param3, true),
+        MavCmd::VideoStopCapture => (cmd.param2, false),
+        _ => return Err(MavResult::Unsupported),
+    };
+
+    let camera = param as u8;
+    if f32::from(camera) != param {
+        return Err(MavResult::Denied);
+    }
+
+    Ok(UplinkCommand::SetCameraRecording { camera, recording })
+}
+
 async fn reboot() {
     log::warn!("rebooting");
     Timer::after(Duration::from_millis(250)).await;
@@ -382,6 +415,47 @@ mod tests {
         assert_eq!(at(0.0, 1500.0), Err(MavResult::Denied));
         assert_eq!(at(1.0, f32::NAN), Err(MavResult::Denied));
         assert_eq!(at(f32::NAN, 1500.0), Err(MavResult::Denied));
+    }
+
+    #[test]
+    fn video_capture_targets_the_camera_param() {
+        let nan = f32::NAN;
+        let start = |camera| {
+            camera_command(&CommandLong {
+                command: MavCmd::VideoStartCapture,
+                param1: 0.0,
+                param2: 1.0,
+                param3: camera,
+                param4: nan,
+                param7: nan,
+                ..Default::default()
+            })
+        };
+        let stop = |camera| {
+            camera_command(&CommandLong {
+                command: MavCmd::VideoStopCapture,
+                param1: 0.0,
+                param2: camera,
+                param3: nan,
+                param4: nan,
+                param7: nan,
+                ..Default::default()
+            })
+        };
+        let set = |camera, recording| Ok(UplinkCommand::SetCameraRecording { camera, recording });
+
+        assert_eq!(start(0.0), set(0, true));
+        assert_eq!(start(2.0), set(2, true));
+        assert_eq!(stop(0.0), set(0, false));
+        assert_eq!(stop(3.0), set(3, false));
+
+        // Range is left to the vehicle, which knows how many cameras it has.
+        assert_eq!(stop(7.0), set(7, false));
+
+        assert_eq!(start(nan), Err(MavResult::Denied));
+        assert_eq!(stop(-1.0), Err(MavResult::Denied));
+        assert_eq!(stop(1.5), Err(MavResult::Denied));
+        assert_eq!(stop(256.0), Err(MavResult::Denied));
     }
 
     #[test]
