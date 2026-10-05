@@ -15,10 +15,10 @@ use rapid_dialect::rapid::enums::{
     MavSysStatusSensor, MavSysStatusSensorExtended, MavType, RocketCapability, ValveFlag,
 };
 use rapid_dialect::rapid::messages::{
-    Attitude, AutopilotVersion, BatteryStatus, DebugFloatArray, GlobalPositionInt, GpsRawInt,
-    Heartbeat, LocalPositionNed, PressureVessel, RocketInfo, ScaledImu, ScaledImu2, ScaledImu3,
-    ScaledPressure, ScaledPressure2, ScaledPressure3, ServoOutputRaw, StorageInformation,
-    SysStatus, Valve, VfrHud,
+    Attitude, AutopilotVersion, BatteryStatus, CameraCaptureStatus, DebugFloatArray,
+    GlobalPositionInt, GpsRawInt, Heartbeat, LocalPositionNed, PressureVessel, RocketInfo,
+    ScaledImu, ScaledImu2, ScaledImu3, ScaledPressure, ScaledPressure2, ScaledPressure3,
+    ServoOutputRaw, StorageInformation, SysStatus, Valve, VfrHud,
 };
 
 use state_estimator::StateEstimator;
@@ -27,8 +27,8 @@ use crate::TelemetryLink;
 use crate::bus::{BusInputImage, BusOutputImage, NodeStatus, ValveState};
 use crate::flight_log::{LOG_STATUS, LOG_USAGE, LogState};
 use crate::inventory::{
-    EXTERNAL_VALVES, INTERNAL_VALVES, InventoryId, OxProbeId, PowerBoardId, ServoMap, TankId,
-    ValveId, valve_is_heated,
+    BinaryOutputId, EXTERNAL_VALVES, INTERNAL_VALVES, InventoryId, OxProbeId, PowerBoardId,
+    ServoMap, TankId, ValveId, valve_is_heated,
 };
 use crate::params::StateMachineParams;
 use crate::schedule::downlink_schedule;
@@ -81,7 +81,8 @@ impl VehicleSnapshot<'_> {
             every 2000 ms => RocketInfo, AutopilotVersion, StorageInformation;
             // One message per component
             every 200 ms => PressureVessel[TankId::ALL], Valve[ValveId::ALL], ServoOutputRaw;
-            every 1000 ms => Heartbeat[crate::bus::IO_NODE_IDS], SysStatus[crate::bus::IO_NODE_IDS];
+            every 1000 ms => Heartbeat[crate::bus::IO_NODE_IDS], SysStatus[crate::bus::IO_NODE_IDS],
+                CameraCaptureStatus[BinaryOutputId::CAMERAS];
         }
     }
 
@@ -764,6 +765,31 @@ impl InstanceMessage<u8> for SysStatus {
     fn build(snap: &VehicleSnapshot<'_>, node_id: u8) -> Option<Self> {
         snap.node_health(node_id)
             .map(|health| io_node_sys_status(node_id, &health))
+    }
+}
+
+/// Shared because the ground station rebuilds these from the LoRa downlink, and both paths have
+/// to produce the same message.
+pub fn camera_capture_status(
+    time: Wrapping<u32>,
+    camera_device_id: u8,
+    recording: bool,
+) -> CameraCaptureStatus {
+    CameraCaptureStatus {
+        time_boot_ms: time.0,
+        video_status: recording.into(),
+        camera_device_id,
+        ..Default::default()
+    }
+}
+
+/// The cameras record whenever their output is powered, so the output state the IO board reports
+/// back is the recording state.
+impl InstanceMessage<BinaryOutputId> for CameraCaptureStatus {
+    fn build(snap: &VehicleSnapshot<'_>, output: BinaryOutputId) -> Option<Self> {
+        let recording = snap.input_image.binary_outputs[output]?.data;
+        let id = output.camera_device_id()?;
+        Some(camera_capture_status(snap.time, id, recording))
     }
 }
 

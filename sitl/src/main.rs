@@ -113,6 +113,15 @@ async fn main_loop(mut vehicle: Vehicle, mut links: Links, sim: SharedSimulation
                         }
                     }
                 }
+                UplinkCommand::SetCameraRecording { camera, recording } => {
+                    match vehicle.try_command_camera(camera, recording) {
+                        Ok(()) => MavResult::Accepted,
+                        Err(e) => {
+                            log::warn!("SetCameraRecording {camera} {recording} rejected: {e:?}");
+                            e
+                        }
+                    }
+                }
                 UplinkCommand::EraseLog => {
                     if vehicle.erase_log() {
                         MavResult::Accepted
