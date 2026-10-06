@@ -129,6 +129,11 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.bus_outputs.valve = self.valves.resolve(self.time, &self.propulsion_params);
         self.bus_outputs.servo = self.servos.resolve(self.time, &self.qd_params);
         self.bus.set_output_image(self.bus_outputs);
+        self.valves.track_measured(
+            self.time,
+            &self.bus_inputs.valve_state,
+            &self.bus_outputs.valve,
+        );
 
         self.time += 1;
     }
@@ -256,6 +261,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             input_image: &self.bus_inputs,
             state_estimator: &self.state_estimator,
             output_image: &self.bus_outputs,
+            valves_agree: self.valves.valves_agree(self.time),
         }
     }
 }
