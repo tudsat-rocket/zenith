@@ -86,6 +86,7 @@ impl<SPI: SpiDevice<u8>> BMP580<SPI> {
 
     pub async fn tick(&mut self) {
         if let Err(_) = self.read_sensor_data().await {
+            mission::health::SENSOR_ERRORS.record();
             self.pressure = None;
             self.temperature = None;
         }

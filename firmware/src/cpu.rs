@@ -59,7 +59,6 @@ pub struct CpuMonitor {
     window_start: Instant,
     windows: u32,
     peak_permille: u16,
-    peak_latency_us: u16,
 }
 
 impl CpuMonitor {
@@ -68,7 +67,6 @@ impl CpuMonitor {
             window_start: Instant::now(),
             windows: 0,
             peak_permille: 0,
-            peak_latency_us: 0,
         }
     }
 
@@ -77,9 +75,6 @@ impl CpuMonitor {
         if latency > TICK_PERIOD {
             LOOP_HEALTH.record_overrun();
         }
-
-        let latency_us = u16::try_from(latency.as_micros()).unwrap_or(u16::MAX);
-        self.peak_latency_us = self.peak_latency_us.max(latency_us);
 
         let elapsed = self.window_start.elapsed();
         if elapsed < WINDOW {
@@ -112,9 +107,7 @@ impl CpuMonitor {
 
         if self.windows >= WINDOWS_PER_REPORT {
             CPU_LOAD.set_permille(self.peak_permille);
-            LOOP_HEALTH.set_peak_latency_us(self.peak_latency_us);
             self.peak_permille = 0;
-            self.peak_latency_us = 0;
             self.windows = 0;
         }
     }

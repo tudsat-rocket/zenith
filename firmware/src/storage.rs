@@ -19,6 +19,7 @@ use sequential_storage::map::{MapConfig, MapStorage};
 
 use defmt::*;
 
+use mission::health::STORAGE_ERRORS;
 use mission::params::ParameterGroup;
 use mission::{Params, params};
 
@@ -84,6 +85,7 @@ async fn run(mut flash: Flash) -> ! {
         let request = STORAGE_REQUESTS.receive().await;
 
         if !flash.healthy {
+            STORAGE_ERRORS.record();
             warn!("storage: flash unavailable, dropping {}", request);
             continue;
         }
@@ -92,6 +94,7 @@ async fn run(mut flash: Flash) -> ! {
             StorageRequest::WriteParam { id, raw } => {
                 info!("storage: writing param {} = {:#010x}", id, raw);
                 if let Err(e) = flash.map.store_item(&mut buffer, &id, &raw).await {
+                    STORAGE_ERRORS.record();
                     error!(
                         "storage: failed to store param {}: {:?}",
                         id,
@@ -102,6 +105,7 @@ async fn run(mut flash: Flash) -> ! {
             StorageRequest::EraseParams => {
                 info!("storage: erasing param region");
                 if let Err(e) = flash.map.erase_all().await {
+                    STORAGE_ERRORS.record();
                     error!("storage: erase failed: {:?}", Debug2Format(&e));
                 }
             }
@@ -123,6 +127,7 @@ impl FlashHandle {
     pub fn write_param(&self, id: u16, raw: u32) {
         let request = StorageRequest::WriteParam { id, raw };
         if STORAGE_REQUESTS.try_send(request).is_err() {
+            STORAGE_ERRORS.record();
             warn!(
                 "storage: request queue full, dropping write for param {}",
                 id
@@ -135,6 +140,7 @@ impl FlashHandle {
             .try_send(StorageRequest::EraseParams)
             .is_err()
         {
+            STORAGE_ERRORS.record();
             warn!("storage: request queue full, dropping param erase");
         }
     }
@@ -153,6 +159,7 @@ impl Flash {
         let healthy = match driver.probe().await {
             Ok(()) => true,
             Err(e) => {
+                STORAGE_ERRORS.record();
                 error!(
                     "storage: flash probe failed ({}), continuing without persistence",
                     e
@@ -235,15 +242,18 @@ impl Flash {
                 Err(sequential_storage::Error::Corrupted { .. }) => {
                     // fetch_item already attempted an automatic repair, so this region is beyond
                     // saving. Start fresh.
+                    STORAGE_ERRORS.record();
                     error!("storage: param region corrupted, erasing");
 
                     if let Err(e) = self.map.erase_all().await {
+                        STORAGE_ERRORS.record();
                         error!("storage: erase failed: {:?}", Debug2Format(&e));
                     }
 
                     return Params::default();
                 }
                 Err(e) => {
+                    STORAGE_ERRORS.record();
                     error!(
                         "storage: failed to fetch param {}: {:?}",
                         descriptor.id.get(),
