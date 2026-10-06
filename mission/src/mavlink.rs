@@ -50,6 +50,8 @@ pub struct VehicleSnapshot<'a> {
     pub state_estimator: &'a StateEstimator,
     pub input_image: &'a BusInputImage,
     pub output_image: &'a BusOutputImage,
+    /// Every valve has been where it was commanded, give or take its travel time.
+    pub valves_agree: bool,
 }
 
 impl VehicleSnapshot<'_> {
@@ -432,60 +434,56 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
             | MavSysStatusSensor::PROPULSION
             | MavSysStatusSensor::MAV_SYS_STATUS_EXTENSION_USED;
 
+        // The IO boards report themselves in detail; this is their summary for ground software that
+        // only looks at the vehicle's own SYS_STATUS.
+        let outputs_armed = self.input_image.nodes_armed != crate::bus::NodeSet::NONE;
+
         let mut enabled = present;
         if !armed {
             enabled -= MavSysStatusSensor::MAV_SYS_STATUS_LOGGING;
         }
-        if !hw_armed {
+        if !outputs_armed {
             enabled -= MavSysStatusSensor::MOTOR_OUTPUTS;
         }
         if self.mode != FlightMode::Burn && self.mode != FlightMode::Ignite {
             enabled -= MavSysStatusSensor::PROPULSION;
         }
 
-        let mut health = MavSysStatusSensor::empty();
-        if r.imu1_gyro.is_some() && r.imu2_gyro.is_some() && r.imu3_gyro.is_some() {
-            health |= MavSysStatusSensor::_3D_GYRO;
-        }
-        if r.imu1_accel.is_some() && r.imu2_accel.is_some() && r.imu3_accel.is_some() {
-            health |= MavSysStatusSensor::_3D_ACCEL;
-        }
-        if r.mag.is_some() {
-            health |= MavSysStatusSensor::_3D_MAG;
-        }
-        if r.baro1.pressure.is_some() {
-            health |= MavSysStatusSensor::ABSOLUTE_PRESSURE;
-        }
-        if r.gps.is_some() {
-            health |= MavSysStatusSensor::GPS;
-        }
-        if self.state_estimator.orientation.is_some() {
-            health |= MavSysStatusSensor::MAV_SYS_STATUS_AHRS;
-        }
-        if r.power.is_some() {
-            health |= MavSysStatusSensor::BATTERY;
-        }
-        if armed {
-            health |= MavSysStatusSensor::MAV_SYS_STATUS_LOGGING;
-        }
-        if hw_armed {
-            health |= MavSysStatusSensor::MOTOR_OUTPUTS;
-        }
-        if hw_armed
-            && let Some(g) = &r.gps
-            && self.state_estimator.gps_reliable(g)
-        {
-            health |= MavSysStatusSensor::MAV_SYS_STATUS_PREARM_CHECK;
-        }
-        health |= MavSysStatusSensor::MAV_SYS_STATUS_EXTENSION_USED;
+        let gyros = r.imu1_gyro.is_some() && r.imu2_gyro.is_some() && r.imu3_gyro.is_some();
+        let accels = r.imu1_accel.is_some() && r.imu2_accel.is_some() && r.imu3_accel.is_some();
+        let baros =
+            r.baro1.pressure.is_some() && r.baro2.pressure.is_some() && r.baro3.pressure.is_some();
+        let ahrs = self.state_estimator.orientation.is_some();
+        let gps_reliable = r
+            .gps
+            .as_ref()
+            .is_some_and(|g| self.state_estimator.gps_reliable(g));
+
+        // There is no flight log yet, so the flash's health stands in for it.
+        let logging = armed && crate::health::STORAGE_ERRORS.get() == 0;
+        let health = [
+            (gyros, MavSysStatusSensor::_3D_GYRO),
+            (accels, MavSysStatusSensor::_3D_ACCEL),
+            (r.mag.is_some(), MavSysStatusSensor::_3D_MAG),
+            (baros, MavSysStatusSensor::ABSOLUTE_PRESSURE),
+            (r.gps.is_some(), MavSysStatusSensor::GPS),
+            (ahrs, MavSysStatusSensor::MAV_SYS_STATUS_AHRS),
+            (r.power.is_some(), MavSysStatusSensor::BATTERY),
+            (logging, MavSysStatusSensor::MAV_SYS_STATUS_LOGGING),
+            (outputs_armed, MavSysStatusSensor::MOTOR_OUTPUTS),
+            (
+                gyros && accels && baros && ahrs && gps_reliable,
+                MavSysStatusSensor::MAV_SYS_STATUS_PREARM_CHECK,
+            ),
+            (self.valves_agree, MavSysStatusSensor::PROPULSION),
+            (true, MavSysStatusSensor::MAV_SYS_STATUS_EXTENSION_USED),
+        ]
+        .into_iter()
+        .filter(|&(healthy, _)| healthy)
+        .fold(MavSysStatusSensor::empty(), |acc, (_, sensor)| acc | sensor);
 
         let recovery_present = MavSysStatusSensorExtended::MAV_SYS_STATUS_RECOVERY_SYSTEM;
-        let recovery_enabled = if armed {
-            recovery_present
-        } else {
-            MavSysStatusSensorExtended::empty()
-        };
-        let recovery_health = if armed {
+        let recovery = if hw_armed {
             recovery_present
         } else {
             MavSysStatusSensorExtended::empty()
@@ -514,8 +512,8 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
             errors_count3: crate::health::STORAGE_ERRORS.get(),
             errors_count4: 0,
             onboard_control_sensors_present_extended: recovery_present,
-            onboard_control_sensors_enabled_extended: recovery_enabled,
-            onboard_control_sensors_health_extended: recovery_health,
+            onboard_control_sensors_enabled_extended: recovery,
+            onboard_control_sensors_health_extended: recovery,
         }
     }
 }
@@ -843,5 +841,102 @@ mod tests {
             let (_, pitch, _) = euler_angles(&attitude(1.0, elevation, 0.8));
             assert!((pitch - elevation).abs() < 1e-3, "pitch {pitch}");
         }
+    }
+
+    /// Every on-board sensor reporting, and a GPS fix good enough to use.
+    fn healthy_readings() -> SensorReadings {
+        let baro = crate::traits::BaroReading {
+            pressure: Some(1013.0),
+            temperature: Some(20.0),
+            altitude: Some(100.0),
+        };
+
+        SensorReadings {
+            imu1_gyro: Some(Vector3::zeros()),
+            imu1_accel: Some(Vector3::zeros()),
+            imu2_gyro: Some(Vector3::zeros()),
+            imu2_accel: Some(Vector3::zeros()),
+            imu3_gyro: Some(Vector3::zeros()),
+            imu3_accel: Some(Vector3::zeros()),
+            baro1: baro.clone(),
+            baro2: baro.clone(),
+            baro3: baro,
+            gps: Some(state_estimator::GpsDatum {
+                latitude: Some(49.0),
+                longitude: Some(8.0),
+                altitude: Some(100.0),
+                hdop: 90,
+                num_satellites: 12,
+                seq: 0,
+            }),
+            ..SensorReadings::default()
+        }
+    }
+
+    /// The vehicle's own SYS_STATUS, with a settled attitude and nothing on the bus.
+    fn sys_status(mode: FlightMode, readings: &SensorReadings, valves_agree: bool) -> SysStatus {
+        let mut estimator =
+            StateEstimator::new(1000.0, state_estimator::StateEstimatorParams::default());
+        estimator.orientation = Some(level_facing_north());
+
+        let snapshot = VehicleSnapshot {
+            time: Wrapping(0),
+            mode,
+            state_machine_params: &StateMachineParams::default(),
+            readings,
+            state_estimator: &estimator,
+            input_image: &BusInputImage::default(),
+            output_image: &BusOutputImage::default(),
+            valves_agree,
+        };
+        (&snapshot).into()
+    }
+
+    /// Prearm says whether the vehicle is ready to be armed, so it cannot wait for arming.
+    #[test]
+    fn prearm_passes_before_arming() {
+        let mut readings = healthy_readings();
+        let status = sys_status(FlightMode::Idle, &readings, true);
+        assert!(
+            status
+                .onboard_control_sensors_health
+                .contains(MavSysStatusSensor::MAV_SYS_STATUS_PREARM_CHECK)
+        );
+
+        readings.baro3.pressure = None;
+        let status = sys_status(FlightMode::Idle, &readings, true);
+        assert!(
+            !status
+                .onboard_control_sensors_health
+                .contains(MavSysStatusSensor::MAV_SYS_STATUS_PREARM_CHECK)
+        );
+        assert!(
+            !status
+                .onboard_control_sensors_health
+                .contains(MavSysStatusSensor::ABSOLUTE_PRESSURE)
+        );
+    }
+
+    #[test]
+    fn propulsion_follows_the_valves() {
+        let readings = healthy_readings();
+        let status = sys_status(FlightMode::Burn, &readings, true);
+        assert!(
+            status
+                .onboard_control_sensors_enabled
+                .contains(MavSysStatusSensor::PROPULSION)
+        );
+        assert!(
+            status
+                .onboard_control_sensors_health
+                .contains(MavSysStatusSensor::PROPULSION)
+        );
+
+        let status = sys_status(FlightMode::Burn, &readings, false);
+        assert!(
+            !status
+                .onboard_control_sensors_health
+                .contains(MavSysStatusSensor::PROPULSION)
+        );
     }
 }
