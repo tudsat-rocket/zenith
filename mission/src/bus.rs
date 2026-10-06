@@ -50,6 +50,22 @@ pub struct BusInputImage {
     pub nodes_armed: NodeSet,
     /// `None` while the board is not present.
     pub power_boards: PowerBoardMap<Option<PowerBoardReading>>,
+    /// Indexed by node id. A power board's supply is in `power_boards` instead.
+    pub node_status: [NodeStatus; NODE_ID_COUNT],
+}
+
+/// An IO board's own health, as reported in its SYS_STATUS.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NodeStatus {
+    /// Logic rail. `None` while the board is not present.
+    pub voltage_mv: Option<u16>,
+    /// Sum of all rails. `None` while the board is not present.
+    pub current_ma: Option<i32>,
+    /// Frames from this node the flight computer could not make sense of. Cumulative, wrapping.
+    pub comm_errors: u16,
+    // TODO: placeholder until the IO board protocol carries error counters of its own.
+    /// SYS_STATUS `errors_count1` to `4`.
+    pub errors: [u16; 4],
 }
 
 /// One power board's battery pack. Each field arrives in a frame of its own.
@@ -193,8 +209,18 @@ impl BusInputImage {
             nodes: NodeSet::NONE,
             nodes_armed: NodeSet::NONE,
             power_boards: PowerBoardMap::splat(None),
+            node_status: [NodeStatus::UNKNOWN; NODE_ID_COUNT],
         }
     }
+}
+
+impl NodeStatus {
+    pub const UNKNOWN: Self = Self {
+        voltage_mv: None,
+        current_ma: None,
+        comm_errors: 0,
+        errors: [0; 4],
+    };
 }
 
 impl BusOutputImage {
