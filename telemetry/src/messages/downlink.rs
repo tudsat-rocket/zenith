@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use links::Downlink;
 use mission::bus::IO_NODE_IDS;
+use mission::inventory::ValveMap;
 use mission::mavlink::{VehicleSnapshot, io_node_heartbeat};
 use rapid_dialect::rapid::enums::MavResult;
 use rapid_dialect::rapid::messages::RadioStatus;
@@ -24,6 +25,7 @@ mod params;
 mod pressures;
 mod sensors;
 mod status;
+mod valve_currents;
 
 pub use battery::BatteryMessage;
 pub use components::ComponentsMessage;
@@ -33,6 +35,7 @@ pub use params::{ParamEntry, ParamValuesMessage};
 pub use pressures::{ExternalPressuresMessage, PressuresMessage};
 pub use sensors::SensorsMessage;
 pub use status::StatusMessage;
+pub use valve_currents::ValveCurrentsMessage;
 
 pub const DOWNLINK_PACKET_SIZE: usize = 16;
 const DOWNLINK_PAYLOAD_SIZE: usize = DOWNLINK_PACKET_SIZE - 4;
@@ -119,6 +122,9 @@ pub struct ConnectionContext {
     /// The last received flight mode, if known.
     /// Used to derive which valves are commandable, which the components message has no room for.
     pub mode: Option<FlightMode>,
+    /// The last received valve drive currents in mA, if known.
+    /// Used to enrich VALVE messages, which the components message has no room to carry them in.
+    pub valve_currents: ValveMap<Option<u16>>,
 }
 
 impl ConnectionContext {
@@ -138,6 +144,7 @@ impl ConnectionContext {
             rx_noise: None,
             rx_packet_loss: None,
             mode: None,
+            valve_currents: ValveMap::splat(None),
         }
     }
 
@@ -177,6 +184,7 @@ pub enum DownlinkMessage {
     Gps(GpsMessage),
     ParamValues(ParamValuesMessage),
     Battery(BatteryMessage),
+    ValveCurrents(ValveCurrentsMessage),
 }
 
 impl DownlinkMessage {
@@ -214,9 +222,9 @@ impl DownlinkMessage {
         )]
         let slot = (time_ms / DOWNLINK_MESSAGE_INTERVAL_MS) % Self::SLOT_COUNT;
 
-        // The packed messages repeat over each half of the cycle, so the GPS and external
-        // pressure slots are paid for out of the heartbeat's share alone. Status changes slowest,
-        // so its second slot goes to the batteries instead.
+        // The packed messages repeat over each half of the cycle, so the GPS, external pressure
+        // and valve current slots are paid for out of the heartbeat's share alone. Status changes
+        // slowest, so its second slot goes to the batteries instead.
         Some(match slot {
             1 | 9 => Self::Pressures(PressuresMessage::pack(snapshot)),
             3 | 11 => Self::Components(ComponentsMessage::pack(snapshot)),
@@ -228,6 +236,7 @@ impl DownlinkMessage {
                 Self::ExternalPressures(ExternalPressuresMessage::pack(snapshot))
             }
             14 => Self::Gps(GpsMessage::pack(snapshot)),
+            8 => Self::ValveCurrents(ValveCurrentsMessage::pack(snapshot)),
             2 | 10 => match param_values() {
                 Some(values) => Self::ParamValues(values),
                 None => Self::Heartbeat(HeartbeatMessage::pack((snapshot, ack))),
@@ -260,6 +269,7 @@ impl TelemetryMessage for DownlinkMessage {
             Self::Gps(inner) => (GpsMessage::ID, inner.serialize()?),
             Self::ParamValues(inner) => (ParamValuesMessage::ID, inner.serialize()?),
             Self::Battery(inner) => (BatteryMessage::ID, inner.serialize()?),
+            Self::ValveCurrents(inner) => (ValveCurrentsMessage::ID, inner.serialize()?),
         };
 
         let mut buffer = [0x00; DOWNLINK_PACKET_SIZE];
@@ -310,6 +320,9 @@ impl TelemetryMessage for DownlinkMessage {
             GpsMessage::ID => DownlinkMessage::Gps(postcard::from_bytes(payload)?),
             ParamValuesMessage::ID => DownlinkMessage::ParamValues(postcard::from_bytes(payload)?),
             BatteryMessage::ID => DownlinkMessage::Battery(postcard::from_bytes(payload)?),
+            ValveCurrentsMessage::ID => {
+                DownlinkMessage::ValveCurrents(postcard::from_bytes(payload)?)
+            }
             id => {
                 return Err(TelemetryError::UnknownMessageId(id));
             }
@@ -384,6 +397,7 @@ impl TelemetryMessage for DownlinkMessage {
                     sender.anysend(Downlink::from_self(status)).await;
                 }
             }
+            Self::ValveCurrents(inner) => inner.unpack(context),
         }
     }
 }
@@ -661,6 +675,7 @@ pub(crate) mod tests {
                     7 | 15 => SensorsMessage::ID,
                     6 if mode < FlightMode::Burn => ExternalPressuresMessage::ID,
                     14 => GpsMessage::ID,
+                    8 => ValveCurrentsMessage::ID,
                     2 | 10 if params_pending => ParamValuesMessage::ID,
                     _ => HeartbeatMessage::ID,
                 };
@@ -684,7 +699,7 @@ pub(crate) mod tests {
     /// the bench. This is what catches a field that lost its `fixint` annotation.
     #[test]
     fn no_payload_length_depends_on_its_values() {
-        fn lengths(parts: &SnapshotParts, param: ParamEntry) -> [usize; 9] {
+        fn lengths(parts: &SnapshotParts, param: ParamEntry) -> [usize; 10] {
             let s = parts.snapshot();
             [
                 encoded_len(&HeartbeatMessage::pack((&s, CommandAck::NONE))),
@@ -696,6 +711,7 @@ pub(crate) mod tests {
                 encoded_len(&GpsMessage::pack(&s)),
                 encoded_len(&ParamValuesMessage::pack([param; 2])),
                 encoded_len(&BatteryMessage::pack(&s)),
+                encoded_len(&ValveCurrentsMessage::pack(&s)),
             ]
         }
 
@@ -706,6 +722,7 @@ pub(crate) mod tests {
         parts.readings = sensors::tests::saturated_readings();
         parts.inputs = pressures::tests::saturated_inputs();
         battery::tests::saturate_power_boards(&mut parts.inputs);
+        valve_currents::tests::saturate_valve_currents(&mut parts.inputs);
         parts.outputs = components::tests::saturated_outputs();
         parts.estimator = heartbeat::tests::flying_estimator();
         // After the readings, which the line above replaces wholesale.
