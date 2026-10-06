@@ -7,7 +7,7 @@
 use std::num::Wrapping;
 
 use mission::bus::{
-    Bus, BusInputImage, BusOutputImage, DataWithTime, NodeSet, POWER_BOARD_NODE_IDS,
+    Bus, BusInputImage, BusOutputImage, DataWithTime, NodeSet, NodeStatus, POWER_BOARD_NODE_IDS,
     PowerBoardReading, ValveState,
 };
 use rapid_dialect::FlightMode;
@@ -389,6 +389,13 @@ impl Bus for SitlBus {
             })
         });
 
+        // A healthy board on a 5 V logic rail; nothing on the bus fails in simulation.
+        let node_status = core::array::from_fn(|node_id| NodeStatus {
+            voltage_mv: io_nodes.contains(node_id as u8).then_some(5000),
+            current_ma: io_nodes.contains(node_id as u8).then_some(100),
+            ..NodeStatus::UNKNOWN
+        });
+
         let ox_probes = OxProbeMap::from_fn(|id| {
             Some(DataWithTime::new(sim.hybrid.probe_temperature(id), now))
         });
@@ -412,6 +419,7 @@ impl Bus for SitlBus {
                 io_nodes
             },
             power_boards,
+            node_status,
         }
     }
 

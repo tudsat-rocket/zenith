@@ -177,8 +177,10 @@ fn every_present_io_board_node_heartbeats_as_its_own_component() {
                 MavType::Servo
             };
             assert!(
-                matches!(&message.message, Rapid::Heartbeat(h) if h.type_ == expected_type),
-                "component {} sent something other than a {expected_type:?} heartbeat",
+                matches!(&message.message, Rapid::Heartbeat(h) if h.type_ == expected_type)
+                    || matches!(message.message, Rapid::SysStatus(_)),
+                "component {} sent something other than a {expected_type:?} heartbeat or its \
+                 SYS_STATUS",
                 message.component_id
             );
             assert!(
@@ -187,6 +189,42 @@ fn every_present_io_board_node_heartbeats_as_its_own_component() {
                 "component {} is not a simulated bus node",
                 message.component_id
             );
+        }
+    });
+}
+
+#[test]
+fn every_present_bus_node_reports_its_own_sys_status() {
+    block_on(async {
+        let mut harness = Harness::new(None).await;
+        let sent = harness.collect_telemetry_by_tick(TICKS).await;
+        let sent: Vec<&links::Downlink> = sent.iter().flatten().collect();
+
+        for node_id in SIMULATED_NODES
+            .into_iter()
+            .chain(SIMULATED_POWER_BOARD_NODES)
+        {
+            let reports: Vec<_> = sent
+                .iter()
+                .filter_map(|m| match &m.message {
+                    Rapid::SysStatus(s) if m.component_id == node_id => Some(s),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                reports.len(),
+                (TICKS / 1000) as usize,
+                "node {node_id} reported its SYS_STATUS {} times",
+                reports.len()
+            );
+
+            for report in reports {
+                assert_ne!(
+                    report.voltage_battery,
+                    u16::MAX,
+                    "node {node_id} reported no voltage"
+                );
+            }
         }
     });
 }
