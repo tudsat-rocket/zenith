@@ -315,11 +315,16 @@ const UMBILICAL_NODE: u8 = 8;
 
 pub struct SitlBus {
     sim: super::SharedSimulation,
+    /// Reported back as-is: the simulated boards switch every output they are told to.
+    binary_outputs: BinaryOutputMap<bool>,
 }
 
 impl SitlBus {
     pub fn new(sim: super::SharedSimulation) -> Self {
-        Self { sim }
+        Self {
+            sim,
+            binary_outputs: BinaryOutputMap::splat(false),
+        }
     }
 }
 
@@ -398,7 +403,9 @@ impl Bus for SitlBus {
             press_sens,
             valve_state,
             servo_state: ServoMap::splat(None),
-            binary_outputs: BinaryOutputMap::splat(None),
+            binary_outputs: BinaryOutputMap::from_fn(|id| {
+                Some(DataWithTime::new(self.binary_outputs[id], now))
+            }),
             ox_probes,
             ox_tank_level: None,
             valve_temp: None,
@@ -433,6 +440,8 @@ impl Bus for SitlBus {
 
             sim.hybrid.command_valve(i, cmd);
         }
+
+        self.binary_outputs = outputs.binary_output;
 
         if outputs.binary_output[BinaryOutputId::Igniter1] {
             sim.hybrid.fire_igniter();

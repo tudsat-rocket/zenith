@@ -163,6 +163,15 @@ pub async fn main_loop(
                         e
                     }
                 },
+                UplinkCommand::SetCameraRecording { camera, recording } => {
+                    match vehicle.try_command_camera(camera, recording) {
+                        Ok(()) => MavResult::Accepted,
+                        Err(e) => {
+                            defmt::warn!("SetCameraRecording {} {} rejected", camera, recording);
+                            e
+                        }
+                    }
+                }
                 UplinkCommand::SetParam { id, raw } => {
                     vehicle.set_param(id, raw).await;
                     buzzer::set_volume(vehicle.misc_params().buzzer_volume);

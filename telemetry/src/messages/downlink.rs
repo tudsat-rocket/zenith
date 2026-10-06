@@ -346,7 +346,7 @@ impl TelemetryMessage for DownlinkMessage {
                 }
             }
             Self::Components(inner) => {
-                let (valves, servos, nodes, armed) = inner.unpack(context);
+                let (valves, servos, nodes, armed, cameras) = inner.unpack(context);
 
                 for valve in valves {
                     sender.anysend(Downlink::from_self(valve)).await;
@@ -358,6 +358,10 @@ impl TelemetryMessage for DownlinkMessage {
                 for node_id in IO_NODE_IDS.into_iter().filter(|id| nodes.contains(*id)) {
                     let heartbeat = io_node_heartbeat(node_id, armed.contains(node_id));
                     sender.anysend(Downlink::new(node_id, heartbeat)).await;
+                }
+
+                for camera in cameras.into_iter().flatten() {
+                    sender.anysend(Downlink::from_self(camera)).await;
                 }
             }
             Self::Sensors(inner) => {

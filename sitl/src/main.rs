@@ -104,6 +104,15 @@ async fn main_loop(mut vehicle: Vehicle, mut links: Links, sim: SharedSimulation
                         e
                     }
                 },
+                UplinkCommand::SetCameraRecording { camera, recording } => {
+                    match vehicle.try_command_camera(camera, recording) {
+                        Ok(()) => MavResult::Accepted,
+                        Err(e) => {
+                            log::warn!("SetCameraRecording {camera} {recording} rejected: {e:?}");
+                            e
+                        }
+                    }
+                }
                 #[cfg(feature = "hybrid")]
                 UplinkCommand::CommandValve(valve, valve_cmd) => {
                     match vehicle.try_command_valve(valve, valve_cmd) {

@@ -180,10 +180,11 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.servos.set_mode(mode, self.time);
 
         // Camera outputs are turned on automatically, but are not automatically turned
-        // back off.
+        // back off. A camera stopped from the ground comes back on with the next mode change.
         if mode >= FlightMode::DetectLaunch {
-            self.bus_outputs.binary_output[BinaryOutputId::Camera1] = true;
-            self.bus_outputs.binary_output[BinaryOutputId::Camera2] = true;
+            for camera in BinaryOutputId::CAMERAS {
+                self.bus_outputs.binary_output[camera] = true;
+            }
         }
     }
 
@@ -206,6 +207,20 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             .ok_or(MavResult::Denied)?;
         self.servos
             .command(*servo, ValveState::from_promille_clamped(promille));
+        Ok(())
+    }
+
+    /// `camera` is a MAVLink camera id: 0 for all of them, or a
+    /// [`BinaryOutputId::camera_device_id`].
+    pub fn try_command_camera(&mut self, camera: u8, recording: bool) -> Result<(), MavResult> {
+        if camera == 0 {
+            for camera in BinaryOutputId::CAMERAS {
+                self.bus_outputs.binary_output[camera] = recording;
+            }
+        } else {
+            let camera = BinaryOutputId::camera(camera).ok_or(MavResult::Denied)?;
+            self.bus_outputs.binary_output[camera] = recording;
+        }
         Ok(())
     }
 
