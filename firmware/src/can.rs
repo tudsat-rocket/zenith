@@ -10,6 +10,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber};
 
 use embassy_time::{Duration, Timer};
+use mission::health::CAN_ERRORS;
 use static_cell::StaticCell;
 
 pub const CAN_RX_QUEUE_SIZE: usize = 40;
@@ -56,7 +57,10 @@ async fn run_can_rx(can_rx: &'static mut CanRx<'static>, publisher: CanRxPublish
                     publisher.publish_immediate(frame);
                 }
             }
-            Err(_e) => Timer::after(Duration::from_millis(1)).await,
+            Err(_e) => {
+                CAN_ERRORS.record();
+                Timer::after(Duration::from_millis(1)).await;
+            }
         }
     }
 }
@@ -64,7 +68,10 @@ async fn run_can_rx(can_rx: &'static mut CanRx<'static>, publisher: CanRxPublish
 async fn run_can_tx(can_tx: &'static mut CanTx<'static>, mut subscriber: CanTxSubscriber) -> ! {
     loop {
         let message = subscriber.next_message_pure().await;
-        can_tx.write(&message).await;
+        // A frame handed back was bumped out of the hardware queue to make room, unsent.
+        if can_tx.write(&message).await.is_some() {
+            CAN_ERRORS.record();
+        }
     }
 }
 
