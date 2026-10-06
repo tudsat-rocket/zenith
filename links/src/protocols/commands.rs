@@ -10,14 +10,16 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::watch::Sender;
 use embassy_time::{Duration, Instant, Timer};
 
-use rapid_dialect::rapid::enums::{MavCmd, MavResult, TuneFormat, ValveId};
-use rapid_dialect::rapid::messages::{AvailableModes, CommandAck, CommandLong, SupportedTunes};
+use rapid_dialect::rapid::enums::{CameraCapFlags, MavCmd, MavResult, TuneFormat, ValveId};
+use rapid_dialect::rapid::messages::{
+    AvailableModes, CameraInformation, CommandAck, CommandLong, SupportedTunes,
+};
 use rapid_dialect::{FlightMode, Rapid, ValveCommand};
 
 use crate::protocols::link_quality::LinkQuality;
 use crate::{
-    InterfaceCommandPublisher, InterfaceRxSubscriber, InterfaceTxPublisher, SELF_COMPONENT_ID,
-    TUNE_NAME_LEN, UplinkCommand,
+    CAMERA_COUNT, InterfaceCommandPublisher, InterfaceRxSubscriber, InterfaceTxPublisher,
+    SELF_COMPONENT_ID, TUNE_NAME_LEN, UplinkCommand,
 };
 
 /// The tune format we advertise in `SUPPORTED_TUNES`.
@@ -133,6 +135,18 @@ pub async fn run(
                                     .into(),
                                 )
                                 .await;
+                                MavResult::Accepted
+                            }
+                            CameraInformation::ID => {
+                                // Static as well. The spec has no parameter to pick one
+                                // autopilot-attached camera, so every camera answers.
+                                log::info!("commands: RequestMessage for CameraInformation");
+                                for camera in 1..=CAMERA_COUNT {
+                                    tx.publish(
+                                        Rapid::CameraInformation(camera_information(camera)).into(),
+                                    )
+                                    .await;
+                                }
                                 MavResult::Accepted
                             }
                             _ => MavResult::Denied,
@@ -363,6 +377,33 @@ fn camera_command(cmd: &CommandLong) -> Result<UplinkCommand, MavResult> {
     Ok(UplinkCommand::SetCameraRecording { camera, recording })
 }
 
+/// What we know about the RunCams, which is little more than that they record 4K UHD video.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "time_boot_ms wraps after 49 days like every other MAVLink timestamp"
+)]
+fn camera_information(camera_device_id: u8) -> CameraInformation {
+    const VENDOR: &[u8] = b"RunCam";
+
+    let mut vendor_name = [0; 32];
+    if let Some(name) = vendor_name.get_mut(..VENDOR.len()) {
+        name.copy_from_slice(VENDOR);
+    }
+
+    CameraInformation {
+        time_boot_ms: Instant::now().as_millis() as u32,
+        vendor_name,
+        focal_length: f32::NAN,
+        sensor_size_h: f32::NAN,
+        sensor_size_v: f32::NAN,
+        resolution_h: 3840,
+        resolution_v: 2160,
+        flags: CameraCapFlags::CAPTURE_VIDEO,
+        camera_device_id,
+        ..Default::default()
+    }
+}
+
 async fn reboot() {
     log::warn!("rebooting");
     Timer::after(Duration::from_millis(250)).await;
@@ -456,6 +497,18 @@ mod tests {
         assert_eq!(stop(-1.0), Err(MavResult::Denied));
         assert_eq!(stop(1.5), Err(MavResult::Denied));
         assert_eq!(stop(256.0), Err(MavResult::Denied));
+    }
+
+    #[test]
+    fn camera_information_names_the_camera() {
+        let info = camera_information(2);
+
+        assert_eq!(info.camera_device_id, 2);
+        assert_eq!(info.flags, CameraCapFlags::CAPTURE_VIDEO);
+        assert_eq!((info.resolution_h, info.resolution_v), (3840, 2160));
+        assert_eq!(info.vendor_name.get(..6), Some(&b"RunCam"[..]));
+        assert!(info.vendor_name.iter().skip(6).all(|b| *b == 0));
+        assert_eq!(info.model_name, [0; 32]);
     }
 
     #[test]

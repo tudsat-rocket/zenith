@@ -231,8 +231,8 @@ impl PressSensId {
 }
 
 const _: () = assert!(
-    BinaryOutputId::CAMERAS.len() <= 6,
-    "MAVLink numbers autopilot-attached cameras 1 to 6"
+    BinaryOutputId::CAMERAS.len() == links::CAMERA_COUNT as usize,
+    "links answers CAMERA_INFORMATION requests on its own, so it has to know the camera count"
 );
 
 impl BinaryOutputId {

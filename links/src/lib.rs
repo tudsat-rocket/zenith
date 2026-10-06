@@ -25,6 +25,15 @@ pub const SELF_COMPONENT_ID: u8 = 0x01;
 /// the MAVLink message provides.
 pub const TUNE_NAME_LEN: usize = 24;
 
+/// Cameras attached to the flight computer, without MAVLink component ids of their own. MAVLink
+/// numbers them 1 to `CAMERA_COUNT` in `camera_device_id`.
+pub const CAMERA_COUNT: u8 = 3;
+
+const _: () = assert!(
+    CAMERA_COUNT <= 6,
+    "MAVLink numbers autopilot-attached cameras 1 to 6"
+);
+
 /// One message on its way out, plus the MAVLink component it speaks for.
 ///
 /// Almost everything zenith sends is its own; the exception is the heartbeat per IO board node,
