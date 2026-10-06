@@ -4,6 +4,7 @@ use mission::mavlink::{VehicleSnapshot, autopilot_version};
 use rapid_dialect::rapid::enums::{MavSysStatusSensor, MavSysStatusSensorExtended};
 use rapid_dialect::rapid::messages::{AutopilotVersion, RadioStatus, SysStatus, SystemTime};
 
+use super::component_status::set_error_counts;
 use super::{ConnectionContext, DownlinkTelemetryMessage, UNKNOWN};
 
 /// Subset of SYS_STATUS bits we actually care about
@@ -91,7 +92,7 @@ impl DownlinkTelemetryMessage for StatusMessage {
         let (enabled, enabled_extended) = unpack_sensors(self.sensors_enabled);
         let (health, health_extended) = unpack_sensors(self.sensors_health);
 
-        let sys_status = SysStatus {
+        let mut sys_status = SysStatus {
             onboard_control_sensors_present: present,
             onboard_control_sensors_enabled: enabled,
             onboard_control_sensors_health: health,
@@ -108,6 +109,8 @@ impl DownlinkTelemetryMessage for StatusMessage {
             battery_remaining: -1,
             ..Default::default()
         };
+
+        set_error_counts(&mut sys_status, context.self_errors.unwrap_or_default());
 
         let radio_status = RadioStatus {
             rssi: context.rx_rssi.unwrap_or(u8::MAX),

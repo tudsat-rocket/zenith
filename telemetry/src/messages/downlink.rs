@@ -17,6 +17,7 @@ use crate::TelemetryError;
 use crate::messages::TelemetryMessage;
 
 mod battery;
+mod component_status;
 mod components;
 mod gps;
 mod heartbeat;
@@ -26,6 +27,7 @@ mod sensors;
 mod status;
 
 pub use battery::BatteryMessage;
+pub use component_status::{ComponentStatusMessage, ErrorCounts};
 pub use components::ComponentsMessage;
 pub use gps::GpsMessage;
 pub use heartbeat::HeartbeatMessage;
@@ -116,6 +118,8 @@ pub struct ConnectionContext {
     /// Downlink packet loss (in percent).
     /// Used to enrich RADIO_STATUS messages with ground-side information.
     pub rx_packet_loss: Option<u16>,
+    /// The flight computer's error counters, which arrive apart from the rest of its SYS_STATUS.
+    pub self_errors: Option<ErrorCounts>,
 }
 
 impl ConnectionContext {
@@ -134,6 +138,7 @@ impl ConnectionContext {
             rx_rssi: None,
             rx_noise: None,
             rx_packet_loss: None,
+            self_errors: None,
         }
     }
 
@@ -173,6 +178,7 @@ pub enum DownlinkMessage {
     Gps(GpsMessage),
     ParamValues(ParamValuesMessage),
     Battery(BatteryMessage),
+    ComponentStatus(ComponentStatusMessage),
 }
 
 impl DownlinkMessage {
@@ -211,8 +217,8 @@ impl DownlinkMessage {
         let slot = (time_ms / DOWNLINK_MESSAGE_INTERVAL_MS) % Self::SLOT_COUNT;
 
         // The packed messages repeat over each half of the cycle, so the GPS and external
-        // pressure slots are paid for out of the heartbeat's share alone. Status changes slowest,
-        // so its second slot goes to the batteries instead.
+        // pressure slots are paid for out of the heartbeat's share alone, as are the error counters.
+        // Status changes slowest, so its second slot goes to the batteries instead.
         Some(match slot {
             1 | 9 => Self::Pressures(PressuresMessage::pack(snapshot)),
             3 | 11 => Self::Components(ComponentsMessage::pack(snapshot)),
@@ -224,6 +230,14 @@ impl DownlinkMessage {
                 Self::ExternalPressures(ExternalPressuresMessage::pack(snapshot))
             }
             14 => Self::Gps(GpsMessage::pack(snapshot)),
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "DOWNLINK_MESSAGE_INTERVAL_MS and SLOT_COUNT are nonzero constants"
+            )]
+            12 => Self::ComponentStatus(ComponentStatusMessage::pack((
+                snapshot,
+                time_ms / (DOWNLINK_MESSAGE_INTERVAL_MS * Self::SLOT_COUNT),
+            ))),
             2 | 10 => match param_values() {
                 Some(values) => Self::ParamValues(values),
                 None => Self::Heartbeat(HeartbeatMessage::pack((snapshot, ack))),
@@ -256,6 +270,7 @@ impl TelemetryMessage for DownlinkMessage {
             Self::Gps(inner) => (GpsMessage::ID, inner.serialize()?),
             Self::ParamValues(inner) => (ParamValuesMessage::ID, inner.serialize()?),
             Self::Battery(inner) => (BatteryMessage::ID, inner.serialize()?),
+            Self::ComponentStatus(inner) => (ComponentStatusMessage::ID, inner.serialize()?),
         };
 
         let mut buffer = [0x00; DOWNLINK_PACKET_SIZE];
@@ -306,6 +321,9 @@ impl TelemetryMessage for DownlinkMessage {
             GpsMessage::ID => DownlinkMessage::Gps(postcard::from_bytes(payload)?),
             ParamValuesMessage::ID => DownlinkMessage::ParamValues(postcard::from_bytes(payload)?),
             BatteryMessage::ID => DownlinkMessage::Battery(postcard::from_bytes(payload)?),
+            ComponentStatusMessage::ID => {
+                DownlinkMessage::ComponentStatus(postcard::from_bytes(payload)?)
+            }
             id => {
                 return Err(TelemetryError::UnknownMessageId(id));
             }
@@ -378,6 +396,11 @@ impl TelemetryMessage for DownlinkMessage {
             Self::Battery(inner) => {
                 for status in inner.unpack(context).into_iter().flatten() {
                     sender.anysend(Downlink::from_self(status)).await;
+                }
+            }
+            Self::ComponentStatus(inner) => {
+                for (node_id, status) in inner.unpack(context).into_iter().flatten() {
+                    sender.anysend(Downlink::new(node_id, status)).await;
                 }
             }
         }
@@ -660,6 +683,7 @@ pub(crate) mod tests {
                     7 | 15 => SensorsMessage::ID,
                     6 if mode < FlightMode::Burn => ExternalPressuresMessage::ID,
                     14 => GpsMessage::ID,
+                    12 => ComponentStatusMessage::ID,
                     2 | 10 if params_pending => ParamValuesMessage::ID,
                     _ => HeartbeatMessage::ID,
                 };
@@ -683,7 +707,7 @@ pub(crate) mod tests {
     /// the bench. This is what catches a field that lost its `fixint` annotation.
     #[test]
     fn no_payload_length_depends_on_its_values() {
-        fn lengths(parts: &SnapshotParts, param: ParamEntry) -> [usize; 9] {
+        fn lengths(parts: &SnapshotParts, param: ParamEntry) -> [usize; 10] {
             let s = parts.snapshot();
             [
                 encoded_len(&HeartbeatMessage::pack((&s, CommandAck::NONE))),
@@ -695,6 +719,7 @@ pub(crate) mod tests {
                 encoded_len(&GpsMessage::pack(&s)),
                 encoded_len(&ParamValuesMessage::pack([param; 2])),
                 encoded_len(&BatteryMessage::pack(&s)),
+                encoded_len(&ComponentStatusMessage::pack((&s, 0))),
             ]
         }
 
@@ -705,6 +730,7 @@ pub(crate) mod tests {
         parts.readings = sensors::tests::saturated_readings();
         parts.inputs = pressures::tests::saturated_inputs();
         battery::tests::saturate_power_boards(&mut parts.inputs);
+        component_status::tests::saturate_nodes(&mut parts.inputs);
         parts.outputs = components::tests::saturated_outputs();
         parts.estimator = heartbeat::tests::flying_estimator();
         // After the readings, which the line above replaces wholesale.
