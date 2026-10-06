@@ -32,8 +32,8 @@ use mission::inventory::{
 
 use crate::bus::mapping::{BINARY_OUTPUT_ID_MAP, SERVO_ID_MAP, VALVE_ID_MAP, charger_bits};
 use crate::bus::pdo_mapping::{
-    SensorReading, hco_msg_to_binary_outputs, sensor_msg_to_readings, valve_msg_to_servo,
-    valve_msg_to_valve,
+    SensorReading, hco_msg_to_binary_outputs, sensor_msg_to_readings, valve_msg_to_current,
+    valve_msg_to_servo, valve_msg_to_valve,
 };
 use crate::can::{CanRxSubscriber, CanTxPublisher};
 
@@ -238,6 +238,11 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
                 image.servo_state[id] = Some(DataWithTime::new(state, time));
             }
         }
+        TpdoFrame::ValveCurrent(currents) => {
+            for (id, ma) in valve_msg_to_current(node_id, currents) {
+                image.valve_current[id] = Some(DataWithTime::new(ma, time));
+            }
+        }
         // Digital level and PWM width share one frame now; the outputs we drive as binary
         // outputs report themselves as digital.
         TpdoFrame::HcoState(outputs) => {
@@ -276,7 +281,6 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
         TpdoFrame::ValveCommanded(_)
         | TpdoFrame::ValveTarget(_)
         | TpdoFrame::ValveStatus { .. }
-        | TpdoFrame::ValveCurrent(_)
         | TpdoFrame::RawBus0A(_)
         | TpdoFrame::RawBus0B(_)
         | TpdoFrame::RawBus1A(_)

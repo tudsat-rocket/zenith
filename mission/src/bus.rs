@@ -36,6 +36,8 @@ pub struct BusInputImage {
     pub temp_sens: TemperatureSensorMap<Option<DataWithTime<f32>>>,
     pub press_sens: PressureSensorMap<Option<DataWithTime<f32>>>,
     pub valve_state: ValveMap<Option<DataWithTime<ValveState>>>,
+    /// Actuator drive current [mA]. The IO board reports 0 when it cannot attribute one.
+    pub valve_current: ValveMap<Option<DataWithTime<u16>>>,
     pub servo_state: ServoMap<Option<DataWithTime<ValveState>>>,
     pub binary_outputs: BinaryOutputMap<Option<DataWithTime<bool>>>,
     /// The tank level probe row, as it arrives from the bus.
@@ -185,6 +187,7 @@ impl BusInputImage {
             temp_sens: TemperatureSensorMap::splat(None),
             press_sens: PressureSensorMap::splat(None),
             valve_state: ValveMap::splat(None),
+            valve_current: ValveMap::splat(None),
             servo_state: ServoMap::splat(None),
             binary_outputs: BinaryOutputMap::splat(None),
             ox_probes: OxProbeMap::splat(None),

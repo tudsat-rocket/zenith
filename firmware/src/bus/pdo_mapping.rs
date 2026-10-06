@@ -93,6 +93,17 @@ pub fn valve_msg_to_valve(
     out
 }
 
+/// Valve drive currents in mA, in the frame's slot order.
+pub fn valve_msg_to_current(node_id: u8, currents: [u16; 4]) -> heapless::Vec<(ValveId, u16), 4> {
+    let mut out = heapless::Vec::new();
+    for (slot, &ma) in currents.iter().enumerate() {
+        if let Some(id) = valve_id_for(node_id, slot) {
+            let _ = out.push((id, ma));
+        }
+    }
+    out
+}
+
 fn valve_id_for(node_id: u8, slot: usize) -> Option<ValveId> {
     VALVE_ID_MAP
         .iter()

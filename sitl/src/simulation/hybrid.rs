@@ -397,6 +397,7 @@ impl Bus for SitlBus {
             temp_sens,
             press_sens,
             valve_state,
+            valve_current: ValveMap::splat(None),
             servo_state: ServoMap::splat(None),
             binary_outputs: BinaryOutputMap::splat(None),
             ox_probes,
