@@ -1,6 +1,6 @@
 //! Fault counters for the flight computer itself, reported in its SYS_STATUS.
 //!
-//! These are written from the platform's background tasks (CAN, sensors, storage), which do not
+//! These are written from the platform's background tasks (sensors, storage), which do not
 //! flow through `Vehicle`. The SITL never writes them.
 
 use core::sync::atomic::{AtomicU16, Ordering};
@@ -15,11 +15,7 @@ impl ErrorCounter {
     }
 
     pub fn record(&self) {
-        self.record_n(1);
-    }
-
-    pub fn record_n(&self, n: u16) {
-        self.0.fetch_add(n, Ordering::Relaxed);
+        self.0.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn get(&self) -> u16 {
@@ -33,8 +29,6 @@ impl Default for ErrorCounter {
     }
 }
 
-/// CAN controller errors, and frames lost to full queues in either direction.
-pub static CAN_ERRORS: ErrorCounter = ErrorCounter::new();
 /// On-board sensor reads that failed and left their reading unknown. The high-g accelerometer is
 /// left out: no board in use populates it, so it would only ever count.
 pub static SENSOR_ERRORS: ErrorCounter = ErrorCounter::new();

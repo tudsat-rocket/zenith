@@ -52,6 +52,8 @@ pub struct BusInputImage {
     pub nodes_armed: NodeSet,
     /// `None` while the board is not present.
     pub power_boards: PowerBoardMap<Option<PowerBoardReading>>,
+    /// The flight computer's own view of the wire, as opposed to the boards on it.
+    pub can: CanHealth,
     /// Indexed by node id. A power board's supply is in `power_boards` instead.
     pub node_status: [NodeStatus; NODE_ID_COUNT],
 }
@@ -77,6 +79,47 @@ pub struct PowerBoardReading {
     /// Positive while discharging.
     pub current_ma: Option<i32>,
     pub charge_state: MavBatteryChargeState,
+}
+
+/// The controller's error confinement state (ISO 11898-1), plus `Unknown` for builds with no
+/// controller to ask. The discriminants are the telemetry encoding.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CanBusState {
+    #[default]
+    Unknown = 0,
+    ErrorActive = 1,
+    /// An error counter passed 127. Typical when nothing acknowledges our frames, e.g. every
+    /// board is unplugged or unpowered.
+    ErrorPassive = 2,
+    /// The transmit error counter passed 255; the controller has left the bus until it recovers.
+    BusOff = 3,
+}
+
+impl CanBusState {
+    pub const fn from_bits(bits: u8) -> Self {
+        match bits {
+            1 => Self::ErrorActive,
+            2 => Self::ErrorPassive,
+            3 => Self::BusOff,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CanHealth {
+    pub state: CanBusState,
+    /// Protocol errors, drops into a worse [`CanBusState`] and frames lost in either direction,
+    /// wrapping.
+    pub errors: u16,
+}
+
+impl CanHealth {
+    pub const UNKNOWN: Self = Self {
+        state: CanBusState::Unknown,
+        errors: 0,
+    };
 }
 
 /// The IO board protocol's node id field is four bits wide.
@@ -213,6 +256,7 @@ impl BusInputImage {
             nodes_armed: NodeSet::NONE,
             power_boards: PowerBoardMap::splat(None),
             node_status: [NodeStatus::UNKNOWN; NODE_ID_COUNT],
+            can: CanHealth::UNKNOWN,
         }
     }
 }
