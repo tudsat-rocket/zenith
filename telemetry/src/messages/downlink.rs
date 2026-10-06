@@ -488,6 +488,7 @@ pub(crate) mod tests {
         pub estimator: StateEstimator,
         pub inputs: BusInputImage,
         pub outputs: BusOutputImage,
+        pub valves_agree: bool,
     }
 
     impl Default for SnapshotParts {
@@ -500,6 +501,7 @@ pub(crate) mod tests {
                 estimator: StateEstimator::new(1000.0, StateEstimatorParams::default()),
                 inputs: BusInputImage::default(),
                 outputs: BusOutputImage::default(),
+                valves_agree: true,
             }
         }
     }
@@ -514,6 +516,7 @@ pub(crate) mod tests {
                 state_estimator: &self.estimator,
                 input_image: &self.inputs,
                 output_image: &self.outputs,
+                valves_agree: self.valves_agree,
             }
         }
     }

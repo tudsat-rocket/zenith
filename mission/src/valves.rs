@@ -45,11 +45,16 @@ use rapid_dialect::FlightMode;
 pub use rapid_dialect::ValveCommand;
 use rapid_dialect::rapid::enums::MavResult;
 
-use crate::bus::ValveState;
+use crate::bus::{DataWithTime, ValveState};
 use crate::inventory::{InventoryId, ValveId, ValveMap};
 use crate::params::PropulsionParams;
 
 pub const MAX_PULSE_DURATION: Duration = Duration::from_secs(30);
+
+/// How far a valve may sit from its commanded position before it counts as disagreeing.
+const MISMATCH_DEADBAND_PROMILLE: u16 = 100;
+/// How long a disagreement has to persist to count as a fault, which rides out normal valve travel.
+const MISMATCH_DEBOUNCE_MS: u32 = 500;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum ValveError {
@@ -92,6 +97,9 @@ pub struct ValveController {
     /// Vehicle time [ms] at which [`Self::mode`] was entered, for the modes whose valve states are
     /// a function of how long we have been in them.
     mode_entered_at: Wrapping<u32>,
+    /// Since when some valve's measured position has disagreed with its command, `None` while
+    /// they all agree.
+    mismatch_since: Option<Wrapping<u32>>,
 }
 
 impl Default for ValveController {
@@ -108,6 +116,7 @@ impl ValveController {
             nonpulse_setpoints: ValveMap::splat(ValveState::fully_closed()),
             hold_baseline: ValveMap::splat(ValveState::fully_closed()),
             mode_entered_at: Wrapping(0),
+            mismatch_since: None,
         }
     }
 
@@ -321,6 +330,38 @@ impl ValveController {
 
         resolved
     }
+
+    /// Compare the valves' measured positions against `commanded`. The same rule the ground
+    /// station applies to its valve display, so both agree on what a fault is.
+    pub fn track_measured(
+        &mut self,
+        now: Wrapping<u32>,
+        measured: &ValveMap<Option<DataWithTime<ValveState>>>,
+        commanded: &ValveMap<ValveState>,
+    ) {
+        let any_mismatch = ValveId::ALL
+            .into_iter()
+            .any(|v| Self::mismatch(measured[v].map(|d| d.data), commanded[v]));
+
+        self.mismatch_since = match (any_mismatch, self.mismatch_since) {
+            (true, Some(since)) => Some(since),
+            (true, None) => Some(now),
+            (false, _) => None,
+        };
+    }
+
+    /// True while no valve has disagreed with its command for longer than the debounce window.
+    pub fn valves_agree(&self, now: Wrapping<u32>) -> bool {
+        self.mismatch_since
+            .is_none_or(|since| (now - since).0 <= MISMATCH_DEBOUNCE_MS)
+    }
+
+    /// An unknown measured position is a fault in its own right.
+    fn mismatch(measured: Option<ValveState>, commanded: ValveState) -> bool {
+        measured.is_none_or(|m| {
+            m.promille().abs_diff(commanded.promille()) > MISMATCH_DEADBAND_PROMILLE
+        })
+    }
 }
 
 impl From<ValveCommand> for ValveState {
@@ -347,6 +388,40 @@ mod tests {
 
     const OPEN: ValveState = ValveState::fully_open();
     const CLOSED: ValveState = ValveState::fully_closed();
+
+    #[test]
+    fn mismatch_flags_both_directions() {
+        let half = ValveState::from_promille_clamped(500);
+        let mismatch = ValveController::mismatch;
+
+        assert!(mismatch(Some(CLOSED), OPEN));
+        assert!(mismatch(Some(OPEN), CLOSED));
+        // Within the deadband: normal travel, not a mismatch.
+        assert!(!mismatch(
+            Some(ValveState::from_promille_clamped(950)),
+            OPEN
+        ));
+        assert!(!mismatch(
+            Some(ValveState::from_promille_clamped(550)),
+            half
+        ));
+        assert!(mismatch(None, OPEN));
+        assert!(mismatch(None, CLOSED));
+    }
+
+    #[test]
+    fn agreement_rides_out_valve_travel() {
+        let commanded = ValveMap::splat(OPEN);
+        let travelling = ValveMap::splat(Some(DataWithTime::new(CLOSED, Wrapping(0))));
+        let arrived = ValveMap::splat(Some(DataWithTime::new(OPEN, Wrapping(0))));
+        let mut c = ValveController::new();
+
+        c.track_measured(Wrapping(1000), &travelling, &commanded);
+        assert!(c.valves_agree(Wrapping(1500)));
+        assert!(!c.valves_agree(Wrapping(1501)));
+        c.track_measured(Wrapping(1502), &arrived, &commanded);
+        assert!(c.valves_agree(Wrapping(1502)));
+    }
 
     fn all_modes() -> impl Iterator<Item = FlightMode> {
         (0u8..).map_while(|m| FlightMode::try_from(m).ok())
