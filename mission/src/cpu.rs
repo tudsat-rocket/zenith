@@ -42,35 +42,22 @@ pub static CPU_LOAD: CpuLoad = CpuLoad::new();
 /// Whether the main loop is still meeting its 1 kHz deadline.
 pub struct LoopHealth {
     overruns: AtomicU16,
-    peak_latency_us: AtomicU16,
 }
 
 impl LoopHealth {
     pub const fn new() -> Self {
         Self {
             overruns: AtomicU16::new(0),
-            peak_latency_us: AtomicU16::new(0),
         }
     }
 
-    /// Cumulative count of iterations that took longer than the tick period, saturating.
+    /// Cumulative count of iterations that took longer than the tick period, wrapping.
     pub fn record_overrun(&self) {
-        let previous = self.overruns.load(Ordering::Relaxed);
-        self.overruns
-            .store(previous.saturating_add(1), Ordering::Relaxed);
-    }
-
-    pub fn set_peak_latency_us(&self, us: u16) {
-        self.peak_latency_us.store(us, Ordering::Relaxed);
+        self.overruns.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn overruns(&self) -> u16 {
         self.overruns.load(Ordering::Relaxed)
-    }
-
-    /// Worst iteration latency over the last reporting window, saturating at `u16::MAX` us.
-    pub fn peak_latency_us(&self) -> u16 {
-        self.peak_latency_us.load(Ordering::Relaxed)
     }
 }
 

@@ -273,6 +273,7 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
 
     pub async fn tick(&mut self) {
         if let Err(_) = self.read_sensor_data().await {
+            mission::health::SENSOR_ERRORS.record();
             error!("baro spi error, read_sensor_data");
             self.dt = None;
             self.temp = None;
@@ -284,6 +285,7 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
         }
 
         if let Err(_) = self.start_next_conversion().await {
+            mission::health::SENSOR_ERRORS.record();
             error!("baro spi error, start_next_conversion");
             self.dt = None;
             self.temp = None;

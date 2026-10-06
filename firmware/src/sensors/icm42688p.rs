@@ -123,6 +123,7 @@ impl<SPI: SpiDevice<u8>> ICM42688P<SPI> {
 
     pub async fn tick(&mut self) {
         if let Err(_e) = self.read_sensor_data().await {
+            mission::health::SENSOR_ERRORS.record();
             self.gyro = None;
             self.accel = None;
         }

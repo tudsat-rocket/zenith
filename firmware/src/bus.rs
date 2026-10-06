@@ -11,6 +11,7 @@ use core::{cmp::*, num::Wrapping};
 
 use embassy_stm32::can::Frame;
 use embassy_stm32::time;
+use embassy_sync::pubsub::WaitResult;
 use embassy_time::{Duration, Instant};
 use embedded_can::Id;
 
@@ -26,6 +27,7 @@ use mission::bus::{
     Bus, BusDataError, BusInputImage, BusOutputImage, DataWithTime, IoAddr, NODE_ID_COUNT,
     POWER_BOARD_NODE_IDS, ValveState, power_board,
 };
+use mission::health::CAN_ERRORS;
 use mission::inventory::{
     BinaryOutputId, BinaryOutputMap, InventoryId, PowerBoardId, ServoId, ServoMap, ValveMap,
 };
@@ -81,7 +83,15 @@ impl Bus for BusHandler {
     fn get_input_image(&mut self, now: Wrapping<u32>) -> BusInputImage {
         let received = Instant::now();
 
-        while let Some(msg) = self.can.1.try_next_message_pure() {
+        while let Some(result) = self.can.1.try_next_message() {
+            let msg = match result {
+                WaitResult::Message(msg) => msg,
+                WaitResult::Lagged(n) => {
+                    CAN_ERRORS.record_n(n as u16);
+                    continue;
+                }
+            };
+
             if let Some(node_id) = try_injest_can_msg(&mut self.input, msg, now)
                 && let Some(slot) = self.last_node_frames.get_mut(node_id as usize)
             {
@@ -140,6 +150,7 @@ impl Bus for BusHandler {
 
             if self.can.0.try_publish(frame).is_err() {
                 // Can't log here, too noisy.
+                CAN_ERRORS.record();
                 self.can.0.publish_immediate(frame);
             }
 
@@ -164,6 +175,7 @@ impl Bus for BusHandler {
 
             if self.can.0.try_publish(frame).is_err() {
                 // Can't log here, too noisy.
+                CAN_ERRORS.record();
                 self.can.0.publish_immediate(frame);
             }
 
@@ -188,6 +200,7 @@ impl Bus for BusHandler {
 
             if self.can.0.try_publish(frame).is_err() {
                 // Can't log here, too noisy.
+                CAN_ERRORS.record();
                 self.can.0.publish_immediate(frame);
             }
 

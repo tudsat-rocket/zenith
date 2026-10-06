@@ -88,6 +88,7 @@ impl<SPI: SpiDevice<u8>> LIS3MDL<SPI> {
 
     pub async fn tick(&mut self) {
         if let Err(_e) = self.read_sensor_data().await {
+            mission::health::SENSOR_ERRORS.record();
             self.mag = None;
         }
     }

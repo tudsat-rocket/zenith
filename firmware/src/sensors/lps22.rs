@@ -81,6 +81,7 @@ impl<SPI: SpiDevice<u8>> LPS22<SPI> {
 
     pub async fn tick(&mut self) {
         if let Err(_) = self.read_sensor_data().await {
+            mission::health::SENSOR_ERRORS.record();
             self.pressure = None;
             self.temperature = None;
         }
