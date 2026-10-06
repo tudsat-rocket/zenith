@@ -84,7 +84,7 @@ async fn init(low_priority_spawner: Spawner) {
 
     let can_tx_pub: CanTxPublisher = can1_tx.publisher().unwrap();
     let can_rx_sub: CanRxSubscriber = can1_rx.subscriber().unwrap();
-    let bus = BusHandler::new(can_tx_pub, can_rx_sub);
+    let bus = BusHandler::new(can_tx_pub, can_rx_sub, &fw::can::CAN1_HEALTH);
 
     // Initialize main Vehicle & Linkss structs
     let vehicle = Vehicle::new(board.sensors, board.outputs, storage, bus).await;

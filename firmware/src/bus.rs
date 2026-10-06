@@ -27,7 +27,6 @@ use mission::bus::{
     Bus, BusDataError, BusInputImage, BusOutputImage, DataWithTime, IoAddr, NODE_ID_COUNT,
     POWER_BOARD_NODE_IDS, ValveState, power_board,
 };
-use mission::health::CAN_ERRORS;
 use mission::inventory::{
     BinaryOutputId, BinaryOutputMap, InventoryId, PowerBoardId, ServoId, ServoMap, ValveMap,
 };
@@ -37,7 +36,7 @@ use crate::bus::pdo_mapping::{
     SensorReading, hco_msg_to_binary_outputs, sensor_msg_to_readings, valve_msg_to_current,
     valve_msg_to_servo, valve_msg_to_valve,
 };
-use crate::can::{CanRxSubscriber, CanTxPublisher};
+use crate::can::{CanHealthMonitor, CanRxSubscriber, CanTxPublisher};
 
 mod mapping;
 mod pdo_mapping;
@@ -59,6 +58,7 @@ pub struct BusHandler {
     pub input: BusInputImage,
     pub outputs_last: BusOutputImage,
     pub can: (CanTxPublisher, CanRxSubscriber),
+    can_health: &'static CanHealthMonitor,
     last_binary_output_messages: BinaryOutputMap<Option<Instant>>,
     last_valve_messages: ValveMap<Option<Instant>>,
     last_servo_messages: ServoMap<Option<Instant>>,
@@ -66,11 +66,16 @@ pub struct BusHandler {
 }
 
 impl BusHandler {
-    pub fn new(can_tx_pub: CanTxPublisher, can_rx_sub: CanRxSubscriber) -> Self {
+    pub fn new(
+        can_tx_pub: CanTxPublisher,
+        can_rx_sub: CanRxSubscriber,
+        can_health: &'static CanHealthMonitor,
+    ) -> Self {
         Self {
             input: BusInputImage::default(),
             outputs_last: BusOutputImage::default(),
             can: (can_tx_pub, can_rx_sub),
+            can_health,
             last_binary_output_messages: BinaryOutputMap::splat(None),
             last_valve_messages: ValveMap::splat(None),
             last_servo_messages: ServoMap::splat(None),
@@ -87,7 +92,7 @@ impl Bus for BusHandler {
             let msg = match result {
                 WaitResult::Message(msg) => msg,
                 WaitResult::Lagged(n) => {
-                    CAN_ERRORS.record_n(n as u16);
+                    self.can_health.count_rx_missed(n);
                     continue;
                 }
             };
@@ -119,6 +124,8 @@ impl Bus for BusHandler {
                 status.current_ma = None;
             }
         }
+
+        self.input.can = self.can_health.snapshot();
 
         self.input.clone()
     }
@@ -156,7 +163,6 @@ impl Bus for BusHandler {
 
             if self.can.0.try_publish(frame).is_err() {
                 // Can't log here, too noisy.
-                CAN_ERRORS.record();
                 self.can.0.publish_immediate(frame);
             }
 
@@ -181,7 +187,6 @@ impl Bus for BusHandler {
 
             if self.can.0.try_publish(frame).is_err() {
                 // Can't log here, too noisy.
-                CAN_ERRORS.record();
                 self.can.0.publish_immediate(frame);
             }
 
@@ -206,7 +211,6 @@ impl Bus for BusHandler {
 
             if self.can.0.try_publish(frame).is_err() {
                 // Can't log here, too noisy.
-                CAN_ERRORS.record();
                 self.can.0.publish_immediate(frame);
             }
 

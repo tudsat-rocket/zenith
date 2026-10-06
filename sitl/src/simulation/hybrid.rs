@@ -7,8 +7,8 @@
 use std::num::Wrapping;
 
 use mission::bus::{
-    Bus, BusInputImage, BusOutputImage, DataWithTime, NodeSet, NodeStatus, POWER_BOARD_NODE_IDS,
-    PowerBoardReading, ValveState,
+    Bus, BusInputImage, BusOutputImage, CanHealth, DataWithTime, NodeSet, NodeStatus,
+    POWER_BOARD_NODE_IDS, PowerBoardReading, ValveState,
 };
 use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::{MavBatteryChargeState, ValveId};
@@ -420,6 +420,7 @@ impl Bus for SitlBus {
             },
             power_boards,
             node_status,
+            can: CanHealth::UNKNOWN,
         }
     }
 
