@@ -108,7 +108,10 @@ fn outputs_silent_before_drogue_phase() {
 #[test]
 fn main_output_fires_a_two_pulse_train() {
     block_on(async {
-        let mut h = Harness::new(None).await;
+        let mut params = Params::default();
+        params.state_machine.main_pulses = 2;
+
+        let mut h = Harness::new(Some(params.clone())).await;
         h.arm();
 
         // Sample the main output on every tick from the moment DeployMain is
@@ -136,9 +139,8 @@ fn main_output_fires_a_two_pulse_train() {
             }
         }
 
-        let params = Params::default().state_machine;
-        let on = params.main_on_time;
-        let gap = params.main_pulse_gap;
+        let on = params.state_machine.main_on_time;
+        let gap = params.state_machine.main_pulse_gap;
 
         assert_eq!(
             runs.len(),
