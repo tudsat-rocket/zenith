@@ -23,7 +23,7 @@ use rapid_dialect::rapid::messages::{
 use state_estimator::StateEstimator;
 
 use crate::TelemetryLink;
-use crate::bus::{BusInputImage, BusOutputImage, ValveState};
+use crate::bus::{BusInputImage, BusOutputImage, NodeStatus, ValveState};
 use crate::inventory::{
     InventoryId, OxProbeId, PowerBoardId, ServoMap, TankId, ValveId, valve_is_heated,
 };
@@ -55,6 +55,15 @@ pub struct VehicleSnapshot<'a> {
     pub valves_agree: bool,
 }
 
+/// What an IO board's SYS_STATUS says about it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NodeHealth {
+    /// MAV_SYS_STATUS_SENSOR enabled: an IO board's outputs are armed, a power board always is.
+    pub enabled: bool,
+    pub healthy: bool,
+    pub status: NodeStatus,
+}
+
 impl VehicleSnapshot<'_> {
     /// This determines the pattern of data the flight computer sends via MAVlink for all of the
     /// non-RF telemetry paths (primarily ethernet): which messages go out unprompted, and how often.
@@ -69,7 +78,7 @@ impl VehicleSnapshot<'_> {
             every 2000 ms => RocketInfo, AutopilotVersion;
             // One message per component
             every 200 ms => PressureVessel[TankId::ALL], Valve[ValveId::ALL], ServoOutputRaw;
-            every 1000 ms => Heartbeat[crate::bus::IO_NODE_IDS];
+            every 1000 ms => Heartbeat[crate::bus::IO_NODE_IDS], SysStatus[crate::bus::IO_NODE_IDS];
         }
     }
 
@@ -84,6 +93,42 @@ impl VehicleSnapshot<'_> {
             .as_ref()
             .map(|p| p.recovery_voltage > RECOVERY_ARMED_THRESHOLD_MV)
             .unwrap_or(false)
+    }
+
+    /// `None` while the board is not present.
+    pub fn node_health(&self, node_id: u8) -> Option<NodeHealth> {
+        let image = self.input_image;
+        if !image.nodes.contains(node_id) {
+            return None;
+        }
+
+        let mut status = image
+            .node_status
+            .get(usize::from(node_id))
+            .copied()
+            .unwrap_or(NodeStatus::UNKNOWN);
+
+        Some(match crate::bus::power_board(node_id) {
+            Some(board) => {
+                let reading = image.power_boards[board].unwrap_or_default();
+                status.voltage_mv = reading.voltage_mv;
+                status.current_ma = reading.current_ma;
+                NodeHealth {
+                    enabled: true,
+                    healthy: !matches!(
+                        reading.charge_state,
+                        MavBatteryChargeState::Failed | MavBatteryChargeState::Undefined
+                    ),
+                    status,
+                }
+            }
+            // TODO: an IO board has no failure signal on the bus yet (stalled valves would be one).
+            None => NodeHealth {
+                enabled: image.nodes_armed.contains(node_id),
+                healthy: true,
+                status,
+            },
+        })
     }
 
     /// Whether the valve's heater is on, and its temperature in Celsius. `None` for a valve
@@ -503,7 +548,7 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
             current_battery: r
                 .power
                 .as_ref()
-                .map(|d| (d.fc_current / 10).clamp(i16::MIN as i32, i16::MAX as i32) as i16)
+                .map(|d| centi_amps(d.fc_current))
                 .unwrap_or(-1),
             battery_remaining: -1,
             drop_rate_comm: 0,
@@ -593,6 +638,64 @@ impl InstanceMessage<u8> for Heartbeat {
             .nodes
             .contains(node_id)
             .then(|| io_node_heartbeat(node_id, snap.input_image.nodes_armed.contains(node_id)))
+    }
+}
+
+/// Shared because the ground station rebuilds these from the LoRa downlink, and both paths have
+/// to produce the same message.
+pub fn io_node_sys_status(node_id: u8, health: &NodeHealth) -> SysStatus {
+    // The vehicle's own SYS_STATUS stays the authoritative summary; these bits only say what kind
+    // of board this is.
+    let sensor = if crate::bus::power_board(node_id).is_some() {
+        MavSysStatusSensor::BATTERY
+    } else {
+        MavSysStatusSensor::MOTOR_OUTPUTS
+    };
+    let status = &health.status;
+
+    SysStatus {
+        onboard_control_sensors_present: sensor,
+        onboard_control_sensors_enabled: if health.enabled {
+            sensor
+        } else {
+            MavSysStatusSensor::empty()
+        },
+        onboard_control_sensors_health: if health.healthy {
+            sensor
+        } else {
+            MavSysStatusSensor::empty()
+        },
+        load: 0,
+        voltage_battery: status.voltage_mv.unwrap_or(u16::MAX),
+        current_battery: status.current_ma.map_or(-1, centi_amps),
+        battery_remaining: -1,
+        drop_rate_comm: 0,
+        errors_comm: status.comm_errors,
+        errors_count1: status.errors[0],
+        errors_count2: status.errors[1],
+        errors_count3: status.errors[2],
+        errors_count4: status.errors[3],
+        ..Default::default()
+    }
+}
+
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "division by a nonzero constant"
+)]
+fn centi_amps(milli_amps: i32) -> i16 {
+    (milli_amps / 10).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+}
+
+/// An IO board's own SYS_STATUS, under its own component id like its heartbeat.
+impl InstanceMessage<u8> for SysStatus {
+    fn component_id(node_id: u8) -> u8 {
+        node_id
+    }
+
+    fn build(snap: &VehicleSnapshot<'_>, node_id: u8) -> Option<Self> {
+        snap.node_health(node_id)
+            .map(|health| io_node_sys_status(node_id, &health))
     }
 }
 
@@ -945,5 +1048,77 @@ mod tests {
                 .onboard_control_sensors_health
                 .contains(MavSysStatusSensor::PROPULSION)
         );
+    }
+
+    /// A board's own SYS_STATUS, with nothing but the bus inputs to go on.
+    fn node_sys_status(inputs: &BusInputImage, node_id: u8) -> Option<SysStatus> {
+        let snapshot = VehicleSnapshot {
+            time: Wrapping(0),
+            mode: FlightMode::Idle,
+            state_machine_params: &StateMachineParams::default(),
+            readings: &SensorReadings::default(),
+            state_estimator: &StateEstimator::new(
+                1000.0,
+                state_estimator::StateEstimatorParams::default(),
+            ),
+            input_image: inputs,
+            output_image: &BusOutputImage::default(),
+            valves_agree: true,
+        };
+        <SysStatus as InstanceMessage<u8>>::build(&snapshot, node_id)
+    }
+
+    #[test]
+    fn a_board_reports_only_while_present() {
+        let mut inputs = BusInputImage::default();
+        assert!(node_sys_status(&inputs, 4).is_none());
+
+        inputs.nodes.set(4, true);
+        inputs.node_status[4] = NodeStatus {
+            voltage_mv: Some(5000),
+            current_ma: Some(1234),
+            comm_errors: 3,
+            errors: [1, 2, 0, 0],
+        };
+        let status = node_sys_status(&inputs, 4).expect("node 4 is present");
+
+        assert_eq!(
+            status.onboard_control_sensors_present,
+            MavSysStatusSensor::MOTOR_OUTPUTS
+        );
+        // Not armed.
+        assert!(status.onboard_control_sensors_enabled.is_empty());
+        assert_eq!(status.voltage_battery, 5000);
+        assert_eq!(status.current_battery, 123);
+        assert_eq!(
+            (
+                status.errors_comm,
+                status.errors_count1,
+                status.errors_count2
+            ),
+            (3, 1, 2)
+        );
+    }
+
+    #[test]
+    fn a_power_board_reports_its_pack() {
+        let mut inputs = BusInputImage::default();
+        let node_id = crate::bus::POWER_BOARD_NODE_IDS[PowerBoardId::Board2];
+        inputs.nodes.set(node_id, true);
+        inputs.power_boards[PowerBoardId::Board2] = Some(crate::bus::PowerBoardReading {
+            voltage_mv: Some(11_800),
+            current_ma: Some(-500),
+            charge_state: MavBatteryChargeState::Failed,
+        });
+
+        let status = node_sys_status(&inputs, node_id).expect("board is present");
+
+        assert_eq!(
+            status.onboard_control_sensors_present,
+            MavSysStatusSensor::BATTERY
+        );
+        assert!(status.onboard_control_sensors_health.is_empty());
+        assert_eq!(status.voltage_battery, 11_800);
+        assert_eq!(status.current_battery, -50);
     }
 }

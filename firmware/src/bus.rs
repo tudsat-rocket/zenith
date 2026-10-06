@@ -113,6 +113,12 @@ impl Bus for BusHandler {
                 *reading = None;
             }
         });
+        for (node_id, status) in self.input.node_status.iter_mut().enumerate() {
+            if !nodes.contains(node_id as u8) {
+                status.voltage_mv = None;
+                status.current_ma = None;
+            }
+        }
 
         self.input.clone()
     }
@@ -225,11 +231,13 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
 
     let Ok(data) = <[u8; 8]>::try_from(frame.data()) else {
         defmt::warn!("injesting can msg with non 8 length not supported");
+        record_comm_error(image, node_id);
         return Some(node_id);
     };
 
     let Some(kind) = TpdoKind::from_index(kind_index) else {
         defmt::warn!("injest can msg with unknown tpdo kind: {}", kind_index);
+        record_comm_error(image, node_id);
         return Some(node_id);
     };
 
@@ -283,9 +291,17 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
         }
         // Either pair counts: the rails are sensed separately, but the harness feeds them from
         // one input.
-        TpdoFrame::RailVoltage([_logic, hco12, hco34]) => {
+        TpdoFrame::RailVoltage([logic, hco12, hco34]) => {
             let armed = hco12 >= HCO_ARMED_THRESHOLD_MV || hco34 >= HCO_ARMED_THRESHOLD_MV;
             image.nodes_armed.set(node_id, armed);
+            if let Some(status) = image.node_status.get_mut(usize::from(node_id)) {
+                status.voltage_mv = Some(logic);
+            }
+        }
+        TpdoFrame::RailCurrent(rails) => {
+            if let Some(status) = image.node_status.get_mut(usize::from(node_id)) {
+                status.current_ma = Some(rails.into_iter().map(i32::from).sum());
+            }
         }
         // NOTE: currently all sensor processing must happen on nodes on the bus, so the raw
         // amplifier windows are ignored. The rest has no home in the input image (yet) —
@@ -300,11 +316,16 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
         | TpdoFrame::RawBus1B(_)
         | TpdoFrame::SensorUnits(_)
         | TpdoFrame::I2cScan { .. }
-        | TpdoFrame::RailCurrent(_)
         | TpdoFrame::Status { .. } => (),
     }
 
     Some(node_id)
+}
+
+fn record_comm_error(image: &mut BusInputImage, node_id: u8) {
+    if let Some(status) = image.node_status.get_mut(usize::from(node_id)) {
+        status.comm_errors = status.comm_errors.wrapping_add(1);
+    }
 }
 
 fn injest_power_board_frame(image: &mut BusInputImage, board: PowerBoardId, frame: TpdoFrame) {
