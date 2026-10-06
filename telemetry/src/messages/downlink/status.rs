@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use mission::bus::{CanBusState, CanHealth};
 use mission::mavlink::{VehicleSnapshot, autopilot_version};
 use rapid_dialect::rapid::enums::{MavSysStatusSensor, MavSysStatusSensorExtended};
 use rapid_dialect::rapid::messages::{AutopilotVersion, RadioStatus, SysStatus, SystemTime};
@@ -47,7 +48,8 @@ pub struct StatusMessage {
     /// The bits above the time bits in the header, which together give us the full time since boot.
     #[serde(with = "postcard::fixint::le")]
     absolute_time: u16,
-    reserved: u8,
+    /// CAN bus health, see [`pack_can`]. Was a reserved zero byte, which still reads as `Unknown`.
+    can: u8,
 }
 
 impl DownlinkTelemetryMessage for StatusMessage {
@@ -78,7 +80,7 @@ impl DownlinkTelemetryMessage for StatusMessage {
             uplink_packet_loss: radio_status.fixed as u8,
             uplink_rssi: radio_status.remrssi,
             uplink_noise: radio_status.remnoise,
-            reserved: 0,
+            can: pack_can(snapshot.input_image.can),
         }
     }
 
@@ -90,6 +92,7 @@ impl DownlinkTelemetryMessage for StatusMessage {
             .fold(MavSysStatusSensor::empty(), |acc, s| acc | s);
         let (enabled, enabled_extended) = unpack_sensors(self.sensors_enabled);
         let (health, health_extended) = unpack_sensors(self.sensors_health);
+        let can = unpack_can(self.can);
 
         let sys_status = SysStatus {
             onboard_control_sensors_present: present,
@@ -106,6 +109,9 @@ impl DownlinkTelemetryMessage for StatusMessage {
             },
             current_battery: -1,
             battery_remaining: -1,
+            // Same fields as `mission`'s SYS_STATUS, but the counter only modulo 64.
+            errors_comm: can.errors,
+            errors_count4: can.state as u16,
             ..Default::default()
         };
 
@@ -143,6 +149,23 @@ fn pack_sensors(base: MavSysStatusSensor, extended: MavSysStatusSensorExtended) 
     }
 
     bits
+}
+
+const CAN_ERRORS_MASK: u16 = 0b11_1111;
+
+/// Bits 0-1 the bus state, 2-7 the error counter. The counter wraps, so modulo 64 is enough to
+/// show the ground that it is moving.
+fn pack_can(can: CanHealth) -> u8 {
+    let errors = (can.errors & CAN_ERRORS_MASK) as u8;
+
+    (can.state as u8 & 0b11) | (errors << 2)
+}
+
+fn unpack_can(bits: u8) -> CanHealth {
+    CanHealth {
+        state: CanBusState::from_bits(bits & 0b11),
+        errors: u16::from(bits >> 2),
+    }
 }
 
 fn unpack_sensors(bits: u16) -> (MavSysStatusSensor, MavSysStatusSensorExtended) {
@@ -270,6 +293,33 @@ mod tests {
 
         // Within one 100mV code of the 12.4 V the ADC reported.
         assert!(received.voltage_battery.abs_diff(12_400) <= 100);
+    }
+
+    #[test]
+    fn can_health_survives_the_packet() {
+        let mut parts = SnapshotParts::default();
+        parts.inputs.can = CanHealth {
+            state: CanBusState::BusOff,
+            errors: 100,
+        };
+
+        let msg = DownlinkMessage::Status(StatusMessage::pack((
+            &parts.snapshot(),
+            RadioStatus::default(),
+        )));
+        let DownlinkMessage::Status(decoded) = through_packet(msg) else {
+            panic!("decoded as the wrong message")
+        };
+        let (sys_status, _, _, _) = decoded.unpack(&mut ConnectionContext::init(0));
+
+        assert_eq!(sys_status.errors_count4, CanBusState::BusOff as u16);
+        assert_eq!(sys_status.errors_comm, 100 % 64);
+    }
+
+    /// Ground firmware that predates the field must not decode a healthy bus out of the old zero.
+    #[test]
+    fn the_old_reserved_byte_reads_as_unknown() {
+        assert_eq!(unpack_can(0), CanHealth::UNKNOWN);
     }
 
     #[test]

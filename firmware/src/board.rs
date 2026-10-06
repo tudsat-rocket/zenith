@@ -7,6 +7,7 @@ use embassy_stm32::adc::Adc;
 use embassy_stm32::adc::AdcChannel;
 use embassy_stm32::adc::AnyAdcChannel;
 use embassy_stm32::can::CanConfigurator;
+use embassy_stm32::can::config::TxBufferMode;
 use embassy_stm32::eth::{Ethernet, GenericPhy, PacketQueue};
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Input, Level, Output, OutputType, Pull, Speed};
@@ -47,6 +48,10 @@ const LORA_BUSY_TIMEOUT: embassy_time::Duration = embassy_time::Duration::from_m
 const LORA_IRQ_TIMEOUT: embassy_time::Duration = embassy_time::Duration::from_millis(
     2 * (SEQUENCE_LENGTH as u64) * (DOWNLINK_MESSAGE_INTERVAL_MS as u64),
 );
+
+/// Raw registers behind `Board::can1`/`can2`, for what the driver does not expose. Note the swap.
+pub const CAN1_REGS: embassy_stm32::pac::can::Fdcan = embassy_stm32::pac::FDCAN2;
+pub const CAN2_REGS: embassy_stm32::pac::can::Fdcan = embassy_stm32::pac::FDCAN1;
 
 pub struct Board {
     pub sensors: BoardSensors,
@@ -262,8 +267,15 @@ pub async fn init() -> Board {
     .await
     .unwrap();
 
+    // Keep in step with CAN1_REGS/CAN2_REGS.
     let mut can1 = CanConfigurator::new(p.FDCAN2, p.PB5, p.PB6, Irqs);
     let mut can2 = CanConfigurator::new(p.FDCAN1, p.PB8, p.PB9, Irqs);
+
+    // Every SDO request to a board shares one COB-ID, and priority mode sends equal ids lowest
+    // buffer first, so an older refresh could overtake the change queued behind it. Priority mode
+    // would also silently evict queued frames in favour of lower-id ones.
+    can1.set_config(can1.config().set_tx_buffer_mode(TxBufferMode::Fifo));
+    can2.set_config(can2.config().set_tx_buffer_mode(TxBufferMode::Fifo));
 
     can1.set_bitrate(500_000);
     can2.set_bitrate(500_000);

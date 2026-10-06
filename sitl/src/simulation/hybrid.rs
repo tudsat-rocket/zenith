@@ -7,7 +7,7 @@
 use std::num::Wrapping;
 
 use mission::bus::{
-    Bus, BusInputImage, BusOutputImage, DataWithTime, NodeSet, POWER_BOARD_NODE_IDS,
+    Bus, BusInputImage, BusOutputImage, CanHealth, DataWithTime, NodeSet, POWER_BOARD_NODE_IDS,
     PowerBoardReading, ValveState,
 };
 use rapid_dialect::FlightMode;
@@ -411,6 +411,7 @@ impl Bus for SitlBus {
                 io_nodes
             },
             power_boards,
+            can: CanHealth::UNKNOWN,
         }
     }
 

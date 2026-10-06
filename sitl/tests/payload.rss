@@ -1,0 +1,30 @@
+//! The payload go flag: raised on entering `Pressurize`, held through flight, lowered on `Landed`.
+
+mod common;
+
+use common::{Harness, block_on};
+use mission::inventory::BinaryOutputId;
+use rapid_dialect::FlightMode;
+
+fn payload_go(h: &Harness) -> bool {
+    h.vehicle.bus_outputs.binary_output[BinaryOutputId::PayloadGo]
+}
+
+#[test]
+fn payload_go_follows_pressurize_and_landed() {
+    block_on(async {
+        let mut h = Harness::new(None).await;
+        h.run_ticks(10).await;
+        assert!(!payload_go(&h), "payload go set at boot");
+
+        h.vehicle.set_mode(FlightMode::Pressurize);
+        h.run_ticks(10).await;
+        assert!(payload_go(&h), "payload go not set in Pressurize");
+
+        h.vehicle.set_mode(FlightMode::Coast);
+        assert!(payload_go(&h), "payload go cleared before Landed");
+
+        h.vehicle.set_mode(FlightMode::Landed);
+        assert!(!payload_go(&h), "payload go not cleared on Landed");
+    });
+}

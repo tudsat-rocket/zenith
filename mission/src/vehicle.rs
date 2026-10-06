@@ -184,6 +184,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         if mode >= FlightMode::DetectLaunch {
             self.bus_outputs.binary_output[BinaryOutputId::Camera1] = true;
             self.bus_outputs.binary_output[BinaryOutputId::Camera2] = true;
+            self.bus_outputs.binary_output[BinaryOutputId::Camera3] = true;
         }
     }
 

@@ -11,6 +11,7 @@ use core::{cmp::*, num::Wrapping};
 
 use embassy_stm32::can::Frame;
 use embassy_stm32::time;
+use embassy_sync::pubsub::WaitResult;
 use embassy_time::{Duration, Instant};
 use embedded_can::Id;
 
@@ -35,7 +36,7 @@ use crate::bus::pdo_mapping::{
     SensorReading, hco_msg_to_binary_outputs, sensor_msg_to_readings, valve_msg_to_servo,
     valve_msg_to_valve,
 };
-use crate::can::{CanRxSubscriber, CanTxPublisher};
+use crate::can::{CanHealthMonitor, CanRxSubscriber, CanTxPublisher};
 
 mod mapping;
 mod pdo_mapping;
@@ -57,6 +58,7 @@ pub struct BusHandler {
     pub input: BusInputImage,
     pub outputs_last: BusOutputImage,
     pub can: (CanTxPublisher, CanRxSubscriber),
+    can_health: &'static CanHealthMonitor,
     last_binary_output_messages: BinaryOutputMap<Option<Instant>>,
     last_valve_messages: ValveMap<Option<Instant>>,
     last_servo_messages: ServoMap<Option<Instant>>,
@@ -64,11 +66,16 @@ pub struct BusHandler {
 }
 
 impl BusHandler {
-    pub fn new(can_tx_pub: CanTxPublisher, can_rx_sub: CanRxSubscriber) -> Self {
+    pub fn new(
+        can_tx_pub: CanTxPublisher,
+        can_rx_sub: CanRxSubscriber,
+        can_health: &'static CanHealthMonitor,
+    ) -> Self {
         Self {
             input: BusInputImage::default(),
             outputs_last: BusOutputImage::default(),
             can: (can_tx_pub, can_rx_sub),
+            can_health,
             last_binary_output_messages: BinaryOutputMap::splat(None),
             last_valve_messages: ValveMap::splat(None),
             last_servo_messages: ServoMap::splat(None),
@@ -81,7 +88,15 @@ impl Bus for BusHandler {
     fn get_input_image(&mut self, now: Wrapping<u32>) -> BusInputImage {
         let received = Instant::now();
 
-        while let Some(msg) = self.can.1.try_next_message_pure() {
+        while let Some(result) = self.can.1.try_next_message() {
+            let msg = match result {
+                WaitResult::Message(msg) => msg,
+                WaitResult::Lagged(n) => {
+                    self.can_health.count_rx_missed(n);
+                    continue;
+                }
+            };
+
             if let Some(node_id) = try_injest_can_msg(&mut self.input, msg, now)
                 && let Some(slot) = self.last_node_frames.get_mut(node_id as usize)
             {
@@ -103,6 +118,8 @@ impl Bus for BusHandler {
                 *reading = None;
             }
         });
+
+        self.input.can = self.can_health.snapshot();
 
         self.input.clone()
     }
