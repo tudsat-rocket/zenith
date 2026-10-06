@@ -106,7 +106,7 @@ fn outputs_silent_before_drogue_phase() {
 }
 
 #[test]
-fn main_output_fires_a_two_pulse_train() {
+fn main_output_fires_default_pulse_train() {
     block_on(async {
         let mut h = Harness::new(None).await;
         h.arm();
@@ -139,19 +139,31 @@ fn main_output_fires_a_two_pulse_train() {
         let params = Params::default().state_machine;
         let on = params.main_on_time;
         let gap = params.main_pulse_gap;
+        let pulses = params.main_pulses as usize;
+
+        // Expected shape: `pulses` pulses separated by gaps, then low until Landed.
+        let mut expected: Vec<(bool, u32)> = Vec::new();
+        for i in 0..pulses {
+            if i > 0 {
+                expected.push((false, gap));
+            }
+            expected.push((true, on));
+        }
 
         assert_eq!(
             runs.len(),
-            4,
-            "expected high/low/high/low, got {} runs: {:?}",
+            expected.len() + 1,
+            "expected {pulses} pulse(s) followed by low, got {} runs: {:?}",
             runs.len(),
             runs
         );
-        assert_eq!(runs[0], (true, on), "first pulse width, runs: {runs:?}");
-        assert_eq!(runs[1], (false, gap), "inter-pulse gap, runs: {runs:?}");
-        assert_eq!(runs[2], (true, on), "second pulse width, runs: {runs:?}");
+        assert_eq!(
+            &runs[..expected.len()],
+            &expected[..],
+            "pulse train, runs: {runs:?}"
+        );
         assert!(
-            !runs[3].0,
+            !runs[expected.len()].0,
             "main output did not stay low after the train, runs: {runs:?}"
         );
     });
