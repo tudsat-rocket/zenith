@@ -116,7 +116,8 @@ impl DownlinkTelemetryMessage for HeartbeatMessage {
         reason = "address complaints to the english language"
     )]
     fn unpack(self, context: &mut ConnectionContext) -> Self::Output {
-        let mode = u32::from(self.mode_and_altitude >> 2);
+        let mode = self.mode_and_altitude >> 2;
+        context.mode = FlightMode::try_from(mode).ok();
         let mav_state = (self.mav_state_profile_and_armed >> 5) & 0b111;
         let armed = (self.mav_state_profile_and_armed & 0b1) != 0;
 
@@ -132,7 +133,7 @@ impl DownlinkTelemetryMessage for HeartbeatMessage {
             } else {
                 MavModeFlag::CUSTOM_MODE_ENABLED
             },
-            custom_mode: mode,
+            custom_mode: u32::from(mode),
             mavlink_version: 2,
         };
 
@@ -200,7 +201,7 @@ impl DownlinkTelemetryMessage for HeartbeatMessage {
                     degrees
                 }) as i16
             },
-            throttle: FlightMode::try_from(mode as u8)
+            throttle: FlightMode::try_from(mode)
                 .map(throttle_percent)
                 .unwrap_or(0),
             alt: altitude_amsl,

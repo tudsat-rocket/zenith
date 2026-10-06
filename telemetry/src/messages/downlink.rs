@@ -116,6 +116,9 @@ pub struct ConnectionContext {
     /// Downlink packet loss (in percent).
     /// Used to enrich RADIO_STATUS messages with ground-side information.
     pub rx_packet_loss: Option<u16>,
+    /// The last received flight mode, if known.
+    /// Used to derive which valves are commandable, which the components message has no room for.
+    pub mode: Option<FlightMode>,
 }
 
 impl ConnectionContext {
@@ -134,6 +137,7 @@ impl ConnectionContext {
             rx_rssi: None,
             rx_noise: None,
             rx_packet_loss: None,
+            mode: None,
         }
     }
 

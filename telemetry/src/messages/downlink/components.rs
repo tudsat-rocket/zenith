@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use mission::bus::{NodeSet, ValveState};
 use mission::inventory::{InventoryId, ServoId, ServoMap, ValveId, valve_is_heated};
 use mission::mavlink::{VehicleSnapshot, centi_celsius, servo_output_raw, valve_heater_flags};
+use mission::valves::ValveController;
 use rapid_dialect::rapid::enums::ValveFlag;
 use rapid_dialect::rapid::messages::{ServoOutputRaw, Valve};
 
@@ -182,11 +183,17 @@ impl DownlinkTelemetryMessage for ComponentsMessage {
         let heater_on = self.commanded >> ValveCode::HEATER_SHIFT & 1 != 0;
 
         let valves = ValveId::ALL.map(|valve| {
-            let (flags, temperature) = if valve_is_heated(valve) {
+            let (mut flags, temperature) = if valve_is_heated(valve) {
                 (valve_heater_flags(heater_on), centi_celsius(temperature))
             } else {
                 (ValveFlag::empty(), i16::MAX)
             };
+            flags.set(
+                ValveFlag::COMMANDABLE,
+                context
+                    .mode
+                    .is_some_and(|mode| ValveController::manual_valve_allowed(mode, valve)),
+            );
             Valve {
                 id: valve,
                 state: ValveCode::unpack_one(self.reported, valve.idx()).position(),
@@ -312,6 +319,35 @@ pub(crate) mod tests {
                     assert_eq!(valve.flags, ValveFlag::empty(), "{:?}", valve.id);
                     assert_eq!(valve.temperature, i16::MAX, "{:?}", valve.id);
                 }
+            }
+        }
+    }
+
+    /// Commandability is not in the packet; the receiver derives it from the last heartbeat's mode.
+    #[test]
+    fn commandable_follows_the_received_mode() {
+        let parts = SnapshotParts::default();
+        let msg = ComponentsMessage::pack(&parts.snapshot());
+
+        let mut context = ConnectionContext::init(0);
+        let (valves, ..) = msg.unpack(&mut context);
+        assert!(
+            valves
+                .iter()
+                .all(|v| !v.flags.contains(ValveFlag::COMMANDABLE))
+        );
+
+        for mode in (0u8..).map_while(|m| FlightMode::try_from(m).ok()) {
+            context.mode = Some(mode);
+            let msg = ComponentsMessage::pack(&parts.snapshot());
+            let (valves, ..) = msg.unpack(&mut context);
+            for valve in &valves {
+                assert_eq!(
+                    valve.flags.contains(ValveFlag::COMMANDABLE),
+                    ValveController::manual_valve_allowed(mode, valve.id),
+                    "{mode:?} {:?}",
+                    valve.id
+                );
             }
         }
     }
