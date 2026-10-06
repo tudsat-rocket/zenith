@@ -112,12 +112,12 @@ impl ValveController {
     }
 
     /// May the operator manually command this valve in this mode?
-    fn manual_valve_allowed(&self, valve: ValveId) -> bool {
+    pub const fn manual_valve_allowed(mode: FlightMode, valve: ValveId) -> bool {
         use FlightMode as M;
         use ValveId as V;
 
         // TODO
-        match self.mode {
+        match mode {
             // Hold: every valve commandable
             M::Hold => true,
 
@@ -157,7 +157,7 @@ impl ValveController {
             return Err(ValveError::InvalidCommand);
         }
 
-        if !self.manual_valve_allowed(valve) {
+        if !Self::manual_valve_allowed(self.mode, valve) {
             return Err(ValveError::NotPermittedInMode);
         }
 

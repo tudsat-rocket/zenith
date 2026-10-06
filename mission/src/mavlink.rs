@@ -30,6 +30,7 @@ use crate::inventory::{
 use crate::params::StateMachineParams;
 use crate::schedule::downlink_schedule;
 use crate::traits::SensorReadings;
+use crate::valves::ValveController;
 
 /// `None` is the flight computer's own power monitor, which only reports while no power board is
 /// present.
@@ -741,10 +742,14 @@ impl InstanceMessage<ValveId> for Valve {
             .map(|state| f32::from(state.data.promille()) / 1000.0)
             .unwrap_or(f32::NAN);
         let commanded = f32::from(snap.output_image.valve[valve].promille()) / 1000.0;
-        let (flags, temperature) = match snap.valve_heater(valve) {
+        let (mut flags, temperature) = match snap.valve_heater(valve) {
             Some((heater_on, celsius)) => (valve_heater_flags(heater_on), centi_celsius(celsius)),
             None => (ValveFlag::empty(), i16::MAX),
         };
+        flags.set(
+            ValveFlag::COMMANDABLE,
+            ValveController::manual_valve_allowed(snap.mode, valve),
+        );
         let drive_current = snap.input_image.valve_current[valve].map_or(u16::MAX, |d| d.data);
 
         Some(Valve {
