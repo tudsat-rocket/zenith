@@ -745,6 +745,7 @@ impl InstanceMessage<ValveId> for Valve {
             Some((heater_on, celsius)) => (valve_heater_flags(heater_on), centi_celsius(celsius)),
             None => (ValveFlag::empty(), i16::MAX),
         };
+        let drive_current = snap.input_image.valve_current[valve].map_or(u16::MAX, |d| d.data);
 
         Some(Valve {
             id: valve,
@@ -752,6 +753,7 @@ impl InstanceMessage<ValveId> for Valve {
             commanded,
             flags,
             temperature,
+            drive_current,
         })
     }
 }
