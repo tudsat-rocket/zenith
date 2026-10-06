@@ -200,8 +200,7 @@ impl DownlinkTelemetryMessage for ComponentsMessage {
                 commanded: ValveCode::unpack_one(self.commanded, valve.idx()).position(),
                 flags,
                 temperature,
-                // No room in the packet
-                drive_current: u16::MAX,
+                drive_current: context.valve_currents[valve].unwrap_or(u16::MAX),
             }
         });
 
