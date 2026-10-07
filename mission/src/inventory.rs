@@ -269,6 +269,13 @@ const _: () = {
     }
 };
 
+// links maps DO_WINCH instances onto servo indices without knowing ServoId.
+const _: () = {
+    let winches = links::protocols::commands::WINCH_SERVOS;
+    assert!(winches[0] == ServoId::PressurantRetract as u8);
+    assert!(winches[1] == ServoId::OxidizerRetract as u8);
+};
+
 impl InventoryId<2> for TempSensId {
     const ALL: [Self; 2] = [Self::OxTankUpper, Self::OxTankLower];
 

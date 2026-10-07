@@ -182,7 +182,6 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
 
         self.flight_logic.set_mode(self.time, mode);
         self.valves.set_mode(mode, self.time);
-        self.servos.set_mode(mode, self.time);
 
         // Camera outputs are turned on automatically, but are not automatically turned
         // back off.
@@ -213,6 +212,16 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.servos
             .command(*servo, ValveState::from_promille_clamped(promille));
         Ok(())
+    }
+
+    /// Releases or grabs quick disconnect `instance` (1-based, as in MAVLink).
+    pub fn try_command_gripper(&mut self, instance: u8, grab: bool) -> Result<(), MavResult> {
+        let instance = instance.checked_sub(1).ok_or(MavResult::Denied)?;
+        if self.servos.gripper(instance, grab, self.time) {
+            Ok(())
+        } else {
+            Err(MavResult::Denied)
+        }
     }
 
     pub async fn set_param(&mut self, id: u16, raw: u32) {

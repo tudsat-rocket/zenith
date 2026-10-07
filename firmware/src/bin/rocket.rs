@@ -163,6 +163,15 @@ pub async fn main_loop(
                         e
                     }
                 },
+                UplinkCommand::Gripper { instance, grab } => {
+                    match vehicle.try_command_gripper(instance, grab) {
+                        Ok(()) => MavResult::Accepted,
+                        Err(e) => {
+                            defmt::warn!("Gripper {} {} rejected", instance, grab);
+                            e
+                        }
+                    }
+                }
                 UplinkCommand::SetParam { id, raw } => {
                     vehicle.set_param(id, raw).await;
                     buzzer::set_volume(vehicle.misc_params().buzzer_volume);

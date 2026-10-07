@@ -81,24 +81,25 @@ pub struct PropulsionParams {
     pub main_valve_delay: u32,
 }
 
-/// Quick disconnect and release arm sequence parameters, exposed over MAVLink as `QD_*`.
+/// Quick disconnect release sequence parameters, exposed over MAVLink as `QD_*`.
+///
+/// See [`crate::servos`] for how these are used.
 #[derive(Debug, Clone, macros::ParameterGroup)]
 #[param_group(prefix = "QD")]
 pub struct QdParams {
-    /// Time (ms) the disconnect servos are actuated in disconnect mode before the retract servos
-    /// move to DISC_RETR_PR / DISC_RETR_OX
+    /// Time (ms) the disconnect servo is actuated after a gripper release before the retract servo
+    /// moves to DISC_RETR_PR / DISC_RETR_OX
     #[param(id = 0x0600, name = "DISC_HOLD_T", default = 1000)]
     pub disconnect_hold_time: u32,
-    /// Position (percent, 0-100) the pressurant retract servo moves to in disconnect mode. Values
-    /// above 100 are clamped.
+    /// Position (percent, 0-100) the pressurant retract servo moves to after a gripper release.
+    /// Values above 100 are clamped.
     #[param(id = 0x0601, name = "DISC_RETR_PR", default = 10)]
     pub disconnect_retract_pressurant: u32,
-    /// Position (percent, 0-100) the oxidizer retract servo moves to in disconnect mode. Values
-    /// above 100 are clamped.
+    /// Position (percent, 0-100) the oxidizer retract servo moves to after a gripper release.
+    /// Values above 100 are clamped.
     #[param(id = 0x0602, name = "DISC_RETR_OX", default = 10)]
     pub disconnect_retract_oxidizer: u32,
-    /// Time (ms) after the retract servos moved in disconnect mode after which the disconnect
-    /// servos are released
+    /// Time (ms) after the retract servo moved after which the disconnect servo is closed again
     #[param(id = 0x0603, name = "DISC_RETR_T", default = 1000)]
     pub disconnect_retract_time: u32,
 }

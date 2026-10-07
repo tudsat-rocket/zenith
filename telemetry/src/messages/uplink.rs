@@ -25,6 +25,7 @@ pub enum UplinkMessage {
     ParamSet(ParamSetMessage),
     ParamRequest(ParamRequestMessage),
     SetServo(SetServoMessage),
+    Gripper(GripperMessage),
 }
 
 impl TelemetryMessage for UplinkMessage {
@@ -45,6 +46,7 @@ impl TelemetryMessage for UplinkMessage {
             Self::ParamSet(inner) => (ParamSetMessage::ID, inner.serialize()?),
             Self::ParamRequest(inner) => (ParamRequestMessage::ID, inner.serialize()?),
             Self::SetServo(inner) => (SetServoMessage::ID, inner.serialize()?),
+            Self::Gripper(inner) => (GripperMessage::ID, inner.serialize()?),
         };
 
         let mut buffer = [0x00; UPLINK_PACKET_SIZE];
@@ -104,6 +106,7 @@ impl TelemetryMessage for UplinkMessage {
             ParamSetMessage::ID => UplinkMessage::ParamSet(postcard::from_bytes(payload)?),
             ParamRequestMessage::ID => UplinkMessage::ParamRequest(postcard::from_bytes(payload)?),
             SetServoMessage::ID => UplinkMessage::SetServo(postcard::from_bytes(payload)?),
+            GripperMessage::ID => UplinkMessage::Gripper(postcard::from_bytes(payload)?),
             id => {
                 return Err(TelemetryError::UnknownMessageId(id));
             }
@@ -148,6 +151,10 @@ impl UplinkMessage {
             }),
             Self::SetServo(inner) => inner.command().ok_or_else(|| {
                 defmt::warn!("Rejecting uplink command for an unknown servo.");
+                MavResult::Denied
+            }),
+            Self::Gripper(inner) => inner.command().ok_or_else(|| {
+                defmt::warn!("Rejecting malformed gripper uplink command.");
                 MavResult::Denied
             }),
         })
@@ -336,6 +343,44 @@ impl SetServoMessage {
     }
 }
 
+/// 0x07: Gripper
+///
+/// Releases or grabs one quick disconnect, the RF counterpart of MAV_CMD_DO_GRIPPER.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GripperMessage {
+    /// 1-based quick disconnect instance, as in MAVLink; the vehicle rejects ones it does not have.
+    instance: u8,
+    /// 0 releases, 1 grabs.
+    grab: u8,
+}
+
+impl UplinkTelemetryMessage for GripperMessage {
+    const ID: u8 = 0x07;
+}
+
+impl GripperMessage {
+    pub fn new(instance: u8, grab: bool) -> Self {
+        Self {
+            instance,
+            grab: u8::from(grab),
+        }
+    }
+
+    /// The command this packet asks for, or `None` if its action is neither release nor grab.
+    pub fn command(&self) -> Option<UplinkCommand> {
+        let grab = match self.grab {
+            0 => false,
+            1 => true,
+            _ => return None,
+        };
+
+        Some(UplinkCommand::Gripper {
+            instance: self.instance,
+            grab,
+        })
+    }
+}
+
 // TODO: messages for:
 //  - log/storage management
 //  -
@@ -477,6 +522,31 @@ mod tests {
 
         assert_eq!(
             SetServoMessage::new(ServoId::ALL.len() as u8, 0).command(),
+            None
+        );
+    }
+
+    #[test]
+    fn gripper_commands_survive_the_packet() {
+        for (instance, grab) in [(1, false), (2, true)] {
+            let UplinkMessage::Gripper(decoded) =
+                through_packet(UplinkMessage::Gripper(GripperMessage::new(instance, grab)))
+            else {
+                panic!("decoded as the wrong message")
+            };
+
+            assert_eq!(
+                decoded.command(),
+                Some(UplinkCommand::Gripper { instance, grab })
+            );
+        }
+
+        assert_eq!(
+            GripperMessage {
+                instance: 0,
+                grab: 2
+            }
+            .command(),
             None
         );
     }

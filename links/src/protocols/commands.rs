@@ -28,6 +28,10 @@ use crate::{
 /// encoded value is a valid bitfield either way.
 const SUPPORTED_TUNE_FORMAT: TuneFormat = TuneFormat::Qbasic11;
 
+/// The 0-based servo each 1-based DO_WINCH instance drives. `mission` asserts these against its
+/// `ServoId`s.
+pub const WINCH_SERVOS: [u8; 2] = [2, 3];
+
 /// Read the NUL-terminated tune out of a `PLAY_TUNE_V2` message.
 ///
 /// Returns `None` if it is not valid UTF-8 or is longer than a tune name can
@@ -172,13 +176,22 @@ pub async fn run(
                             MavResult::Denied
                         }
                     }
-                    MavCmd::DoSetServo | MavCmd::DoSetActuator => match servo_command(&cmd) {
-                        Ok(servo_cmd) => {
-                            cmd_tx.publish(servo_cmd).await;
+                    MavCmd::DoGripper => match gripper_command(&cmd) {
+                        Ok(gripper_cmd) => {
+                            cmd_tx.publish(gripper_cmd).await;
                             MavResult::InProgress
                         }
                         Err(result) => result,
                     },
+                    MavCmd::DoSetServo | MavCmd::DoSetActuator | MavCmd::DoWinch => {
+                        match servo_command(&cmd) {
+                            Ok(servo_cmd) => {
+                                cmd_tx.publish(servo_cmd).await;
+                                MavResult::InProgress
+                            }
+                            Err(result) => result,
+                        }
+                    }
                     _ => MavResult::Unsupported,
                 };
 
@@ -287,7 +300,8 @@ pub async fn run(
 
 /// DO_SET_SERVO addresses a servo by 1-based instance with a pulse width in microseconds.
 /// DO_SET_ACTUATOR addresses six per set, with -1..1 values and NaN to skip one; only one of them
-/// may be set.
+/// may be set. DO_WINCH addresses a retract servo by 1-based instance; only relative length
+/// control is accepted, and its length is taken as the absolute position in promille.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -320,6 +334,24 @@ fn servo_command(cmd: &CommandLong) -> Result<UplinkCommand, MavResult> {
                 .ok_or(MavResult::Denied)?;
             (servo, ((value.clamp(-1.0, 1.0) + 1.0) * 500.0) as u16)
         }
+        MavCmd::DoWinch => {
+            if !cmd.param1.is_finite() || !cmd.param3.is_finite() {
+                return Err(MavResult::Denied);
+            }
+            #[allow(
+                clippy::float_cmp,
+                reason = "MAVLink enum values travel as exact integers in a float"
+            )]
+            // WINCH_RELATIVE_LENGTH_CONTROL
+            if cmd.param2 != 1.0 {
+                return Err(MavResult::Unsupported);
+            }
+            let servo = (cmd.param1 as u8)
+                .checked_sub(1)
+                .and_then(|instance| WINCH_SERVOS.get(usize::from(instance)))
+                .ok_or(MavResult::Denied)?;
+            (*servo, cmd.param3.clamp(0.0, 1000.0) as u16)
+        }
         _ => return Err(MavResult::Unsupported),
     };
 
@@ -328,6 +360,30 @@ fn servo_command(cmd: &CommandLong) -> Result<UplinkCommand, MavResult> {
         servo,
         promille,
     })
+}
+
+/// DO_GRIPPER addresses a quick disconnect by 1-based instance, with GRIPPER_ACTION_RELEASE (0)
+/// or GRIPPER_ACTION_GRAB (1).
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "float-to-int casts saturate; the result is range-checked"
+)]
+fn gripper_command(cmd: &CommandLong) -> Result<UplinkCommand, MavResult> {
+    if !cmd.param1.is_finite() {
+        return Err(MavResult::Denied);
+    }
+    let instance = cmd.param1 as u8;
+    if instance == 0 {
+        return Err(MavResult::Denied);
+    }
+    let grab = match cmd.param2 {
+        0.0 => false,
+        1.0 => true,
+        _ => return Err(MavResult::Denied),
+    };
+
+    Ok(UplinkCommand::Gripper { instance, grab })
 }
 
 async fn reboot() {
@@ -411,5 +467,56 @@ mod tests {
             servo(cmd, [0.0, nan, nan, nan, nan, nan, 100.0]),
             Err(MavResult::Denied)
         );
+    }
+
+    #[test]
+    fn winch_takes_the_length_as_promille() {
+        let cmd = MavCmd::DoWinch;
+        let at =
+            |instance, action, length| servo(cmd, [instance, action, length, 0.0, 0.0, 0.0, 0.0]);
+
+        assert_eq!(at(1.0, 1.0, 250.0), set_servo(cmd, 2, 250));
+        assert_eq!(at(2.0, 1.0, 1000.0), set_servo(cmd, 3, 1000));
+        assert_eq!(at(1.0, 1.0, -5.0), set_servo(cmd, 2, 0));
+        assert_eq!(at(1.0, 1.0, 5000.0), set_servo(cmd, 2, 1000));
+
+        assert_eq!(at(0.0, 1.0, 500.0), Err(MavResult::Denied));
+        assert_eq!(at(3.0, 1.0, 500.0), Err(MavResult::Denied));
+        assert_eq!(at(1.0, 1.0, f32::NAN), Err(MavResult::Denied));
+        // Only WINCH_RELATIVE_LENGTH_CONTROL.
+        assert_eq!(at(1.0, 0.0, 500.0), Err(MavResult::Unsupported));
+        assert_eq!(at(1.0, 2.0, 500.0), Err(MavResult::Unsupported));
+    }
+
+    #[test]
+    fn gripper_takes_a_one_based_instance_and_an_action() {
+        let at = |instance, action| {
+            gripper_command(&CommandLong {
+                command: MavCmd::DoGripper,
+                param1: instance,
+                param2: action,
+                ..Default::default()
+            })
+        };
+
+        assert_eq!(
+            at(1.0, 0.0),
+            Ok(UplinkCommand::Gripper {
+                instance: 1,
+                grab: false
+            })
+        );
+        assert_eq!(
+            at(2.0, 1.0),
+            Ok(UplinkCommand::Gripper {
+                instance: 2,
+                grab: true
+            })
+        );
+
+        assert_eq!(at(0.0, 0.0), Err(MavResult::Denied));
+        assert_eq!(at(f32::NAN, 0.0), Err(MavResult::Denied));
+        assert_eq!(at(1.0, 0.5), Err(MavResult::Denied));
+        assert_eq!(at(1.0, f32::NAN), Err(MavResult::Denied));
     }
 }
