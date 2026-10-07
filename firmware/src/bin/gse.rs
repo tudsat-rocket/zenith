@@ -173,7 +173,7 @@ fn write_servo(can_tx: &CanTxPublisher, servo: ServoId, state: ValveState) {
         state.promille()
     );
 
-    let frame = fw::bus::servo_sdo_frame(servo, state);
+    let frame = fw::bus::servo_sdo_frame(servo, Some(state));
     if can_tx.try_publish(frame).is_err() {
         can_tx.publish_immediate(frame);
     }

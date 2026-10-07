@@ -29,16 +29,21 @@ fn raw(out: &ServoOutputRaw) -> [u16; 4] {
     ]
 }
 
-fn promille(h: &Harness) -> [u16; 4] {
-    h.vehicle.bus_outputs.servo.values().map(|s| s.promille())
+/// `None` is released.
+fn promille(h: &Harness) -> [Option<u16>; 4] {
+    h.vehicle
+        .bus_outputs
+        .servo
+        .values()
+        .map(|s| s.map(|s| s.promille()))
 }
 
 #[test]
-fn servos_start_closed() {
+fn servos_start_released() {
     block_on(async {
         let mut h = Harness::new(None).await;
 
-        assert_eq!(raw(&last_servo_output(&mut h).await), [1000; 4]);
+        assert_eq!(raw(&last_servo_output(&mut h).await), [0; 4]);
     });
 }
 
@@ -49,17 +54,11 @@ fn commanded_servos_hold_their_position() {
 
         h.vehicle.try_command_servo(1, 1000).unwrap();
         h.vehicle.try_command_servo(3, 250).unwrap();
-        assert_eq!(
-            raw(&last_servo_output(&mut h).await),
-            [1000, 2000, 1000, 1250]
-        );
+        assert_eq!(raw(&last_servo_output(&mut h).await), [0, 2000, 0, 1250]);
 
         // A later command moves only the servo it names.
         h.vehicle.try_command_servo(3, 0).unwrap();
-        assert_eq!(
-            raw(&last_servo_output(&mut h).await),
-            [1000, 2000, 1000, 1000]
-        );
+        assert_eq!(raw(&last_servo_output(&mut h).await), [0, 2000, 0, 1000]);
     });
 }
 
@@ -70,7 +69,7 @@ fn a_command_naming_a_missing_servo_changes_nothing() {
 
         assert!(h.vehicle.try_command_servo(4, 500).is_err());
         h.run_ticks(1).await;
-        assert_eq!(promille(&h), [0; 4]);
+        assert_eq!(promille(&h), [None; 4]);
     });
 }
 
@@ -81,23 +80,20 @@ fn disconnect_then_retract_with_default_params() {
 
         h.vehicle.set_mode(FlightMode::Disconnect);
         h.run_ticks(500).await;
-        assert_eq!(promille(&h), [1000, 1000, 0, 0]);
+        assert_eq!(promille(&h), [Some(1000), Some(1000), Some(0), Some(0)]);
 
         h.run_ticks(1000).await;
-        assert_eq!(promille(&h), [1000, 1000, 100, 100]);
+        assert_eq!(promille(&h), [Some(1000), Some(1000), Some(100), Some(100)]);
 
         h.run_ticks(1000).await;
-        assert_eq!(promille(&h), [0, 0, 100, 100]);
+        assert_eq!(promille(&h), [Some(0), Some(0), Some(100), Some(100)]);
 
         h.vehicle.set_mode(FlightMode::Retract);
         h.run_ticks(1).await;
-        assert_eq!(promille(&h), [0, 0, 1000, 1000]);
+        assert_eq!(promille(&h), [Some(0), Some(0), Some(1000), Some(1000)]);
 
         h.vehicle.set_mode(FlightMode::Pressurize);
-        assert_eq!(
-            raw(&last_servo_output(&mut h).await),
-            [1000, 1000, 2000, 2000]
-        );
+        assert_eq!(raw(&last_servo_output(&mut h).await), [0; 4]);
     });
 }
 
@@ -109,10 +105,10 @@ fn a_manual_command_overrides_disconnect_until_the_mode_changes() {
         h.vehicle.set_mode(FlightMode::Disconnect);
         h.vehicle.try_command_servo(2, 300).unwrap();
         h.run_ticks(1500).await;
-        assert_eq!(promille(&h), [1000, 1000, 300, 100]);
+        assert_eq!(promille(&h), [Some(1000), Some(1000), Some(300), Some(100)]);
 
         h.vehicle.set_mode(FlightMode::Retract);
         h.run_ticks(1).await;
-        assert_eq!(promille(&h), [0, 0, 1000, 1000]);
+        assert_eq!(promille(&h), [Some(0), Some(0), Some(1000), Some(1000)]);
     });
 }

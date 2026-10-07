@@ -3,8 +3,12 @@
 //! The commanded position of each servo is decided as follows (highest wins):
 //!
 //! 1. manual command
-//! 2. mode-based position
-//! 3. `Hold` baseline (the positions in effect at the moment `Hold` was entered)
+//! 2. `Hold` baseline (the positions in effect at the moment `Hold` was entered)
+//! 3. mode-based position
+//!
+//! Only `Disconnect` and `Retract` drive the servos; every other mode releases them, i.e. the IO
+//! board stops driving them and they hold (or do not hold) mechanically. A manual command always
+//! drives.
 //!
 //! Manual commands are reset upon flight mode changes, except for the Hold mode.
 
@@ -19,9 +23,10 @@ use crate::params::QdParams;
 pub struct ServoController {
     mode: FlightMode,
     commands: ServoMap<Option<ValveState>>,
-    /// Positions from the most recent [`Self::resolve`], which entering Hold freezes.
-    last: ServoMap<ValveState>,
-    hold_baseline: ServoMap<ValveState>,
+    /// Positions from the most recent [`Self::resolve`], which entering Hold freezes. `None` is
+    /// released.
+    last: ServoMap<Option<ValveState>>,
+    hold_baseline: ServoMap<Option<ValveState>>,
     /// Vehicle time [ms] at which [`Self::mode`] was entered.
     mode_entered_at: Wrapping<u32>,
 }
@@ -37,8 +42,8 @@ impl ServoController {
         Self {
             mode: FlightMode::Idle,
             commands: ServoMap::splat(None),
-            last: ServoMap::splat(ValveState::fully_closed()),
-            hold_baseline: ServoMap::splat(ValveState::fully_closed()),
+            last: ServoMap::splat(None),
+            hold_baseline: ServoMap::splat(None),
             mode_entered_at: Wrapping(0),
         }
     }
@@ -60,7 +65,7 @@ impl ServoController {
         self.mode_entered_at = now;
     }
 
-    /// `None` only for Hold, which has no opinion of its own.
+    /// `None` releases the servo. Hold has no opinion of its own and is resolved by the caller.
     fn mode_servo_state(
         &self,
         servo: ServoId,
@@ -77,10 +82,6 @@ impl ServoController {
         let release_at = retract_at.saturating_add(params.disconnect_retract_time);
 
         let state = match (self.mode, servo) {
-            (M::Hold, _) => return None,
-
-            (M::Idle | M::FillPressurant | M::FillOxidizer | M::Vent, _) => closed,
-
             (M::Disconnect, S::PressurantDisconnect | S::OxidizerDisconnect) => {
                 if time_in_mode < release_at {
                     open
@@ -92,8 +93,15 @@ impl ServoController {
             (M::Disconnect, S::PressurantRetract) => percent(params.disconnect_retract_pressurant),
             (M::Disconnect, S::OxidizerRetract) => percent(params.disconnect_retract_oxidizer),
 
+            (M::Retract, S::PressurantDisconnect | S::OxidizerDisconnect) => closed,
+            (M::Retract, S::PressurantRetract | S::OxidizerRetract) => open,
+
             (
-                M::Retract
+                M::Hold
+                | M::Idle
+                | M::FillPressurant
+                | M::FillOxidizer
+                | M::Vent
                 | M::Pressurize
                 | M::DetectLaunch
                 | M::Ignite
@@ -103,23 +111,28 @@ impl ServoController {
                 | M::DeployMain
                 | M::Landed,
                 _,
-            ) => match servo {
-                S::PressurantDisconnect | S::OxidizerDisconnect => closed,
-                S::PressurantRetract | S::OxidizerRetract => open,
-            },
+            ) => return None,
         };
 
         Some(state)
     }
 
-    /// Resolve the commanded position of every servo for this tick.
-    pub fn resolve(&mut self, now: Wrapping<u32>, params: &QdParams) -> ServoMap<ValveState> {
+    /// Resolve the commanded position of every servo for this tick, `None` being released.
+    pub fn resolve(
+        &mut self,
+        now: Wrapping<u32>,
+        params: &QdParams,
+    ) -> ServoMap<Option<ValveState>> {
         let time_in_mode = (now - self.mode_entered_at).0;
 
         self.last = ServoMap::from_fn(|servo| {
-            self.commands[servo]
-                .or_else(|| self.mode_servo_state(servo, time_in_mode, params))
-                .unwrap_or(self.hold_baseline[servo])
+            self.commands[servo].or_else(|| {
+                if self.mode == FlightMode::Hold {
+                    self.hold_baseline[servo]
+                } else {
+                    self.mode_servo_state(servo, time_in_mode, params)
+                }
+            })
         });
 
         self.last
@@ -135,8 +148,12 @@ mod tests {
     use FlightMode as M;
     use ServoId as S;
 
-    const OPEN: ValveState = ValveState::fully_open();
-    const CLOSED: ValveState = ValveState::fully_closed();
+    const OPEN: Option<ValveState> = Some(ValveState::fully_open());
+    const CLOSED: Option<ValveState> = Some(ValveState::fully_closed());
+
+    fn percent(p: u16) -> Option<ValveState> {
+        Some(ValveState::from_percent_open(p))
+    }
 
     fn params() -> QdParams {
         QdParams {
@@ -147,7 +164,7 @@ mod tests {
         }
     }
 
-    fn resolve(c: &mut ServoController, now: u32) -> ServoMap<ValveState> {
+    fn resolve(c: &mut ServoController, now: u32) -> ServoMap<Option<ValveState>> {
         c.resolve(Wrapping(now), &params())
     }
 
@@ -156,14 +173,14 @@ mod tests {
     }
 
     #[test]
-    fn every_mode_except_hold_asserts_every_servo() {
+    fn only_disconnect_and_retract_drive_the_servos() {
         let mut c = ServoController::new();
         for mode in all_modes() {
             c.set_mode(mode, Wrapping(0));
             for servo in ServoId::ALL {
                 assert_eq!(
-                    c.mode_servo_state(servo, 0, &params()).is_none(),
-                    mode == M::Hold,
+                    c.mode_servo_state(servo, 0, &params()).is_some(),
+                    matches!(mode, M::Disconnect | M::Retract),
                     "mode {mode:?} servo {servo:?}"
                 );
             }
@@ -171,14 +188,16 @@ mod tests {
     }
 
     #[test]
+    fn servos_start_released() {
+        assert_eq!(resolve(&mut ServoController::new(), 0).values(), &[None; 4]);
+    }
+
+    #[test]
     fn disconnect_runs_its_sequence() {
         let mut c = ServoController::new();
         c.set_mode(M::Disconnect, Wrapping(5000));
 
-        let (pr, ox) = (
-            ValveState::from_percent_open(10),
-            ValveState::from_percent_open(20),
-        );
+        let (pr, ox) = (percent(10), percent(20));
         for (now, disconnect, pressurant_retract, oxidizer_retract) in [
             (5000, OPEN, CLOSED, CLOSED),
             (5999, OPEN, CLOSED, CLOSED),
@@ -196,15 +215,14 @@ mod tests {
     }
 
     #[test]
-    fn modes_from_retract_on_hold_the_final_position() {
+    fn retract_holds_the_final_position_and_later_modes_release() {
         let mut c = ServoController::new();
-        for mode in [M::Retract, M::Pressurize, M::Ignite, M::Landed] {
+        c.set_mode(M::Retract, Wrapping(0));
+        assert_eq!(resolve(&mut c, 10).values(), &[CLOSED, CLOSED, OPEN, OPEN]);
+
+        for mode in [M::Pressurize, M::Ignite, M::Landed] {
             c.set_mode(mode, Wrapping(0));
-            assert_eq!(
-                resolve(&mut c, 10).values(),
-                &[CLOSED, CLOSED, OPEN, OPEN],
-                "{mode:?}"
-            );
+            assert_eq!(resolve(&mut c, 10).values(), &[None; 4], "{mode:?}");
         }
     }
 
@@ -215,14 +233,14 @@ mod tests {
 
         c.command(S::OxidizerRetract, ValveState::from_percent_open(30));
         let servos = resolve(&mut c, 1);
-        assert_eq!(
-            servos[S::OxidizerRetract],
-            ValveState::from_percent_open(30)
-        );
+        assert_eq!(servos[S::OxidizerRetract], percent(30));
         assert_eq!(servos[S::PressurantRetract], OPEN);
 
         c.set_mode(M::Pressurize, Wrapping(2));
-        assert_eq!(resolve(&mut c, 3)[S::OxidizerRetract], OPEN);
+        c.command(S::PressurantRetract, ValveState::fully_closed());
+        let servos = resolve(&mut c, 3);
+        assert_eq!(servos[S::PressurantRetract], CLOSED);
+        assert_eq!(servos[S::OxidizerRetract], None);
     }
 
     #[test]
@@ -235,11 +253,19 @@ mod tests {
         c.set_mode(M::Hold, Wrapping(1200));
         assert_eq!(resolve(&mut c, 60_000).values(), entered.values());
 
-        c.command(S::PressurantDisconnect, CLOSED);
+        c.command(S::PressurantDisconnect, ValveState::fully_closed());
         assert_eq!(resolve(&mut c, 60_001)[S::PressurantDisconnect], CLOSED);
         assert_eq!(resolve(&mut c, 60_001)[S::OxidizerDisconnect], OPEN);
 
         c.set_mode(M::Idle, Wrapping(60_002));
-        assert_eq!(resolve(&mut c, 60_003).values(), &[CLOSED; 4]);
+        assert_eq!(resolve(&mut c, 60_003).values(), &[None; 4]);
+    }
+
+    #[test]
+    fn hold_from_a_released_mode_stays_released() {
+        let mut c = ServoController::new();
+        resolve(&mut c, 0);
+        c.set_mode(M::Hold, Wrapping(1));
+        assert_eq!(resolve(&mut c, 2).values(), &[None; 4]);
     }
 }

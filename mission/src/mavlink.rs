@@ -178,11 +178,14 @@ impl From<&VehicleSnapshot<'_>> for ServoOutputRaw {
 }
 
 /// The commanded servo positions on the 1000 - 2000 us scale SERVO_OUTPUT_RAW defines, servo 1
-/// being [`ServoId::ALL`](crate::inventory::ServoId::ALL)`[0]`.
-pub fn servo_output_raw(time: Wrapping<u32>, commanded: &ServoMap<ValveState>) -> ServoOutputRaw {
+/// being [`ServoId::ALL`](crate::inventory::ServoId::ALL)`[0]`. A released servo reads 0.
+pub fn servo_output_raw(
+    time: Wrapping<u32>,
+    commanded: &ServoMap<Option<ValveState>>,
+) -> ServoOutputRaw {
     let raw = commanded
         .values()
-        .map(|state| state.promille().saturating_add(1000));
+        .map(|state| state.map_or(0, |s| s.promille().saturating_add(1000)));
     let [servo1_raw, servo2_raw, servo3_raw, servo4_raw] = raw;
 
     ServoOutputRaw {

@@ -201,7 +201,8 @@ impl NodeSet {
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct BusOutputImage {
     pub valve: ValveMap<ValveState>,
-    pub servo: ServoMap<ValveState>,
+    /// `None` releases the servo: its IO board stops driving it.
+    pub servo: ServoMap<Option<ValveState>>,
     pub binary_output: BinaryOutputMap<bool>,
 }
 
@@ -274,7 +275,7 @@ impl BusOutputImage {
     pub const fn default() -> Self {
         Self {
             valve: ValveMap::splat(ValveState::fully_closed()),
-            servo: ServoMap::splat(ValveState::fully_closed()),
+            servo: ServoMap::splat(None),
             binary_output: BinaryOutputMap::splat(false),
         }
     }
