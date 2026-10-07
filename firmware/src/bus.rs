@@ -421,11 +421,17 @@ pub fn valve_sdo_frame(valve: ValveId, state: ValveState) -> Frame {
     position_sdo_frame(VALVE_ID_MAP[valve], state)
 }
 
-pub fn servo_sdo_frame(servo: ServoId, state: ValveState) -> Frame {
-    position_sdo_frame(SERVO_ID_MAP[servo], state)
+pub fn servo_sdo_frame(servo: ServoId, state: Option<ValveState>) -> Frame {
+    // Bit 15 of the position word releases the drive, whatever the promille field says.
+    let word = state.map_or(0x8000, |s| s.promille());
+    position_word_sdo_frame(SERVO_ID_MAP[servo], word)
 }
 
 fn position_sdo_frame(addr: IoAddr, state: ValveState) -> Frame {
-    let data = heapless::Vec::from_slice(&state.promille().to_le_bytes()).unwrap();
+    position_word_sdo_frame(addr, state.promille())
+}
+
+fn position_word_sdo_frame(addr: IoAddr, word: u16) -> Frame {
+    let data = heapless::Vec::from_slice(&word.to_le_bytes()).unwrap();
     can_msg_to_frame(&sdo_write_msg(&data, &addr))
 }

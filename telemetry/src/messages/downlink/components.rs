@@ -50,7 +50,7 @@ enum ValveCode {
     Closed = 0b00,
     Open = 0b01,
     Partial = 0b10,
-    /// No reading on the bus. Only reachable for the measured state.
+    /// No reading on the bus for the measured state, a released servo for the commanded one.
     Unknown = 0b11,
 }
 
@@ -105,12 +105,13 @@ impl ValveCode {
         }
     }
 
-    /// `Unknown` is never packed on the commanded side, so it decodes as closed.
-    fn commanded_state(self) -> ValveState {
+    /// `None` is a released servo.
+    fn commanded_state(self) -> Option<ValveState> {
         match self {
-            Self::Closed | Self::Unknown => ValveState::fully_closed(),
-            Self::Open => ValveState::fully_open(),
-            Self::Partial => ValveState::from_promille_clamped(500),
+            Self::Closed => Some(ValveState::fully_closed()),
+            Self::Open => Some(ValveState::fully_open()),
+            Self::Partial => Some(ValveState::from_promille_clamped(500)),
+            Self::Unknown => None,
         }
     }
 }
@@ -160,7 +161,7 @@ impl DownlinkTelemetryMessage for ComponentsMessage {
             (valve.idx(), ValveCode::from_state(state))
         }));
         let commanded_servos = ValveCode::pack(ServoId::ALL.map(|servo| {
-            let state = Some(snapshot.output_image.servo[servo]);
+            let state = snapshot.output_image.servo[servo];
             (servo_slot(servo), ValveCode::from_state(state))
         }));
 
@@ -234,7 +235,7 @@ pub(crate) mod tests {
             outputs.valve[valve] = ValveState::fully_open();
         }
         for servo in ServoId::ALL {
-            outputs.servo[servo] = ValveState::fully_open();
+            outputs.servo[servo] = Some(ValveState::fully_open());
         }
         outputs
     }
@@ -402,8 +403,8 @@ pub(crate) mod tests {
     #[test]
     fn commanded_servos_survive_the_packet() {
         let mut parts = SnapshotParts::default();
-        parts.outputs.servo[ServoId::OxidizerDisconnect] = ValveState::fully_open();
-        parts.outputs.servo[ServoId::OxidizerRetract] = ValveState::from_percent_open(20);
+        parts.outputs.servo[ServoId::OxidizerDisconnect] = Some(ValveState::fully_open());
+        parts.outputs.servo[ServoId::OxidizerRetract] = Some(ValveState::from_percent_open(20));
 
         let msg = DownlinkMessage::Components(ComponentsMessage::pack(&parts.snapshot()));
         let DownlinkMessage::Components(decoded) = through_packet(msg) else {
@@ -411,6 +412,7 @@ pub(crate) mod tests {
         };
         let (_, servos, ..) = decoded.unpack(&mut ConnectionContext::init(0));
 
+        // The servos left alone are released, which SERVO_OUTPUT_RAW reports as 0.
         assert_eq!(
             [
                 servos.servo1_raw,
@@ -418,7 +420,7 @@ pub(crate) mod tests {
                 servos.servo3_raw,
                 servos.servo4_raw
             ],
-            [1000, 2000, 1000, 1500]
+            [0, 2000, 0, 1500]
         );
     }
 

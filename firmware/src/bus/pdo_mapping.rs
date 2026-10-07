@@ -85,9 +85,9 @@ pub fn valve_msg_to_valve(
     positions: [u16; 4],
 ) -> heapless::Vec<(ValveId, ValveState), 4> {
     let mut out = heapless::Vec::new();
-    for (slot, &promille) in positions.iter().enumerate() {
+    for (slot, &word) in positions.iter().enumerate() {
         if let Some(id) = valve_id_for(node_id, slot) {
-            let _ = out.push((id, ValveState::from_promille_clamped(promille)));
+            let _ = out.push((id, position_of(word)));
         }
     }
     out
@@ -117,12 +117,18 @@ pub fn valve_msg_to_servo(
     positions: [u16; 4],
 ) -> heapless::Vec<(ServoId, ValveState), 4> {
     let mut out = heapless::Vec::new();
-    for (slot, &promille) in positions.iter().enumerate() {
+    for (slot, &word) in positions.iter().enumerate() {
         if let Some(id) = servo_id_for(node_id, slot) {
-            let _ = out.push((id, ValveState::from_promille_clamped(promille)));
+            let _ = out.push((id, position_of(word)));
         }
     }
     out
+}
+
+/// The promille field of a valve position word. Bit 15 flags a released drive, under which the
+/// node keeps reporting its last position estimate.
+fn position_of(word: u16) -> ValveState {
+    ValveState::from_promille_clamped(word & 0x7FFF)
 }
 
 fn servo_id_for(node_id: u8, slot: usize) -> Option<ServoId> {
