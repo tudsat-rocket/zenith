@@ -209,9 +209,11 @@ impl Bus for BusHandler {
 
             let frame = servo_sdo_frame(i, outputs.servo[i]);
 
-            if self.can.0.try_publish(frame).is_err() {
-                // Can't log here, too noisy.
-                self.can.0.publish_immediate(frame);
+            if let Some(frame) = frame {
+                if self.can.0.try_publish(frame).is_err() {
+                    // Can't log here, too noisy.
+                    self.can.0.publish_immediate(frame);
+                }
             }
 
             self.last_servo_messages[i] = Some(now);
@@ -320,7 +322,9 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
         | TpdoFrame::RawBus1B(_)
         | TpdoFrame::SensorUnits(_)
         | TpdoFrame::I2cScan { .. }
-        | TpdoFrame::Status { .. } => (),
+        | TpdoFrame::Status { .. }
+        | TpdoFrame::Temperature { .. }
+        | TpdoFrame::ErrorSummary(_) => (),
     }
 
     Some(node_id)
@@ -421,10 +425,12 @@ pub fn valve_sdo_frame(valve: ValveId, state: ValveState) -> Frame {
     position_sdo_frame(VALVE_ID_MAP[valve], state)
 }
 
-pub fn servo_sdo_frame(servo: ServoId, state: Option<ValveState>) -> Frame {
-    // Bit 15 of the position word releases the drive, whatever the promille field says.
-    let word = state.map_or(0x8000, |s| s.promille());
-    position_word_sdo_frame(SERVO_ID_MAP[servo], word)
+pub fn servo_sdo_frame(servo: ServoId, state: Option<ValveState>) -> Option<Frame> {
+    if let Some(state) = state {
+        let word = state.promille();
+        return Some(position_word_sdo_frame(SERVO_ID_MAP[servo], word));
+    }
+    return None;
 }
 
 fn position_sdo_frame(addr: IoAddr, state: ValveState) -> Frame {
