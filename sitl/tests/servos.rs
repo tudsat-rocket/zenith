@@ -85,7 +85,8 @@ fn a_gripper_release_runs_the_sequence_with_default_params() {
         h.run_ticks(1000).await;
         assert_eq!(promille(&h), [Some(1000), None, Some(100), None]);
 
-        h.run_ticks(1000).await;
+        // QD_HOLD_T_PR (1000 ms) + QD_RETR_T_PR (4000 ms) elapses here.
+        h.run_ticks(3501).await;
         assert_eq!(promille(&h), [Some(0), None, Some(100), None]);
 
         assert!(h.vehicle.try_command_gripper(0, false).is_err());
