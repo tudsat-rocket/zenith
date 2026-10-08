@@ -87,21 +87,31 @@ pub struct PropulsionParams {
 #[derive(Debug, Clone, macros::ParameterGroup)]
 #[param_group(prefix = "QD")]
 pub struct QdParams {
+    // oxidizer quick disconnect
     /// Time (ms) the disconnect servo is actuated after a gripper release before the retract servo
-    /// moves to DISC_RETR_PR / DISC_RETR_OX
-    #[param(id = 0x0600, name = "DISC_HOLD_T", default = 1000)]
-    pub disconnect_hold_time: u32,
-    /// Position (percent, 0-100) the pressurant retract servo moves to after a gripper release.
-    /// Values above 100 are clamped.
-    #[param(id = 0x0601, name = "DISC_RETR_PR", default = 10)]
-    pub disconnect_retract_pressurant: u32,
+    /// moves to RETR_OX_PERC
+    #[param(id = 0x0600, name = "HOLD_T_OX", default = 1000)]
+    pub disconnect_hold_time_oxidizer: u32,
+    /// Time (ms) after the retract servo moved after which the disconnect servo is closed again
+    #[param(id = 0x0603, name = "RETR_T_OX", default = 1000)]
+    pub disconnect_retract_time_oxidizer: u32,
     /// Position (percent, 0-100) the oxidizer retract servo moves to after a gripper release.
     /// Values above 100 are clamped.
-    #[param(id = 0x0602, name = "DISC_RETR_OX", default = 10)]
-    pub disconnect_retract_oxidizer: u32,
+    #[param(id = 0x0602, name = "RETR_OX_PERC", default = 10)]
+    pub disconnect_retract_percent_oxidizer: u32,
+
+    // pressurant (n2) quick disconnect
+    /// Time (ms) the disconnect servo is actuated after a gripper release before the retract servo
+    /// moves to RETR_PR_PERC
+    #[param(id = 0x0604, name = "HOLD_T_PR", default = 1000)]
+    pub disconnect_hold_time_pressurant: u32,
     /// Time (ms) after the retract servo moved after which the disconnect servo is closed again
-    #[param(id = 0x0603, name = "DISC_RETR_T", default = 1000)]
-    pub disconnect_retract_time: u32,
+    #[param(id = 0x0605, name = "RETR_T_PR", default = 4000)]
+    pub disconnect_retract_time_pressurant: u32,
+    /// Position (percent, 0-100) the pressurant retract servo moves to after a gripper release.
+    /// Values above 100 are clamped.
+    #[param(id = 0x0601, name = "RETR_PR_PERC", default = 10)]
+    pub disconnect_retract_percent_pressurant: u32,
 }
 
 /// Oxidizer tank level parameters, exposed over MAVLink as `OXL_*`.
@@ -362,7 +372,7 @@ mod tests {
         assert_eq!(s.misc.buzzer_volume, 50);
         assert_eq!(s.state_machine.main_on_time, 250);
         assert_eq!(s.state_machine.main_pulses, 1);
-        assert_eq!(s.qd.disconnect_retract_pressurant, 10);
+        assert_eq!(s.qd.disconnect_retract_percent_pressurant, 10);
     }
 
     #[test]

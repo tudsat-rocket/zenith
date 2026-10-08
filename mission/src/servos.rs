@@ -7,8 +7,8 @@
 //! Releasing a quick disconnect runs a sequence on both of its servos, timed from the command:
 //!
 //! 1. disconnect servo open, retract servo closed
-//! 2. after `QD_DISC_HOLD_T`: retract servo to `QD_DISC_RETR_PR` / `QD_DISC_RETR_OX`
-//! 3. after a further `QD_DISC_RETR_T`: disconnect servo closed
+//! 2. after `QD_HOLD_T_PR` / `QD_HOLD_T_OX`: retract servo to `QD_RETR_PR_PERC` / `QD_RETR_OX_PERC`
+//! 3. after a further `QD_RETR_T_PR` / `QD_RETR_T_OX`: disconnect servo closed
 //!
 //! A command for either servo of a quick disconnect aborts its running sequence, leaving the other
 //! servo where the sequence had put it.
@@ -82,18 +82,29 @@ impl ServoController {
         let open = ValveState::fully_open();
         let closed = ValveState::fully_closed();
         let percent = |p: u32| ValveState::from_percent_open(u16::try_from(p).unwrap_or(u16::MAX));
-        let retract_at = params.disconnect_hold_time;
-        let release_at = retract_at.saturating_add(params.disconnect_retract_time);
-        let retracted = [
-            percent(params.disconnect_retract_pressurant),
-            percent(params.disconnect_retract_oxidizer),
+        // (retract_at, release_at, retracted position), by quick disconnect instance.
+        let per_qd = [
+            (
+                params.disconnect_hold_time_pressurant,
+                params
+                    .disconnect_hold_time_pressurant
+                    .saturating_add(params.disconnect_retract_time_pressurant),
+                percent(params.disconnect_retract_pressurant),
+            ),
+            (
+                params.disconnect_hold_time_oxidizer,
+                params
+                    .disconnect_hold_time_oxidizer
+                    .saturating_add(params.disconnect_retract_time_oxidizer),
+                percent(params.disconnect_retract_oxidizer),
+            ),
         ];
 
-        for ((release, (disconnect, retract)), retracted) in self
+        for ((release, (disconnect, retract)), (retract_at, release_at, retracted)) in self
             .releases
             .iter_mut()
             .zip(QUICK_DISCONNECTS)
-            .zip(retracted)
+            .zip(per_qd)
         {
             let Some(started) = *release else { continue };
             let elapsed = (now - started).0;
@@ -129,10 +140,12 @@ mod tests {
 
     fn params() -> QdParams {
         QdParams {
-            disconnect_hold_time: 1000,
-            disconnect_retract_pressurant: 10,
+            disconnect_hold_time_oxidizer: 1000,
+            disconnect_retract_time_oxidizer: 500,
             disconnect_retract_oxidizer: 20,
-            disconnect_retract_time: 500,
+            disconnect_hold_time_pressurant: 1000,
+            disconnect_retract_time_pressurant: 500,
+            disconnect_retract_pressurant: 10,
         }
     }
 
