@@ -89,22 +89,19 @@ impl ServoController {
                 params
                     .disconnect_hold_time_pressurant
                     .saturating_add(params.disconnect_retract_time_pressurant),
-                percent(params.disconnect_retract_pressurant),
+                percent(params.disconnect_retract_percent_pressurant),
             ),
             (
                 params.disconnect_hold_time_oxidizer,
                 params
                     .disconnect_hold_time_oxidizer
                     .saturating_add(params.disconnect_retract_time_oxidizer),
-                percent(params.disconnect_retract_oxidizer),
+                percent(params.disconnect_retract_percent_oxidizer),
             ),
         ];
 
-        for ((release, (disconnect, retract)), (retract_at, release_at, retracted)) in self
-            .releases
-            .iter_mut()
-            .zip(QUICK_DISCONNECTS)
-            .zip(per_qd)
+        for ((release, (disconnect, retract)), (retract_at, release_at, retracted)) in
+            self.releases.iter_mut().zip(QUICK_DISCONNECTS).zip(per_qd)
         {
             let Some(started) = *release else { continue };
             let elapsed = (now - started).0;
@@ -142,10 +139,10 @@ mod tests {
         QdParams {
             disconnect_hold_time_oxidizer: 1000,
             disconnect_retract_time_oxidizer: 500,
-            disconnect_retract_oxidizer: 20,
+            disconnect_retract_percent_oxidizer: 20,
             disconnect_hold_time_pressurant: 1000,
             disconnect_retract_time_pressurant: 500,
-            disconnect_retract_pressurant: 10,
+            disconnect_retract_percent_pressurant: 10,
         }
     }
 
