@@ -104,6 +104,15 @@ async fn main_loop(mut vehicle: Vehicle, mut links: Links, sim: SharedSimulation
                         e
                     }
                 },
+                UplinkCommand::Gripper { instance, grab } => {
+                    match vehicle.try_command_gripper(instance, grab) {
+                        Ok(()) => MavResult::Accepted,
+                        Err(e) => {
+                            log::warn!("Gripper {instance} {grab} rejected: {e:?}");
+                            e
+                        }
+                    }
+                }
                 #[cfg(feature = "hybrid")]
                 UplinkCommand::CommandValve(valve, valve_cmd) => {
                     match vehicle.try_command_valve(valve, valve_cmd) {

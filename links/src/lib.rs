@@ -87,6 +87,11 @@ pub enum UplinkCommand {
         servo: u8,
         promille: u16,
     },
+    /// Releases (`grab == false`) or grabs the quick disconnect `instance` (1-based, as in MAVLink).
+    Gripper {
+        instance: u8,
+        grab: bool,
+    },
     SetParam {
         id: u16,
         raw: u32,
@@ -108,6 +113,7 @@ impl UplinkCommand {
             Self::SetFlightMode(_) => Some(MavCmd::DoSetMode),
             Self::CommandValve(..) => Some(MavCmd::CommandValve),
             Self::SetServo { command, .. } => Some(*command),
+            Self::Gripper { .. } => Some(MavCmd::DoGripper),
             Self::RequestAvailableModes(_)
             | Self::RequestCanForwarding
             | Self::SetParam { .. }

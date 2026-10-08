@@ -1,4 +1,4 @@
-//! Servo commanding and the servo modes, through the real `Vehicle` and out on the downlink.
+//! Servo and quick disconnect commanding, through the real `Vehicle` and out on the downlink.
 
 mod common;
 
@@ -74,41 +74,59 @@ fn a_command_naming_a_missing_servo_changes_nothing() {
 }
 
 #[test]
-fn disconnect_then_retract_with_default_params() {
+fn a_gripper_release_runs_the_sequence_with_default_params() {
     block_on(async {
         let mut h = Harness::new(None).await;
 
-        h.vehicle.set_mode(FlightMode::Disconnect);
+        h.vehicle.try_command_gripper(1, false).unwrap();
         h.run_ticks(500).await;
-        assert_eq!(promille(&h), [Some(1000), Some(1000), Some(0), Some(0)]);
+        assert_eq!(promille(&h), [Some(1000), None, Some(0), None]);
 
         h.run_ticks(1000).await;
-        assert_eq!(promille(&h), [Some(1000), Some(1000), Some(100), Some(100)]);
+        assert_eq!(promille(&h), [Some(1000), None, Some(100), None]);
 
-        h.run_ticks(1000).await;
-        assert_eq!(promille(&h), [Some(0), Some(0), Some(100), Some(100)]);
+        // QD_HOLD_T_PR (1000 ms) + QD_RETR_T_PR (4000 ms) elapses here.
+        h.run_ticks(3501).await;
+        assert_eq!(promille(&h), [Some(0), None, Some(100), None]);
 
-        h.vehicle.set_mode(FlightMode::Retract);
-        h.run_ticks(1).await;
-        assert_eq!(promille(&h), [Some(0), Some(0), Some(1000), Some(1000)]);
-
-        h.vehicle.set_mode(FlightMode::Pressurize);
-        assert_eq!(raw(&last_servo_output(&mut h).await), [0; 4]);
+        assert!(h.vehicle.try_command_gripper(0, false).is_err());
+        assert!(h.vehicle.try_command_gripper(3, false).is_err());
     });
 }
 
 #[test]
-fn a_manual_command_overrides_disconnect_until_the_mode_changes() {
+fn positions_survive_mode_changes() {
     block_on(async {
         let mut h = Harness::new(None).await;
 
-        h.vehicle.set_mode(FlightMode::Disconnect);
-        h.vehicle.try_command_servo(2, 300).unwrap();
-        h.run_ticks(1500).await;
-        assert_eq!(promille(&h), [Some(1000), Some(1000), Some(300), Some(100)]);
+        h.vehicle.try_command_servo(0, 1000).unwrap();
+        h.vehicle.try_command_servo(3, 400).unwrap();
+        for mode in [
+            FlightMode::Hold,
+            FlightMode::Disconnect,
+            FlightMode::Retract,
+            FlightMode::Idle,
+        ] {
+            h.vehicle.set_mode(mode);
+            h.run_ticks(10).await;
+            assert_eq!(
+                promille(&h),
+                [Some(1000), None, None, Some(400)],
+                "{mode:?}"
+            );
+        }
+    });
+}
 
-        h.vehicle.set_mode(FlightMode::Retract);
-        h.run_ticks(1).await;
-        assert_eq!(promille(&h), [Some(0), Some(0), Some(1000), Some(1000)]);
+#[test]
+fn a_winch_command_aborts_a_running_release() {
+    block_on(async {
+        let mut h = Harness::new(None).await;
+
+        h.vehicle.try_command_gripper(2, false).unwrap();
+        h.run_ticks(1500).await;
+        h.vehicle.try_command_servo(3, 300).unwrap();
+        h.run_ticks(2000).await;
+        assert_eq!(promille(&h), [None, Some(1000), None, Some(300)]);
     });
 }

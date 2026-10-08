@@ -209,11 +209,11 @@ impl Bus for BusHandler {
 
             let frame = servo_sdo_frame(i, outputs.servo[i]);
 
-            if let Some(frame) = frame {
-                if self.can.0.try_publish(frame).is_err() {
-                    // Can't log here, too noisy.
-                    self.can.0.publish_immediate(frame);
-                }
+            if let Some(frame) = frame
+                && self.can.0.try_publish(frame).is_err()
+            {
+                // Can't log here, too noisy.
+                self.can.0.publish_immediate(frame);
             }
 
             self.last_servo_messages[i] = Some(now);
@@ -430,7 +430,7 @@ pub fn servo_sdo_frame(servo: ServoId, state: Option<ValveState>) -> Option<Fram
         let word = state.promille();
         return Some(position_word_sdo_frame(SERVO_ID_MAP[servo], word));
     }
-    return None;
+    None
 }
 
 fn position_sdo_frame(addr: IoAddr, state: ValveState) -> Frame {
