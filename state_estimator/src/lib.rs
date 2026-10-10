@@ -47,10 +47,10 @@ pub struct StateEstimatorParams {
     #[param(id = 0x0104, name = "STDDEV_ACC", default = 0.5)]
     pub std_dev_accelerometer: f32,
     /// barometer standard deviation for kalman filter
-    #[param(id = 0x0105, name = "STDDEV_BARO", default = 10.0)]
+    #[param(id = 0x0105, name = "STDDEV_BARO", default = 3.0)]
     pub std_dev_barometer: f32,
     /// barometer standard deviation for kalman filter when in the transsonic region
-    #[param(id = 0x0106, name = "STDDEV_BARO_T", default = 5000.0)]
+    #[param(id = 0x0106, name = "STDDEV_BARO_T", default = 70.0)]
     pub std_dev_barometer_transsonic: f32,
     /// process standard deviation for kalman filter
     #[param(id = 0x0107, name = "STDDEV_PROC", default = 0.5)]
