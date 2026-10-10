@@ -152,14 +152,23 @@ pub async fn run(
                             _ => MavResult::Denied,
                         }
                     }
-                    MavCmd::PreflightRebootShutdown => match cmd.param1 as u32 {
-                        0 => MavResult::Accepted,
-                        1 => {
-                            reboot_requested = true;
-                            MavResult::Accepted
+                    // param1 (autopilot) reboots the vehicle, which on the GCS means
+                    // forwarding it over LoRa. param2 (onboard computer) resets whichever board
+                    // received the command, so the GCS can still be rebooted itself.
+                    MavCmd::PreflightRebootShutdown => {
+                        match (cmd.param1 as u32, cmd.param2 as u32) {
+                            (vehicle @ (0 | 1), local @ (0 | 1)) => {
+                                reboot_requested = local == 1;
+                                if vehicle == 1 {
+                                    cmd_tx.publish(UplinkCommand::Reboot).await;
+                                    MavResult::InProgress
+                                } else {
+                                    MavResult::Accepted
+                                }
+                            }
+                            _ => MavResult::Unsupported,
                         }
-                        _ => MavResult::Unsupported,
-                    },
+                    }
                     MavCmd::CanForward => {
                         cmd_tx.publish(UplinkCommand::RequestCanForwarding).await;
                         MavResult::Accepted

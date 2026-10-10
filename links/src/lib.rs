@@ -109,6 +109,8 @@ pub enum UplinkCommand {
     EraseLog,
     /// STORAGE_INFORMATION for this storage id, or all of them for 0.
     RequestStorageInformation(u8),
+    /// Reset the vehicle's flight computer.
+    Reboot,
 }
 
 impl UplinkCommand {
@@ -119,6 +121,7 @@ impl UplinkCommand {
             Self::CommandValve(..) => Some(MavCmd::CommandValve),
             Self::SetServo { command, .. } => Some(*command),
             Self::Gripper { .. } => Some(MavCmd::DoGripper),
+            Self::Reboot => Some(MavCmd::PreflightRebootShutdown),
             Self::RequestAvailableModes(_)
             | Self::RequestCanForwarding
             | Self::SetParam { .. }

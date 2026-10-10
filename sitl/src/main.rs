@@ -120,6 +120,10 @@ async fn main_loop(mut vehicle: Vehicle, mut links: Links, sim: SharedSimulation
                         MavResult::Denied
                     }
                 }
+                UplinkCommand::Reboot => {
+                    log::warn!("no MCU to reset in SITL, ignoring reboot");
+                    MavResult::Accepted
+                }
                 #[cfg(feature = "hybrid")]
                 UplinkCommand::CommandValve(valve, valve_cmd) => {
                     match vehicle.try_command_valve(valve, valve_cmd) {

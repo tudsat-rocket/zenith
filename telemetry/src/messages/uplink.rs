@@ -14,6 +14,11 @@ use crate::{TelemetryError, UplinkCommand};
 pub const UPLINK_PACKET_SIZE: usize = 16;
 const UPLINK_PAYLOAD_SIZE: usize = UPLINK_PACKET_SIZE - 10;
 
+/// 0x08: Reboot
+///
+/// Resets the vehicle, the RF counterpart of MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN. Has no payload.
+const REBOOT_ID: u8 = 0x08;
+
 /// Sequence numbers occupy just 11 bits of the packet header.
 pub const UPLINK_SEQ_MODULO: u16 = 1 << 11;
 
@@ -26,6 +31,7 @@ pub enum UplinkMessage {
     ParamRequest(ParamRequestMessage),
     SetServo(SetServoMessage),
     Gripper(GripperMessage),
+    Reboot(()),
 }
 
 impl TelemetryMessage for UplinkMessage {
@@ -47,6 +53,7 @@ impl TelemetryMessage for UplinkMessage {
             Self::ParamRequest(inner) => (ParamRequestMessage::ID, inner.serialize()?),
             Self::SetServo(inner) => (SetServoMessage::ID, inner.serialize()?),
             Self::Gripper(inner) => (GripperMessage::ID, inner.serialize()?),
+            Self::Reboot(()) => (REBOOT_ID, [0x00; UPLINK_PAYLOAD_SIZE]),
         };
 
         let mut buffer = [0x00; UPLINK_PACKET_SIZE];
@@ -107,6 +114,7 @@ impl TelemetryMessage for UplinkMessage {
             ParamRequestMessage::ID => UplinkMessage::ParamRequest(postcard::from_bytes(payload)?),
             SetServoMessage::ID => UplinkMessage::SetServo(postcard::from_bytes(payload)?),
             GripperMessage::ID => UplinkMessage::Gripper(postcard::from_bytes(payload)?),
+            REBOOT_ID => UplinkMessage::Reboot(()),
             id => {
                 return Err(TelemetryError::UnknownMessageId(id));
             }
@@ -157,6 +165,7 @@ impl UplinkMessage {
                 defmt::warn!("Rejecting malformed gripper uplink command.");
                 MavResult::Denied
             }),
+            Self::Reboot(()) => Ok(UplinkCommand::Reboot),
         })
     }
 }
@@ -549,6 +558,14 @@ mod tests {
             .command(),
             None
         );
+    }
+
+    #[test]
+    fn reboot_survives_the_packet() {
+        assert!(matches!(
+            through_packet(UplinkMessage::Reboot(())),
+            UplinkMessage::Reboot(())
+        ));
     }
 
     /// A valve id or command kind we do not recognise must not reach the vehicle.

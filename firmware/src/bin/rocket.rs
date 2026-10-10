@@ -25,6 +25,11 @@ use {defmt_rtt as _, panic_probe as _};
 
 use firmware as fw;
 
+/// Long enough for the ack to reach the ground, which over LoRa only rides along in heartbeats,
+/// and for the ground station to finish retransmitting the request, which would otherwise reboot
+/// the vehicle a second time.
+const REBOOT_DELAY: Duration = Duration::from_secs(1);
+
 static EXECUTOR_HIGH: InterruptExecutor = InterruptExecutor::new();
 static EXECUTOR_MEDIUM: InterruptExecutor = InterruptExecutor::new();
 static EXECUTOR_LOW: StaticCell<raw::Executor> = StaticCell::new();
@@ -115,6 +120,10 @@ async fn init(low_priority_spawner: Spawner) {
 }
 
 #[embassy_executor::task]
+#[allow(
+    clippy::too_many_lines,
+    reason = "command dispatch is inline until it moves out, see the TODO below"
+)]
 pub async fn main_loop(
     mut vehicle: Vehicle,
     mut links: Links,
@@ -124,8 +133,13 @@ pub async fn main_loop(
     let mut alerts = Alerts::default();
     let mut flash_log = fw::storage::FlashLog::default();
     let mut ticker = Ticker::every(Duration::from_micros(1000));
+    let mut reboot_at: Option<Instant> = None;
     loop {
         let tick_started = Instant::now();
+
+        if reboot_at.is_some_and(|at| tick_started >= at) {
+            cortex_m::peripheral::SCB::sys_reset();
+        }
 
         if links::take_uplink_activity() {
             vehicle.note_uplink();
@@ -207,6 +221,12 @@ pub async fn main_loop(
                     } else {
                         MavResult::Denied
                     }
+                }
+                UplinkCommand::Reboot => {
+                    defmt::warn!("Rebooting");
+                    flash_log.flush();
+                    reboot_at = Instant::now().checked_add(REBOOT_DELAY);
+                    MavResult::Accepted
                 }
                 _ => MavResult::Unsupported,
             };

@@ -381,6 +381,7 @@ async fn join_uplink(
                     UplinkCommand::RequestParams { first, mask } => {
                         UplinkMessage::ParamRequest(ParamRequestMessage { first, mask })
                     }
+                    UplinkCommand::Reboot => UplinkMessage::Reboot(()),
                     // Every status packet already turns into a STORAGE_INFORMATION here.
                     UplinkCommand::RequestStorageInformation(_) => continue,
                     // None of these carry a command id today, so there is nothing to ack; the
