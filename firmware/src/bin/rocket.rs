@@ -67,6 +67,7 @@ async fn init(low_priority_spawner: Spawner) {
     interrupt::I2C3_ER.set_priority(Priority::P7);
     let medium_priority_spawner = EXECUTOR_MEDIUM.start(interrupt::I2C3_ER);
 
+    let lora_params = board.params.lora.clone();
     let storage = fw::storage::spawn(
         board.flash,
         board.params,
@@ -105,6 +106,7 @@ async fn init(low_priority_spawner: Spawner) {
         board.usb,
         board.lora1,
         board.lora2,
+        &lora_params,
         (can1_tx.publisher().unwrap(), can1_rx.subscriber().unwrap()),
         medium_priority_spawner,
         low_priority_spawner,

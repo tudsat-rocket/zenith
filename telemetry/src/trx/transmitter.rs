@@ -15,13 +15,13 @@ use crate::trx::MAX_CONSECUTIVE_ERRORS;
 
 pub struct HoppingTransmitter<RK: RadioKind, M: TelemetryMessage, R: AnyReceiver<(u16, M)>> {
     radio: LoRa<RK, Delay>,
-    config: LinkConfig<'static>,
+    config: LinkConfig,
     receiver: R,
     _msg: PhantomData<M>,
 }
 
 impl<RK: RadioKind, M: TelemetryMessage, R: AnyReceiver<(u16, M)>> HoppingTransmitter<RK, M, R> {
-    pub fn new(radio: LoRa<RK, Delay>, config: LinkConfig<'static>, receiver: R) -> Self {
+    pub fn new(radio: LoRa<RK, Delay>, config: LinkConfig, receiver: R) -> Self {
         Self {
             radio,
             config,

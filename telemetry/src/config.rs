@@ -65,9 +65,9 @@ pub const DEFAULT_DOWNLINK_CONFIG: LinkConfig = LinkConfig {
     coding_rate: CodingRate::_4_5,
     preamble_length: 8,
     frequency_mask: DOWNLINK_FREQUENCY_MASK,
-    binding_phrase: "schinken",
+    hop_seed: 0,
     hopping_interval: DOWNLINK_MESSAGE_INTERVAL_MS,
-    hmac_key: [0x42; 16],
+    hmac_key: [0; 16],
 };
 
 pub const DEFAULT_UPLINK_CONFIG: LinkConfig = LinkConfig {
@@ -76,23 +76,32 @@ pub const DEFAULT_UPLINK_CONFIG: LinkConfig = LinkConfig {
     coding_rate: CodingRate::_4_5,
     preamble_length: 8,
     frequency_mask: UPLINK_FREQUENCY_MASK,
-    binding_phrase: "schinken",
+    hop_seed: 0,
     hopping_interval: UPLINK_HOP_INTERVAL_MS,
-    hmac_key: [0x42; 16],
+    hmac_key: [0; 16],
 };
 
-pub struct LinkConfig<'a> {
+pub struct LinkConfig {
     pub spreading_factor: SpreadingFactor,
     pub bandwidth: Bandwidth,
     pub coding_rate: CodingRate,
     pub preamble_length: u16,
     pub frequency_mask: [bool; NUM_FREQUENCIES],
-    pub binding_phrase: &'a str,
+    /// See [`hop_seed`].
+    pub hop_seed: u64,
     pub hopping_interval: u32,
     pub hmac_key: [u8; 16],
 }
 
-impl LinkConfig<'_> {
+/// The seed of the hopping sequence for a binding phrase. Ground software derives it the same way,
+/// so the phrase itself never has to be stored.
+pub fn hop_seed(binding_phrase: &str) -> u64 {
+    let mut siphasher = SipHasher::new_with_key(&[0x00; 16]);
+    siphasher.write(binding_phrase.as_bytes());
+    siphasher.finish()
+}
+
+impl LinkConfig {
     /// The hopping sequence, as channel indices into [`FREQUENCIES`].
     ///
     /// Built as back-to-back shuffles of the link's channels so channels don't repeat and are
@@ -106,9 +115,7 @@ impl LinkConfig<'_> {
         reason = "the write cursor is bounded by SEQUENCE_LENGTH"
     )]
     pub fn sequence(&self) -> [usize; SEQUENCE_LENGTH] {
-        let mut siphasher = SipHasher::new_with_key(&[0x00; 16]);
-        siphasher.write(self.binding_phrase.as_bytes());
-        let mut rng = ChaCha20Rng::seed_from_u64(siphasher.finish());
+        let mut rng = ChaCha20Rng::seed_from_u64(self.hop_seed);
 
         // One block, one of each channel.
         let mut block: heapless::Vec<usize, NUM_FREQUENCIES> = (0..NUM_FREQUENCIES)
@@ -228,7 +235,7 @@ mod tests {
             for i in 0..200 {
                 let binding_phrase = format!("phrase-{i}");
                 let sequence = LinkConfig {
-                    binding_phrase: &binding_phrase,
+                    hop_seed: hop_seed(&binding_phrase),
                     frequency_mask: mask,
                     ..DEFAULT_DOWNLINK_CONFIG
                 }
@@ -290,7 +297,7 @@ mod tests {
     fn the_gap_between_a_channels_slots_is_bounded() {
         for (phrase, mask, _) in sequences() {
             let config = LinkConfig {
-                binding_phrase: &phrase,
+                hop_seed: hop_seed(&phrase),
                 frequency_mask: mask,
                 ..DEFAULT_DOWNLINK_CONFIG
             };
@@ -311,21 +318,27 @@ mod tests {
     fn the_shipped_sequence_does_not_change_by_accident() {
         #[rustfmt::skip]
         const DOWNLINK: [usize; SEQUENCE_LENGTH] = [
-            8, 2, 6, 5, 3, 9, 10, 11, 2, 9, 11, 10, 6, 8, 3, 5,
-            10, 8, 6, 9, 2, 3, 5, 11, 2, 10, 9, 6, 3, 8, 11, 5,
-            11, 10, 3, 5, 9, 6, 8, 2, 9, 10, 3, 5, 2, 11, 8, 6,
-            5, 9, 6, 11, 10, 8, 2, 3, 9, 3, 10, 8, 5, 2, 11, 6,
+            2, 3, 6, 9, 8, 5, 10, 11, 6, 3, 5, 11, 9, 10, 8, 2,
+            9, 10, 6, 3, 2, 5, 11, 8, 9, 2, 8, 6, 5, 3, 11, 10,
+            5, 8, 10, 2, 9, 11, 6, 3, 10, 8, 5, 6, 9, 11, 2, 3,
+            9, 10, 11, 8, 3, 6, 5, 2, 10, 3, 8, 9, 2, 5, 6, 11,
         ];
         #[rustfmt::skip]
         const UPLINK: [usize; SEQUENCE_LENGTH] = [
-            1, 4, 12, 7, 1, 4, 7, 12, 7, 12, 1, 4, 12, 7, 4, 1,
-            7, 1, 4, 12, 7, 1, 4, 12, 7, 12, 4, 1, 12, 4, 7, 1,
-            12, 1, 7, 4, 7, 1, 12, 4, 7, 4, 1, 12, 1, 7, 4, 12,
-            7, 12, 4, 1, 4, 7, 1, 12, 1, 7, 4, 12, 7, 12, 1, 4,
+            1, 4, 12, 7, 12, 4, 7, 1, 7, 1, 12, 4, 7, 4, 1, 12,
+            7, 1, 12, 4, 12, 1, 7, 4, 7, 12, 4, 1, 12, 4, 1, 7,
+            4, 1, 12, 7, 12, 7, 4, 1, 7, 1, 4, 12, 1, 12, 4, 7,
+            4, 12, 7, 1, 4, 12, 1, 7, 12, 1, 4, 7, 12, 1, 7, 4,
         ];
 
         assert_eq!(DEFAULT_DOWNLINK_CONFIG.sequence(), DOWNLINK);
         assert_eq!(DEFAULT_UPLINK_CONFIG.sequence(), UPLINK);
+    }
+
+    /// Ground software derives the seed from a phrase on its own, with a copy of this vector.
+    #[test]
+    fn the_phrase_hash_does_not_change_by_accident() {
+        assert_eq!(hop_seed("schinken"), 0x53bd_d841_8658_7bcb);
     }
 
     /// The two directions divide the band up between them. An overlap would put uplink

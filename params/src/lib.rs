@@ -197,6 +197,29 @@ impl ParameterField for u32 {
     }
 }
 
+impl<const N: usize> ParameterField for [u32; N] {
+    const WIDTH: usize = N;
+    const SLOT_TYPE: ParamType = ParamType::U32;
+    type Scalar = u32;
+
+    fn get_slot(&self, index: usize) -> ParamValue {
+        ParamValue::U32(self[index])
+    }
+
+    fn set_slot(&mut self, index: usize, value: ParamValue) -> bool {
+        if let ParamValue::U32(v) = value {
+            self[index] = v;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn from_slots(slots: &[u32]) -> Self {
+        core::array::from_fn(|i| slots[i])
+    }
+}
+
 impl ParameterField for Vector3<f32> {
     const WIDTH: usize = 3;
     const SLOT_TYPE: ParamType = ParamType::F32;

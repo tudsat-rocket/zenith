@@ -7,6 +7,7 @@ use embassy_time::Delay;
 use links::Downlink;
 use lora_phy::LoRa;
 use mission::TelemetryLink;
+use mission::params::LoraParams;
 use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::{MavCmd, MavResult};
 
@@ -46,11 +47,12 @@ impl Links {
         usb: Driver<'static, USB_OTG_FS>,
         lora1: LoRa<LoraTransceiver, Delay>,
         lora2: LoRa<LoraTransceiver, Delay>,
+        lora_params: &LoraParams,
         can: (CanTxPublisher, CanRxSubscriber),
         medium_priority_spawner: SendSpawner,
         low_priority_spawner: Spawner,
     ) -> Self {
-        let lora = LoraHandle::init(lora1, lora2, medium_priority_spawner);
+        let lora = LoraHandle::init(lora1, lora2, lora_params, medium_priority_spawner);
         let ethernet = EthernetHandle::init(
             ethernet,
             seed,

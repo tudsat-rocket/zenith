@@ -53,6 +53,12 @@ const LORA_IRQ_TIMEOUT: embassy_time::Duration = embassy_time::Duration::from_mi
 pub const CAN1_REGS: embassy_stm32::pac::can::Fdcan = embassy_stm32::pac::FDCAN2;
 pub const CAN2_REGS: embassy_stm32::pac::can::Fdcan = embassy_stm32::pac::FDCAN1;
 
+/// The params a board keeps in its flash: the vehicle's, or a ground station's own.
+#[cfg(not(feature = "gcs"))]
+pub type BoardParams = mission::Params;
+#[cfg(feature = "gcs")]
+pub type BoardParams = telemetry::params::GcsParams;
+
 pub struct Board {
     pub sensors: BoardSensors,
     pub outputs: BoardOutputs,
@@ -60,7 +66,7 @@ pub struct Board {
     #[cfg(not(feature = "gcs"))]
     pub gps: GPS,
     pub flash: crate::storage::Flash,
-    pub params: mission::Params,
+    pub params: BoardParams,
     pub can1: embassy_stm32::can::Can<'static>,
     pub can2: embassy_stm32::can::Can<'static>,
     pub lora1: LoRa<LoraTransceiver, embassy_time::Delay>,

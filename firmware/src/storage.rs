@@ -2,8 +2,9 @@
 //!
 //! The flash is split into two regions: the first 16 sectors hold the parameter store (a
 //! sequential-storage map of raw u32 values keyed by the stable param ids from
-//! [`mission::params`]), everything after that the flight log: a [`PageLog`] of [`links::log`]
-//! chunks, filled until full and kept until erased.
+//! [`mission::params`], or [`telemetry::params::GcsParams`] on a ground station), everything after
+//! that the flight log: a [`PageLog`] of [`links::log`] chunks, filled until full and kept until
+//! erased.
 //!
 //! A dedicated task owns the flash chip; parameters are read once at boot, and param writes and log
 //! records are queued through statics so callers (ultimately the 1 kHz main loop) never wait on
@@ -60,6 +61,11 @@ static LOG_BUFFERS: ConstStaticCell<LogBuffers> = ConstStaticCell::new(LogBuffer
 
 /// Live parameter mirror served to ground stations by the per-interface param protocol tasks.
 pub static PARAM_STORE: params::SharedParams = params::SharedParams::new();
+
+/// A ground station's own params, served alongside the vehicle's it relays.
+#[cfg(feature = "gcs")]
+pub static GCS_PARAM_STORE: params::SharedParams<telemetry::params::GcsParams> =
+    params::SharedParams::new();
 
 #[derive(Debug, Clone, Copy, Format)]
 pub enum StorageRequest {
@@ -145,12 +151,15 @@ struct Storage {
 /// `system_id` goes into the frames of downloaded logs.
 pub fn spawn(flash: Flash, boot_params: Params, system_id: u8, spawner: &Spawner) -> FlashStorage {
     PARAM_STORE.init(boot_params.clone());
+    start(flash, system_id, spawner);
+    FlashStorage::new(boot_params, FlashHandle::new())
+}
 
+/// Starts the task that owns the flash chip, which [`FlashHandle`]s queue their requests for.
+pub fn start(flash: Flash, system_id: u8, spawner: &Spawner) {
     if spawner.spawn(run(flash, system_id)).is_err() {
         error!("storage: failed to spawn task");
     }
-
-    FlashStorage::new(boot_params, FlashHandle::new())
 }
 
 #[embassy_executor::task]
@@ -324,7 +333,7 @@ impl Flash {
     ///
     /// A chip that fails to probe is reported and the flash marked unhealthy: the vehicle boots on
     /// default params with no persistence and no log rather than not booting at all.
-    pub async fn init(spi: OurSpiDevice<'static>) -> (Flash, Params) {
+    pub async fn init<G: ParameterGroup + Default>(spi: OurSpiDevice<'static>) -> (Flash, G) {
         let mut driver = w25q::W25Q::new(spi);
 
         if let Err(e) = driver.probe().await {
@@ -337,7 +346,7 @@ impl Flash {
                 Flash {
                     chip: Chip::Unhealthy,
                 },
-                Params::default(),
+                G::default(),
             );
         }
 
@@ -393,13 +402,13 @@ fn param_map(
     )
 }
 
-async fn read_params(flash: &mut FlashDriver) -> Params {
+async fn read_params<G: ParameterGroup + Default>(flash: &mut FlashDriver) -> G {
     let mut map = param_map(flash);
     let mut buffer = [0u8; DATA_BUFFER_SIZE];
-    let mut params = Params::default();
+    let mut params = G::default();
 
-    for index in 0..Params::PARAM_COUNT {
-        let Some(descriptor) = Params::descriptor(index) else {
+    for index in 0..G::PARAM_COUNT {
+        let Some(descriptor) = G::descriptor(index) else {
             continue;
         };
 
@@ -422,7 +431,7 @@ async fn read_params(flash: &mut FlashDriver) -> Params {
                     error!("storage: erase failed: {:?}", Debug2Format(&e));
                 }
 
-                return Params::default();
+                return G::default();
             }
             Err(e) => {
                 STORAGE_ERRORS.record();

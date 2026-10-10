@@ -31,6 +31,7 @@ pub struct Params {
     pub tank_level: TankLevelParams,
     pub misc: MiscParams,
     pub calibration: CalibrationParams,
+    pub lora: LoraParams,
 }
 
 /// State machine parameters, exposed over MAVLink as `SM_*`.
@@ -165,6 +166,21 @@ pub struct MiscParams {
     pub buzzer_volume: u32,
 }
 
+/// LoRa settings, including secrets. Exposed over MAVLink as `LORA_*`. Read once at boot, so a
+/// change takes effect on the next one. Ground station modems carry the same values as `GCS_*`.
+#[derive(Debug, Clone, macros::ParameterGroup)]
+#[param_group(prefix = "LORA")]
+pub struct LoraParams {
+    /// Seed of the frequency hopping sequence, low word first. Ground software derives it from a
+    /// binding phrase.
+    #[param(id = 0x0800..=0x0801, name = "BIND", default = [0, 0])]
+    pub seed: [u32; 2],
+    /// Key authenticating every packet, as little-endian words. Never sent over LoRa, which reads
+    /// it back as zeros.
+    #[param(id = 0x0802..=0x0805, name = "KEY", default = [0, 0, 0, 0])]
+    pub key: [u32; 4],
+}
+
 /// Sensor offsets, exposed over MAVLink as `CAL_*`. Subtracted from the raw readings in the body
 /// frame (after each driver's axis remap) and in the reading's own unit, before anything else
 /// sees them.
@@ -201,6 +217,39 @@ pub struct CalibrationParams {
     /// Barometer 3 pressure offset [hPa]
     #[param(id = 0x0717, name = "BARO3", default = 0.0)]
     pub baro3: f32,
+}
+
+impl LoraParams {
+    pub fn hop_seed(&self) -> u64 {
+        hop_seed(self.seed)
+    }
+
+    pub fn hmac_key(&self) -> [u8; 16] {
+        hmac_key(self.key)
+    }
+
+    /// Whether a param must not leave the vehicle over the air.
+    pub fn is_secret(id: ParamId) -> bool {
+        (0x0802..=0x0805).contains(&id.get())
+    }
+}
+
+/// The hop seed from its two param words, low word first.
+pub fn hop_seed([low, high]: [u32; 2]) -> u64 {
+    u64::from(high) << 32 | u64::from(low)
+}
+
+/// The HMAC key from its four param words.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "four words of four bytes fill the sixteen exactly"
+)]
+pub fn hmac_key(words: [u32; 4]) -> [u8; 16] {
+    let mut key = [0; 16];
+    for (chunk, word) in key.chunks_exact_mut(4).zip(words) {
+        chunk.copy_from_slice(&word.to_le_bytes());
+    }
+    key
 }
 
 impl CalibrationParams {
@@ -244,37 +293,38 @@ impl CalibrationParams {
 /// accepted PARAM_SET. The vehicle applies the same value via
 /// [`UplinkCommand::SetParam`](links::UplinkCommand) one main-loop tick later; the param path is
 /// the only writer to both, so the two copies cannot diverge.
-pub struct SharedParams {
-    inner: Mutex<CriticalSectionRawMutex, RefCell<Option<Params>>>,
+pub struct SharedParams<G = Params> {
+    inner: Mutex<CriticalSectionRawMutex, RefCell<Option<G>>>,
 }
 
-impl Params {
+/// MAVLink lookups over the parameters of a group.
+pub trait ParamTable: ParameterGroup + Sized {
     /// Total number of parameters exposed over MAVLink.
-    pub fn count() -> u16 {
+    fn count() -> u16 {
         Self::PARAM_COUNT as u16
     }
 
     /// Descriptor at a MAVLink `param_index`.
-    pub fn descriptor_by_index(index: u16) -> Option<ParamDescriptor> {
+    fn descriptor_by_index(index: u16) -> Option<ParamDescriptor> {
         Self::descriptor(usize::from(index))
     }
 
     /// (`param_index`, descriptor) for a stable parameter id (linear scan; the set is small).
-    pub fn by_id(id: u16) -> Option<(u16, ParamDescriptor)> {
+    fn by_id(id: u16) -> Option<(u16, ParamDescriptor)> {
         (0..Self::count()).find_map(|i| {
             Self::descriptor_by_index(i).and_then(|d| (d.id.get() == id).then_some((i, d)))
         })
     }
 
     /// (`param_index`, descriptor) for a MAVLink `param_id` name.
-    pub fn by_name(name: &[u8; 16]) -> Option<(u16, ParamDescriptor)> {
+    fn by_name(name: &[u8; 16]) -> Option<(u16, ParamDescriptor)> {
         (0..Self::count()).find_map(|i| {
             Self::descriptor_by_index(i).and_then(|d| (d.mavlink_name() == *name).then_some((i, d)))
         })
     }
 
     /// The value a PARAM_SET of `value` as `ty` gives the param, if it is a valid one.
-    pub fn from_mavlink(
+    fn from_mavlink(
         descriptor: &ParamDescriptor,
         value: f32,
         ty: MavParamType,
@@ -285,7 +335,7 @@ impl Params {
     }
 
     /// The PARAM_VALUE for `value` of the param at `index`.
-    pub fn info(index: u16, descriptor: &ParamDescriptor, value: ParamValue) -> ParamInfo {
+    fn info(index: u16, descriptor: &ParamDescriptor, value: ParamValue) -> ParamInfo {
         ParamInfo {
             name: descriptor.mavlink_name(),
             value: value.to_mavlink(),
@@ -295,6 +345,17 @@ impl Params {
         }
     }
 
+    /// Apply a raw stored value (as read from flash). Unknown ids are ignored.
+    fn apply_raw(&mut self, id: u16, raw: u32) {
+        if let Some((_, descriptor)) = Self::by_id(id) {
+            self.set(descriptor.id, descriptor.ty.decode_raw(raw));
+        }
+    }
+}
+
+impl<G: ParameterGroup> ParamTable for G {}
+
+impl Params {
     /// The commands that have the vehicle carry out `request` and answer it with PARAM_VALUEs.
     /// Nothing for requests about unknown params, which get no answer.
     pub fn commands(
@@ -336,23 +397,16 @@ impl Params {
                 .collect(),
         }
     }
-
-    /// Apply a raw stored value (as read from flash) to this struct. Unknown ids are ignored.
-    pub fn apply_raw(&mut self, id: u16, raw: u32) {
-        if let Some((_, descriptor)) = Self::by_id(id) {
-            self.set(descriptor.id, descriptor.ty.decode_raw(raw));
-        }
-    }
 }
 
-impl SharedParams {
+impl<G: ParameterGroup> SharedParams<G> {
     pub const fn new() -> Self {
         Self {
             inner: Mutex::new(RefCell::new(None)),
         }
     }
 
-    pub fn init(&self, params: Params) {
+    pub fn init(&self, params: G) {
         self.inner.lock(|inner| {
             *inner.borrow_mut() = Some(params);
         });
@@ -363,29 +417,29 @@ impl SharedParams {
             inner.borrow().as_ref().and_then(|params| {
                 params
                     .get(descriptor.id)
-                    .map(|value| Params::info(index, descriptor, value))
+                    .map(|value| G::info(index, descriptor, value))
             })
         })
     }
 }
 
-impl Default for SharedParams {
+impl<G: ParameterGroup> Default for SharedParams<G> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ParamStore for SharedParams {
+impl<G: ParameterGroup + Send> ParamStore for SharedParams<G> {
     fn count(&self) -> u16 {
-        Params::count()
+        G::count()
     }
 
     fn by_index(&self, index: u16) -> Option<ParamInfo> {
-        Params::descriptor_by_index(index).and_then(|d| self.info(index, &d))
+        G::descriptor_by_index(index).and_then(|d| self.info(index, &d))
     }
 
     fn by_name(&self, name: &[u8; 16]) -> Option<ParamInfo> {
-        Params::by_name(name).and_then(|(index, d)| self.info(index, &d))
+        G::by_name(name).and_then(|(index, d)| self.info(index, &d))
     }
 
     fn set(
@@ -394,10 +448,9 @@ impl ParamStore for SharedParams {
         value: f32,
         ty: MavParamType,
     ) -> Result<(u16, u32, ParamInfo), ParamSetError> {
-        let (index, descriptor) = Params::by_name(name).ok_or(ParamSetError::UnknownParam)?;
+        let (index, descriptor) = G::by_name(name).ok_or(ParamSetError::UnknownParam)?;
 
-        let value =
-            Params::from_mavlink(&descriptor, value, ty).ok_or(ParamSetError::InvalidValue)?;
+        let value = G::from_mavlink(&descriptor, value, ty).ok_or(ParamSetError::InvalidValue)?;
 
         self.inner.lock(|inner| {
             let mut borrowed = inner.borrow_mut();
@@ -414,7 +467,7 @@ impl ParamStore for SharedParams {
             Ok((
                 descriptor.id.get(),
                 value.encode_raw(),
-                Params::info(index, &descriptor, stored),
+                G::info(index, &descriptor, stored),
             ))
         })
     }
@@ -445,7 +498,7 @@ mod tests {
         // The derive builds Default from the #[param(default = ..)] args.
         let s = Params::default();
         assert_eq!(s.state_estimator.mahony_kp, 0.1);
-        assert_eq!(s.state_estimator.std_dev_barometer_transsonic, 5000.0);
+        assert_eq!(s.state_estimator.std_dev_barometer_transsonic, 70.0);
         assert_eq!(s.state_machine.main_deploy_altitude, 400.0);
         assert_eq!(s.state_machine.min_time_to_drogue, 1000);
         assert_eq!(s.misc.buzzer_volume, 50);
@@ -484,7 +537,7 @@ mod tests {
 
     #[test]
     fn shared_params_set_applies_and_echoes() {
-        let store = SharedParams::new();
+        let store = SharedParams::<Params>::new();
         store.init(Params::default());
 
         let name = Params::by_id(0x0200).unwrap().1.mavlink_name(); // RC_MAIN_ALT
@@ -506,7 +559,7 @@ mod tests {
 
     #[test]
     fn shared_params_bytewise_survives_large_u32() {
-        let store = SharedParams::new();
+        let store = SharedParams::<Params>::new();
         store.init(Params::default());
 
         // The whole point of bytewise: a by-value cast through f32 would round this to the nearest
@@ -522,7 +575,7 @@ mod tests {
 
     #[test]
     fn shared_params_rejects_bad_input() {
-        let store = SharedParams::new();
+        let store = SharedParams::<Params>::new();
         store.init(Params::default());
 
         let f32_name = Params::by_id(0x0200).unwrap().1.mavlink_name();
@@ -546,7 +599,7 @@ mod tests {
 
     #[test]
     fn shared_params_uninitialized_answers_nothing() {
-        let store = SharedParams::new();
+        let store = SharedParams::<Params>::new();
         assert!(store.by_index(0).is_none());
         assert_eq!(
             store.set(

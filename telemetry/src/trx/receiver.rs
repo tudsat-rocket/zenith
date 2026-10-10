@@ -46,13 +46,13 @@ pub struct UplinkStats {
 
 pub struct HoppingReceiver<RK: RadioKind, M: TelemetryMessage, S: AnySender<M::Output>> {
     radio: LoRa<RK, Delay>,
-    config: LinkConfig<'static>,
+    config: LinkConfig,
     sender: S,
     _msg: PhantomData<M>,
 }
 
 impl<RK: RadioKind, M: TelemetryMessage, S: AnySender<M::Output>> HoppingReceiver<RK, M, S> {
-    pub fn new(radio: LoRa<RK, Delay>, config: LinkConfig<'static>, sender: S) -> Self {
+    pub fn new(radio: LoRa<RK, Delay>, config: LinkConfig, sender: S) -> Self {
         Self {
             radio,
             config,

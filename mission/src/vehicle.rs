@@ -11,7 +11,7 @@ use crate::inventory::{BinaryOutputId, InventoryId, ServoId};
 use crate::leds::LedState;
 use crate::mavlink::VehicleSnapshot;
 use crate::params::{
-    CalibrationParams, FailsafeParams, MiscParams, Params, PropulsionParams, QdParams,
+    CalibrationParams, FailsafeParams, LoraParams, MiscParams, Params, PropulsionParams, QdParams,
     StateMachineParams,
 };
 use crate::servos::ServoController;
@@ -229,7 +229,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
     }
 
     pub async fn set_param(&mut self, id: u16, raw: u32) {
-        use crate::params::ParameterGroup;
+        use crate::params::{ParamTable, ParameterGroup};
 
         let Some((_, descriptor)) = Params::by_id(id) else {
             log::warn!("Ignoring set_param for unknown param id {id:#x}");
@@ -247,6 +247,8 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             tank_level: self.tank_level.params().clone(),
             misc: self.misc_params.clone(),
             calibration: self.calibration_params.clone(),
+            // Only the LoRa link reads these, once at boot; the vehicle just persists them.
+            lora: LoraParams::default(),
         };
 
         params.set(descriptor.id, value);

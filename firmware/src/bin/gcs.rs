@@ -24,7 +24,7 @@ use embassy_sync::{
 };
 use embassy_time::{Duration, Instant, Ticker, Timer, with_deadline};
 
-use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG};
+use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG, LinkConfig};
 use telemetry::messages::{
     CommandAck, DownlinkMessage, GripperMessage, ParamEntry, ParamRequestMessage, ParamSetMessage,
     SetServoMessage, SetValveMessage, UplinkMessage,
@@ -77,6 +77,10 @@ enum UplinkEvent {
 #[embassy_executor::main]
 async fn main(low_priority_spawner: Spawner) {
     let board = fw::board::init().await;
+
+    let gcs_params = board.params;
+    fw::storage::GCS_PARAM_STORE.init(gcs_params.clone());
+    fw::storage::start(board.flash, GCS_SYSTEM_ID, &low_priority_spawner);
 
     // Start high priority executor
     interrupt::I2C3_EV.set_priority(Priority::P6);
@@ -132,7 +136,18 @@ async fn main(low_priority_spawner: Spawner) {
     // TODO
     //board.iwdg.unleash();
 
-    let downlink = HoppingReceiver::new(board.lora2, DEFAULT_DOWNLINK_CONFIG, tx.sender());
+    let downlink_config = LinkConfig {
+        hop_seed: gcs_params.hop_seed(),
+        hmac_key: gcs_params.hmac_key(),
+        ..DEFAULT_DOWNLINK_CONFIG
+    };
+    let uplink_config = LinkConfig {
+        hop_seed: gcs_params.hop_seed(),
+        hmac_key: gcs_params.hmac_key(),
+        ..DEFAULT_UPLINK_CONFIG
+    };
+
+    let downlink = HoppingReceiver::new(board.lora2, downlink_config, tx.sender());
     high_priority_spawner
         .spawn(run_downlink(
             downlink,
@@ -141,7 +156,7 @@ async fn main(low_priority_spawner: Spawner) {
         ))
         .unwrap();
 
-    let uplink = HoppingTransmitter::new(board.lora1, DEFAULT_UPLINK_CONFIG, rx.receiver());
+    let uplink = HoppingTransmitter::new(board.lora1, uplink_config, rx.receiver());
     high_priority_spawner
         .spawn(run_uplink(uplink, CONNECTION.receiver().unwrap()))
         .unwrap();

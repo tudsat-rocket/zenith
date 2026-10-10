@@ -138,7 +138,9 @@
 //!
 //! We derive our hopping sequence from a binding phrase, which is hashed and used to seed a PRNG.
 //! This is similar to other comparable protocols, including e.g. ExpressLRS. The binding phrase is
-//! not considered to be a secret.
+//! not considered to be a secret. Only its hash is configured, as the `LORA_BIND_*` params on the
+//! vehicle and `GCS_BIND_*` on the ground station, next to the HMAC key (`LORA_KEY_*`/`GCS_KEY_*`).
+//! Both take effect at boot.
 //!
 //! ## Downlink Packet Format
 //!

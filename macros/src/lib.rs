@@ -16,7 +16,7 @@ use syn::spanned::Spanned;
 use syn::token::Comma;
 use syn::{
     Attribute, Data, DataStruct, DeriveInput, Expr, ExprLit, Field, Fields, Lit, LitStr,
-    RangeLimits, parse_macro_input,
+    RangeLimits, Type, parse_macro_input,
 };
 
 #[proc_macro_derive(ParameterGroup, attributes(param_group, param))]
@@ -169,15 +169,20 @@ fn parse_defaults(expr: Expr) -> Vec<Expr> {
     }
 }
 
-fn slot_suffix(index: usize, width: usize) -> &'static str {
+/// Arrays are numbered, other composites (vectors) get their axis names.
+fn slot_suffix(index: usize, width: usize, array: bool) -> &'static str {
     if width == 1 {
         return "";
     }
-    match index {
-        0 => "_X",
-        1 => "_Y",
-        2 => "_Z",
-        _ => "_W",
+    match (array, index) {
+        (true, 0) => "_0",
+        (true, 1) => "_1",
+        (true, 2) => "_2",
+        (true, _) => "_3",
+        (false, 0) => "_X",
+        (false, 1) => "_Y",
+        (false, 2) => "_Z",
+        (false, _) => "_W",
     }
 }
 
@@ -217,7 +222,8 @@ fn expand_group(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
 
         for (slot, id) in param.ids.iter().enumerate() {
-            let full = format!("{prefix}_{}{}", param.name, slot_suffix(slot, width));
+            let array = matches!(field_ty, Type::Array(_));
+            let full = format!("{prefix}_{}{}", param.name, slot_suffix(slot, width, array));
             if full.len() > 16 {
                 return Err(syn::Error::new(
                     param.name_span,

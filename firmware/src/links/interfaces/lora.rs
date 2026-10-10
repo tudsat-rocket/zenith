@@ -41,6 +41,7 @@ use crate::links::interfaces::{
     InterfaceRxSubscriber, InterfaceTx, InterfaceTxPublisher, InterfaceTxSubscriber,
 };
 use crate::storage::PARAM_STORE;
+use mission::params::LoraParams;
 
 type UplinkItem = (u16, Result<UplinkCommand, MavResult>);
 
@@ -67,15 +68,27 @@ impl LoraHandle {
     pub fn init(
         lora1: LoRa<LoraTransceiver, Delay>,
         lora2: LoRa<LoraTransceiver, Delay>,
+        params: &LoraParams,
         spawner: SendSpawner,
     ) -> Self {
         let tx = DOWNLINK.init(Channel::new());
         let rx = UPLINK.init(Channel::new());
 
-        let downlink = HoppingTransmitter::new(lora1, DEFAULT_DOWNLINK_CONFIG, tx.receiver());
+        let downlink_config = LinkConfig {
+            hop_seed: params.hop_seed(),
+            hmac_key: params.hmac_key(),
+            ..DEFAULT_DOWNLINK_CONFIG
+        };
+        let uplink_config = LinkConfig {
+            hop_seed: params.hop_seed(),
+            hmac_key: params.hmac_key(),
+            ..DEFAULT_UPLINK_CONFIG
+        };
+
+        let downlink = HoppingTransmitter::new(lora1, downlink_config, tx.receiver());
         spawner.spawn(run_downlink(downlink)).unwrap();
 
-        let uplink = HoppingReceiver::new(lora2, DEFAULT_UPLINK_CONFIG, rx.sender());
+        let uplink = HoppingReceiver::new(lora2, uplink_config, rx.sender());
         spawner
             .spawn(run_uplink(
                 uplink,

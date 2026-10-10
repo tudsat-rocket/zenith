@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use mission::params::Params;
+use mission::params::{ParamTable, Params};
 use rapid_dialect::rapid::messages::ParamValue;
 
 use super::{ConnectionContext, DownlinkTelemetryMessage};
+use crate::params::RECEIVER_PARAM_COUNT;
 
 /// One parameter's stable id and raw value bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,7 +18,8 @@ pub struct ParamEntry {
 /// Values of up to two parameters
 ///
 /// The receiver recovers one PARAM_VALUE per distinct entry, filling in name, type, index and
-/// count from its own copy of the parameter definitions. A single value is sent in both entries.
+/// count from its own copy of the parameter definitions. The count includes the receiver's own
+/// params. A single value is sent in both entries.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ParamValuesMessage {
     entries: [ParamEntry; 2],
@@ -45,7 +47,9 @@ impl DownlinkTelemetryMessage for ParamValuesMessage {
             .filter_map(|entry| {
                 let (index, descriptor) = Params::by_id(entry.id)?;
                 let value = descriptor.ty.decode_raw(entry.raw);
-                Some(ParamValue::from(&Params::info(index, &descriptor, value)))
+                let mut info = Params::info(index, &descriptor, value);
+                info.count = RECEIVER_PARAM_COUNT;
+                Some(ParamValue::from(&info))
             })
             .collect()
     }
@@ -83,7 +87,7 @@ pub(crate) mod tests {
         assert_eq!(value.param_value.to_bits(), 0xdead_beef);
         assert_eq!(value.param_type, descriptor.ty.into());
         assert_eq!(value.param_index, index);
-        assert_eq!(value.param_count, Params::count());
+        assert_eq!(value.param_count, RECEIVER_PARAM_COUNT);
     }
 
     #[test]
