@@ -104,7 +104,6 @@ impl SensorModel {
         let baro = BaroReading {
             pressure: Some(self.pressure(physics)),
             temperature: Some(Self::temperature(physics)),
-            altitude: Some(self.baro_altitude(physics)),
         };
 
         let gps = self.gps(physics);
@@ -194,12 +193,6 @@ impl SensorModel {
     fn temperature(physics: &FlightPhysics) -> f32 {
         let t_kelvin = T0 - L * physics.position.z;
         t_kelvin - 273.15
-    }
-
-    /// Barometric altitude [m ASL]
-    fn baro_altitude(&mut self, physics: &FlightPhysics) -> f32 {
-        let n = self.config.baro_noise;
-        physics.position.z + self.rng.gen_range(-n..n)
     }
 
     fn gps(&mut self, physics: &FlightPhysics) -> Option<GpsDatum> {

@@ -94,11 +94,6 @@ impl<SPI: SpiDevice<u8>> LPS22<SPI> {
     pub fn temperature(&self) -> Option<f32> {
         self.temperature
     }
-
-    pub fn altitude(&self) -> Option<f32> {
-        self.pressure()
-            .map(|p| 44_330.77 * (1.0 - (p / 1012.5).powf(0.190_223)))
-    }
 }
 
 #[derive(Clone, PartialEq, Eq)]

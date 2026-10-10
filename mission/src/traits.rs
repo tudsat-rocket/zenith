@@ -1,5 +1,8 @@
 use nalgebra::Vector3;
 
+#[cfg(target_os = "none")]
+use num_traits::Float as _;
+
 use links::{Downlink, UplinkCommand};
 use params::{ParamId, ParamValue};
 use state_estimator::GpsDatum;
@@ -19,9 +22,19 @@ pub struct AdcData {
 
 #[derive(Clone, Default)]
 pub struct BaroReading {
+    /// Static pressure [hPa]
     pub pressure: Option<f32>,
+    /// Sensor temperature [C]
     pub temperature: Option<f32>,
-    pub altitude: Option<f32>,
+}
+
+impl BaroReading {
+    /// Pressure altitude [m] against a fixed sea-level reference. Only meaningful relative to the
+    /// ground altitude the state estimator latches at arming.
+    pub fn altitude(&self) -> Option<f32> {
+        self.pressure
+            .map(|p| 44_330.77 * (1.0 - (p / 1012.5).powf(0.190_223)))
+    }
 }
 
 #[derive(Clone, Default)]

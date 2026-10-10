@@ -302,11 +302,6 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
     pub fn pressure(&self) -> Option<f32> {
         self.pressure.map(|p| (p as f32) / 100.0)
     }
-
-    pub fn altitude(&self) -> Option<f32> {
-        self.pressure()
-            .map(|p| 44_330.77 * (1.0 - (p / 1012.5).powf(0.190_223)))
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

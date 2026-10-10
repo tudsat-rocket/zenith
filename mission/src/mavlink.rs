@@ -1026,7 +1026,6 @@ mod tests {
         let baro = crate::traits::BaroReading {
             pressure: Some(1013.0),
             temperature: Some(20.0),
-            altitude: Some(100.0),
         };
 
         SensorReadings {

@@ -5,12 +5,16 @@ use core::cell::RefCell;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
+use nalgebra::Vector3;
+
 use rapid_dialect::rapid::enums::MavParamType;
 
 use state_estimator::StateEstimatorParams;
 
 use links::UplinkCommand;
 use links::protocols::params::{ParamInfo, ParamRequest, ParamSetError, ParamStore};
+
+use crate::traits::SensorReadings;
 
 pub use params::{ParamDescriptor, ParamId, ParamType, ParamValue, ParameterField, ParameterGroup};
 
@@ -26,6 +30,7 @@ pub struct Params {
     pub failsafe: FailsafeParams,
     pub tank_level: TankLevelParams,
     pub misc: MiscParams,
+    pub calibration: CalibrationParams,
 }
 
 /// State machine parameters, exposed over MAVLink as `SM_*`.
@@ -158,6 +163,80 @@ pub struct MiscParams {
     /// values trade volume for a lower current draw. Values above 100 are clamped.
     #[param(id = 0x0500, name = "BUZZ_VOL", default = 50)]
     pub buzzer_volume: u32,
+}
+
+/// Sensor offsets, exposed over MAVLink as `CAL_*`. Subtracted from the raw readings in the body
+/// frame (after each driver's axis remap) and in the reading's own unit, before anything else
+/// sees them.
+#[derive(Debug, Clone, macros::ParameterGroup)]
+#[param_group(prefix = "CAL")]
+pub struct CalibrationParams {
+    /// IMU1 gyro bias [deg/s]
+    #[param(id = 0x0700..=0x0702, name = "IMU1_GYR", default = [0.0, 0.0, 0.0])]
+    pub imu1_gyro: Vector3<f32>,
+    /// IMU1 accelerometer bias [m/s^2]
+    #[param(id = 0x0703..=0x0705, name = "IMU1_ACC", default = [0.0, 0.0, 0.0])]
+    pub imu1_accel: Vector3<f32>,
+    /// IMU2 gyro bias [deg/s]
+    #[param(id = 0x0706..=0x0708, name = "IMU2_GYR", default = [0.0, 0.0, 0.0])]
+    pub imu2_gyro: Vector3<f32>,
+    /// IMU2 accelerometer bias [m/s^2]
+    #[param(id = 0x0709..=0x070B, name = "IMU2_ACC", default = [0.0, 0.0, 0.0])]
+    pub imu2_accel: Vector3<f32>,
+    /// IMU3 gyro bias [deg/s]
+    #[param(id = 0x070C..=0x070E, name = "IMU3_GYR", default = [0.0, 0.0, 0.0])]
+    pub imu3_gyro: Vector3<f32>,
+    /// IMU3 accelerometer bias [m/s^2]
+    #[param(id = 0x070F..=0x0711, name = "IMU3_ACC", default = [0.0, 0.0, 0.0])]
+    pub imu3_accel: Vector3<f32>,
+    /// Magnetometer hard-iron offset [uT]
+    #[param(id = 0x0712..=0x0714, name = "MAG", default = [0.0, 0.0, 0.0])]
+    pub mag: Vector3<f32>,
+    /// Barometer 1 pressure offset [hPa]
+    #[param(id = 0x0715, name = "BARO1", default = 0.0)]
+    pub baro1: f32,
+    /// Barometer 2 pressure offset [hPa]
+    #[param(id = 0x0716, name = "BARO2", default = 0.0)]
+    pub baro2: f32,
+    /// Barometer 3 pressure offset [hPa]
+    #[param(id = 0x0717, name = "BARO3", default = 0.0)]
+    pub baro3: f32,
+}
+
+impl CalibrationParams {
+    pub fn apply(&self, r: &mut SensorReadings) {
+        let vectors = [
+            (&mut r.imu1_gyro, self.imu1_gyro),
+            (&mut r.imu1_accel, self.imu1_accel),
+            (&mut r.imu2_gyro, self.imu2_gyro),
+            (&mut r.imu2_accel, self.imu2_accel),
+            (&mut r.imu3_gyro, self.imu3_gyro),
+            (&mut r.imu3_accel, self.imu3_accel),
+            (&mut r.mag, self.mag),
+        ];
+        for (reading, offset) in vectors {
+            if let Some(v) = reading {
+                #[allow(
+                    clippy::arithmetic_side_effects,
+                    reason = "f32 vector subtraction cannot overflow or panic"
+                )]
+                {
+                    *v -= offset;
+                }
+            }
+        }
+
+        let baros = [
+            (&mut r.baro1, self.baro1),
+            (&mut r.baro2, self.baro2),
+            (&mut r.baro3, self.baro3),
+        ];
+        for (baro, offset) in baros {
+            if let Some(p) = &mut baro.pressure {
+                *p -= offset;
+            }
+        }
+    }
 }
 
 /// Live mirror of the current [`Params`] for the MAVLink param protocol tasks. Starts empty (the
@@ -344,7 +423,7 @@ impl ParamStore for SharedParams {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nalgebra::Vector3;
+    use crate::traits::BaroReading;
 
     #[test]
     fn registry_invariants() {
@@ -512,5 +591,36 @@ mod tests {
         assert_eq!(g.get(ParamId::new(0x0301)), Some(ParamValue::F32(2.0)));
         assert!(g.set(ParamId::new(0x0302), ParamValue::F32(9.0)));
         assert_eq!(g.bias, Vector3::new(1.0, 2.0, 9.0));
+    }
+
+    #[test]
+    fn calibration_subtracts_offsets() {
+        let cal = CalibrationParams {
+            imu1_gyro: Vector3::new(1.0, 2.0, 3.0),
+            mag: Vector3::new(10.0, 0.0, -10.0),
+            baro2: 1.5,
+            ..Default::default()
+        };
+        let mut r = SensorReadings {
+            imu1_gyro: Some(Vector3::new(1.0, 1.0, 1.0)),
+            mag: Some(Vector3::new(20.0, 20.0, 20.0)),
+            baro2: BaroReading {
+                pressure: Some(1000.0),
+                temperature: Some(20.0),
+            },
+            ..Default::default()
+        };
+        let uncorrected_alt = r.baro2.altitude().unwrap();
+        cal.apply(&mut r);
+
+        assert_eq!(r.imu1_gyro, Some(Vector3::new(0.0, -1.0, -2.0)));
+        assert_eq!(r.mag, Some(Vector3::new(10.0, 20.0, 30.0)));
+        assert_eq!(r.imu2_gyro, None);
+        assert_eq!(r.baro2.pressure, Some(998.5));
+        assert_eq!(r.baro2.temperature, Some(20.0));
+        assert_eq!(r.baro1.pressure, None);
+        // ~8.3 m/hPa near sea level; lower pressure reads higher.
+        let rise = r.baro2.altitude().unwrap() - uncorrected_alt;
+        assert!((12.0..13.5).contains(&rise), "rise {rise}");
     }
 }

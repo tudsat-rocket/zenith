@@ -11,7 +11,8 @@ use crate::inventory::{BinaryOutputId, InventoryId, ServoId};
 use crate::leds::LedState;
 use crate::mavlink::VehicleSnapshot;
 use crate::params::{
-    FailsafeParams, MiscParams, Params, PropulsionParams, QdParams, StateMachineParams,
+    CalibrationParams, FailsafeParams, MiscParams, Params, PropulsionParams, QdParams,
+    StateMachineParams,
 };
 use crate::servos::ServoController;
 use crate::tank_level::TankLevelEstimator;
@@ -30,6 +31,7 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     failsafe_params: FailsafeParams,
     tank_level: TankLevelEstimator,
     misc_params: MiscParams,
+    calibration_params: CalibrationParams,
     pub sensors: S,
     pub outputs: O,
     pub storage: F,
@@ -64,6 +66,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             failsafe_params: params.failsafe,
             tank_level: TankLevelEstimator::new(params.tank_level),
             misc_params: params.misc,
+            calibration_params: params.calibration,
             sensors,
             outputs,
             storage,
@@ -84,6 +87,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         // everything below acts on this tick's data.
         // TODO: incorporate all IMUs, baros into the state estimator.
         self.readings = self.sensors.tick().await;
+        self.calibration_params.apply(&mut self.readings);
         self.bus_inputs = self.bus.get_input_image(self.time);
         self.bus_inputs.ox_tank_level = self
             .tank_level
@@ -96,7 +100,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             self.readings.imu1_accel,
             self.readings.highg_accel,
             self.readings.mag,
-            self.readings.baro1.altitude,
+            self.readings.baro1.altitude(),
             self.readings.gps.clone(),
         );
 
@@ -242,6 +246,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             failsafe: self.failsafe_params.clone(),
             tank_level: self.tank_level.params().clone(),
             misc: self.misc_params.clone(),
+            calibration: self.calibration_params.clone(),
         };
 
         params.set(descriptor.id, value);
@@ -253,6 +258,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.failsafe_params = params.failsafe;
         self.tank_level.update_params(params.tank_level);
         self.misc_params = params.misc;
+        self.calibration_params = params.calibration;
         self.state_estimator.update_params(params.state_estimator);
 
         self.storage.write_param(descriptor.id, value);

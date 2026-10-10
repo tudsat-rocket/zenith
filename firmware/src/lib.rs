@@ -117,17 +117,14 @@ impl Sensors for BoardSensors {
             baro1: BaroReading {
                 pressure: self.baro1.pressure(),
                 temperature: self.baro1.temperature(),
-                altitude: self.baro1.altitude(),
             },
             baro2: BaroReading {
                 pressure: self.baro2.pressure(),
                 temperature: self.baro2.temperature(),
-                altitude: self.baro2.altitude(),
             },
             baro3: BaroReading {
                 pressure: self.baro3.pressure(),
                 temperature: self.baro3.temperature(),
-                altitude: self.baro3.altitude(),
             },
             power: self.power.adc(),
             #[cfg(not(feature = "gcs"))]

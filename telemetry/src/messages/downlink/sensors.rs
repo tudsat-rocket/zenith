@@ -145,7 +145,6 @@ pub(crate) mod tests {
             baro1: BaroReading {
                 pressure: Some(1100.0),
                 temperature: Some(50.0),
-                altitude: Some(0.0),
             },
             ..Default::default()
         }
@@ -162,7 +161,6 @@ pub(crate) mod tests {
             baro1: BaroReading {
                 pressure: Some(1013.2),
                 temperature: Some(21.0),
-                altitude: Some(0.0),
             },
             ..Default::default()
         };

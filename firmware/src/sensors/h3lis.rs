@@ -14,16 +14,11 @@ const G_TO_MS2: f32 = 9.80665;
 pub struct H3LIS331DL<SPI: SpiDevice<u8>> {
     spi: SPI,
     acc: Option<Vector3<f32>>,
-    offset: Vector3<f32>,
 }
 
 impl<SPI: SpiDevice<u8>> H3LIS331DL<SPI> {
     pub async fn init(spi: SPI) -> Result<Self, SPI::Error> {
-        let mut h3lis = Self {
-            spi,
-            acc: None,
-            offset: Vector3::default(),
-        };
+        let mut h3lis = Self { spi, acc: None };
 
         let mut whoami = 0;
         for _i in 0..5 {
@@ -83,12 +78,8 @@ impl<SPI: SpiDevice<u8>> H3LIS331DL<SPI> {
         }
     }
 
-    pub fn set_offset(&mut self, offset: Vector3<f32>) {
-        self.offset = offset;
-    }
-
     pub fn accelerometer(&self) -> Option<Vector3<f32>> {
-        self.acc.map(|acc| acc - self.offset)
+        self.acc
     }
 }
 

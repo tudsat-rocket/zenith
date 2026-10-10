@@ -18,8 +18,6 @@ pub struct LSM6<SPI: SpiDevice<u8>> {
     accel_scale: LSM6AccelerometerScale,
     gyro: Option<Vector3<f32>>,
     accel: Option<Vector3<f32>>,
-    gyro_offset: Vector3<f32>,
-    accel_offset: Vector3<f32>,
 }
 
 impl<SPI: SpiDevice<u8>> LSM6<SPI> {
@@ -33,8 +31,6 @@ impl<SPI: SpiDevice<u8>> LSM6<SPI> {
             accel_scale,
             gyro: None,
             accel: None,
-            gyro_offset: Vector3::default(),
-            accel_offset: Vector3::default(),
         };
 
         let mut whoami = 0x00;
@@ -151,17 +147,12 @@ impl<SPI: SpiDevice<u8>> LSM6<SPI> {
         }
     }
 
-    pub fn set_offsets(&mut self, gyro_offset: Vector3<f32>, accel_offset: Vector3<f32>) {
-        self.gyro_offset = gyro_offset;
-        self.accel_offset = accel_offset;
-    }
-
     pub fn accelerometer(&self) -> Option<Vector3<f32>> {
-        self.accel.map(|a| a - self.accel_offset)
+        self.accel
     }
 
     pub fn gyroscope(&self) -> Option<Vector3<f32>> {
-        self.gyro.map(|g| g - self.gyro_offset)
+        self.gyro
     }
 }
 

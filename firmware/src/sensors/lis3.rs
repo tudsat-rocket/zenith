@@ -13,7 +13,6 @@ pub struct LIS3MDL<SPI: SpiDevice<u8>> {
     spi: SPI,
     scale: LIS3MDLFullScale,
     mag: Option<Vector3<f32>>,
-    offset: Vector3<f32>,
 }
 
 impl<SPI: SpiDevice<u8>> LIS3MDL<SPI> {
@@ -22,7 +21,6 @@ impl<SPI: SpiDevice<u8>> LIS3MDL<SPI> {
             spi,
             scale: LIS3MDLFullScale::Max16G,
             mag: None,
-            offset: Vector3::default(),
         };
 
         let whoami = lis3.read_u8(LIS3MDLRegister::WhoAmI).await?;
@@ -93,12 +91,8 @@ impl<SPI: SpiDevice<u8>> LIS3MDL<SPI> {
         }
     }
 
-    pub fn set_offset(&mut self, offset: Vector3<f32>) {
-        self.offset = offset;
-    }
-
     pub fn magnetometer(&self) -> Option<Vector3<f32>> {
-        self.mag.map(|m| m - self.offset)
+        self.mag
     }
 }
 

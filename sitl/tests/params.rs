@@ -101,6 +101,37 @@ fn set_param_hot_applies_and_persists() {
 }
 
 #[test]
+fn calibration_offset_applies_to_readings() {
+    const CAL_BARO1: u16 = 0x0715;
+
+    block_on(async {
+        let mut h = Harness::new(None).await;
+        h.vehicle.set_param(CAL_BARO1, 2.0f32.to_bits()).await;
+        h.tick().await;
+
+        // SITL feeds the same sample to every baro slot, so baro2 is the uncalibrated reference.
+        let r = &h.vehicle.readings;
+        let (Some(p1), Some(p2)) = (r.baro1.pressure, r.baro2.pressure) else {
+            panic!("SITL baros should always report pressure");
+        };
+        assert!(
+            (p2 - p1 - 2.0).abs() < 1e-3,
+            "baro1 {p1} hPa, baro2 {p2} hPa"
+        );
+
+        let stored = h
+            .vehicle
+            .storage
+            .stored()
+            .expect("set_param should have persisted a Params");
+        #[allow(clippy::float_cmp, reason = "asserting a bit-exact round-trip")]
+        {
+            assert_eq!(stored.calibration.baro1, 2.0);
+        }
+    });
+}
+
+#[test]
 fn advertises_bytewise_param_encoding() {
     // Ground stations only enable their parameter UI once AUTOPILOT_VERSION tells them how
     // param_value is encoded, so losing this flag silently disables params on the GCS side.
