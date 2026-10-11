@@ -41,6 +41,9 @@ use crate::lora_iv::BoundedWaits;
 use crate::sensors::*;
 use crate::{BoardAdc, BoardOutputs, BoardSensors, Irqs, LoraTransceiver, OurSpiDevice};
 
+/// Covers all of boot up to the main loop, which then switches to its own, much shorter timeout.
+const BOOT_WATCHDOG_TIMEOUT_US: u32 = 4_000_000;
+
 /// Upper bound for a single sx126x command's processing time.
 const LORA_BUSY_TIMEOUT: embassy_time::Duration = embassy_time::Duration::from_millis(50);
 
@@ -74,7 +77,9 @@ pub struct Board {
     pub usb: embassy_stm32::usb::Driver<'static, USB_OTG_FS>,
     pub ethernet: Ethernet<'static, ETH, GenericPhy>,
     pub rng: Rng<'static, RNG>,
-    pub iwdg: IndependentWatchdog<'static, IWDG1>,
+    /// Already running if `init` was asked for the boot watchdog; the main loop's
+    /// `IndependentWatchdog::new` then shortens the timeout of the running watchdog.
+    pub iwdg: Peri<'static, IWDG1>,
     pub buzzer: (SimplePwm<'static, TIM2>, Channel),
     /// Physical ignition button, populated on the GSE only (not on the rocket). `PC2` is the
     /// datasheet name for GPIO port C pin 2, which also serves as `ADC3_INP0`; the pin still has a
@@ -97,8 +102,11 @@ static SPI3_SHARED: StaticCell<embassy_sync::mutex::Mutex<CriticalSectionRawMute
 static SPI4_SHARED: StaticCell<embassy_sync::mutex::Mutex<CriticalSectionRawMutex, Spi<Async>>> =
     StaticCell::new();
 
+/// With `boot_watchdog`, the IWDG is started before any peripheral that can panic or hang on
+/// failure (LoRa, Ethernet), so a dead component causes a reboot instead of halting the MCU. Only
+/// for binaries that pet the watchdog once booted.
 #[allow(clippy::too_many_lines)]
-pub async fn init() -> Board {
+pub async fn init(boot_watchdog: bool) -> Board {
     // Basic setup, including clocks
     let mut config = Config::default();
     config.rcc.hse = Some(embassy_stm32::rcc::Hse {
@@ -146,7 +154,11 @@ pub async fn init() -> Board {
     // SPI4 off the now faster APB2 would round up to 12.5 MHz; PLL2_Q (32 MHz) gives 8 MHz.
     config.rcc.mux.spi45sel = embassy_stm32::rcc::mux::Spi45sel::PLL2_Q;
 
-    let p = embassy_stm32::init(config);
+    let mut p = embassy_stm32::init(config);
+
+    if boot_watchdog {
+        IndependentWatchdog::new(p.IWDG1.reborrow(), BOOT_WATCHDOG_TIMEOUT_US).unleash();
+    }
 
     // The M7 boots with its caches off, which makes everything that runs from flash several times
     // slower. Only the I-cache: the D-cache would need cache maintenance around every DMA buffer,
@@ -342,12 +354,6 @@ pub async fn init() -> Board {
     #[cfg(feature = "gcs")]
     let ignition_button = Input::new(p.PC2, Pull::Down);
 
-    // Set up the independent watchdog. This reboots the processor
-    // if it is not pet regularly, even if the main clock fails.
-    // TODO: check if the current boot is a watchdog reset and react
-    // appropriately
-    let iwdg = IndependentWatchdog::new(p.IWDG1, 512_000); // 512ms timeout
-
     let mut config = embassy_stm32::usb::Config::default();
     config.vbus_detection = true;
     let usb = embassy_stm32::usb::Driver::new_fs(
@@ -472,7 +478,7 @@ pub async fn init() -> Board {
         usb,
         ethernet,
         rng,
-        iwdg,
+        iwdg: p.IWDG1,
         buzzer: (buzzer_pwm, buzzer_pwm_channel),
         #[cfg(feature = "gcs")]
         ignition_button,

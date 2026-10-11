@@ -57,7 +57,7 @@ fn main() -> ! {
 
 #[embassy_executor::task]
 async fn init(low_priority_spawner: Spawner) {
-    let mut board = fw::board::init().await;
+    let board = fw::board::init(true).await;
 
     // Start high priority executor
     interrupt::I2C3_EV.set_priority(Priority::P6);
@@ -113,10 +113,12 @@ async fn init(low_priority_spawner: Spawner) {
     )
     .await;
 
-    // Unleash the watchdog and spawn the main loop.
-    board.iwdg.unleash();
+    // Shorten the boot watchdog's timeout for the main loop and spawn it.
+    defmt::info!("Boot took {} ms", Instant::now().as_millis());
+    let mut iwdg = IndependentWatchdog::new(board.iwdg, 512_000);
+    iwdg.unleash();
     high_priority_spawner
-        .spawn(main_loop(vehicle, links, board.iwdg))
+        .spawn(main_loop(vehicle, links, iwdg))
         .unwrap();
     buzzer::request_sound(buzzer::Sound::StartupTech);
 }

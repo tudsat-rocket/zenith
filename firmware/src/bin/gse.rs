@@ -41,7 +41,7 @@ static EXECUTOR_MEDIUM: InterruptExecutor = InterruptExecutor::new();
 
 #[embassy_executor::main]
 async fn main(low_priority_spawner: Spawner) {
-    let board = fw::board::init().await;
+    let board = fw::board::init(false).await;
 
     // Start medium priority executor
     interrupt::I2C3_ER.set_priority(Priority::P7);

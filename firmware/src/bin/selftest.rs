@@ -237,7 +237,7 @@ macro_rules! baro_test {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    let mut board = fw::board::init().await;
+    let mut board = fw::board::init(false).await;
 
     // Init network stack
     static ETH_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();

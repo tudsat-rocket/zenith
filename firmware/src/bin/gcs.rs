@@ -76,7 +76,7 @@ enum UplinkEvent {
 
 #[embassy_executor::main]
 async fn main(low_priority_spawner: Spawner) {
-    let board = fw::board::init().await;
+    let board = fw::board::init(false).await;
 
     let gcs_params = board.params;
     fw::storage::GCS_PARAM_STORE.init(gcs_params.clone());
