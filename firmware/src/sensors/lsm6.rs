@@ -49,6 +49,10 @@ impl<SPI: SpiDevice<u8>> LSM6<SPI> {
             info!("LSM6DSR initialized");
         }
 
+        // BDU, so a burst read never mixes L and H bytes of different samples (shows up as
+        // +-256 LSB single-sample spikes), and keep the reset-default IF_INC for burst reads
+        imu.write_u8(LSM6RRegister::Ctrl3C, 0b0100_0100).await?;
+
         imu.configure_gyroscope(LSM6GyroscopeMode::HighPerformance1660Hz, gyro_scale)
             .await?;
 
@@ -221,16 +225,17 @@ enum LSM6GyroscopeScale {
 
 impl LSM6GyroscopeScale {
     fn scale_raw_values(self, raw: Vector3<i16>) -> Vector3<f32> {
-        let factor = match self {
-            Self::Max125Dps => (i16::MAX as f32) / 125.0,
-            Self::Max250Dps => (i16::MAX as f32) / 250.0,
-            Self::Max500Dps => (i16::MAX as f32) / 500.0,
-            Self::Max1000Dps => (i16::MAX as f32) / 1000.0,
-            Self::Max2000Dps => (i16::MAX as f32) / 2000.0,
-            Self::Max4000Dps => (i16::MAX as f32) / 4000.0,
+        // datasheet sensitivity in dps/LSB, which is not range / i16::MAX
+        let sensitivity = match self {
+            Self::Max125Dps => 0.004_375,
+            Self::Max250Dps => 0.008_75,
+            Self::Max500Dps => 0.017_5,
+            Self::Max1000Dps => 0.035,
+            Self::Max2000Dps => 0.07,
+            Self::Max4000Dps => 0.14,
         };
 
-        Vector3::new(raw.x as f32, raw.y as f32, raw.z as f32) / factor
+        Vector3::new(raw.x as f32, raw.y as f32, raw.z as f32) * sensitivity
     }
 }
 
