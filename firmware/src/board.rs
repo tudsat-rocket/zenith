@@ -94,7 +94,6 @@ static SPI4_SHARED: StaticCell<embassy_sync::mutex::Mutex<CriticalSectionRawMute
 #[allow(clippy::too_many_lines)]
 pub async fn init() -> Board {
     // Basic setup, including clocks
-    // Divider values taken from STM32CubeMx
     let mut config = Config::default();
     config.rcc.hse = Some(embassy_stm32::rcc::Hse {
         mode: embassy_stm32::rcc::HseMode::Oscillator,
@@ -103,12 +102,13 @@ pub async fn init() -> Board {
     config.rcc.hsi48 = Some(Hsi48Config {
         sync_from_usb: true,
     }); // needed for USB
+    // 400 MHz core, the most VOS1 allows on either silicon revision. Q stays at 32 MHz for SPI1-3.
     config.rcc.pll1 = Some(Pll {
         source: PllSource::HSE,
         prediv: PllPreDiv::DIV5,
-        mul: PllMul::MUL192,
-        divp: Some(PllDiv::DIV4),
-        divq: Some(PllDiv::DIV30),
+        mul: PllMul::MUL160,
+        divp: Some(PllDiv::DIV2),
+        divq: Some(PllDiv::DIV25),
         divr: None,
     });
     config.rcc.pll2 = Some(Pll {
@@ -137,6 +137,8 @@ pub async fn init() -> Board {
     config.rcc.mux.fdcansel = embassy_stm32::rcc::mux::Fdcansel::HSE;
     config.rcc.mux.usbsel = embassy_stm32::rcc::mux::Usbsel::HSI48;
     config.rcc.mux.adcsel = embassy_stm32::rcc::mux::Adcsel::PLL3_R;
+    // SPI4 off the now faster APB2 would round up to 12.5 MHz; PLL2_Q (32 MHz) gives 8 MHz.
+    config.rcc.mux.spi45sel = embassy_stm32::rcc::mux::Spi45sel::PLL2_Q;
 
     let p = embassy_stm32::init(config);
 
