@@ -20,24 +20,24 @@ use rapid_dialect::rapid::messages::ParamValue;
 
 use crate::messages::{DownlinkTelemetryMessage, ParamEntry, ParamValuesMessage};
 
-const _: () = assert!(Params::PARAM_COUNT <= u64::BITS as usize);
+const _: () = assert!(Params::PARAM_COUNT <= u128::BITS as usize);
 
 /// The parameters a receiver serves: the vehicle's, then its own.
 #[allow(
     clippy::cast_possible_truncation,
-    reason = "the vehicle's alone are capped at 64"
+    reason = "the vehicle's alone are capped at 128"
 )]
 pub const RECEIVER_PARAM_COUNT: u16 = (Params::PARAM_COUNT + GcsParams::PARAM_COUNT) as u16;
 
 /// A bit for every parameter index.
-const ALL_PARAMS: u64 = !match u64::MAX.checked_shl(Params::PARAM_COUNT as u32) {
+const ALL_PARAMS: u128 = !match u128::MAX.checked_shl(Params::PARAM_COUNT as u32) {
     Some(above) => above,
     None => 0,
 };
 
 /// The parameter indices whose values the vehicle still has to send.
 #[derive(Debug, Default)]
-pub struct PendingParams(u64);
+pub struct PendingParams(u128);
 
 /// The ground station modem's own link settings, exposed over MAVLink as `GCS_*`. They have to
 /// match the vehicle's `LORA_*`, and like those are read once at boot.
@@ -80,7 +80,7 @@ impl PendingParams {
 
     /// Queues the indices `first + i` for every set bit `i` of `mask`. Unknown indices are ignored.
     fn request(&mut self, first: u16, mask: u32) {
-        let requested = u64::from(mask).checked_shl(u32::from(first)).unwrap_or(0);
+        let requested = u128::from(mask).checked_shl(u32::from(first)).unwrap_or(0);
         self.0 |= requested & ALL_PARAMS;
     }
 
