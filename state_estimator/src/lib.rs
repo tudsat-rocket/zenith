@@ -316,34 +316,31 @@ impl StateEstimator {
         };
         self.acceleration = acc.map(|a| self.correct_orientation(&a));
 
-        if let (Some(gyro), Some(acc), Some(mag)) = (&gyroscope, &self.acceleration, &magnetometer)
-        {
-            let gyro = self.correct_orientation(gyro);
-            let mag = self.correct_orientation(mag);
+        if let (Some(gyro), Some(acc)) = (&gyroscope, &self.acceleration) {
+            let gyro =
+                self.correct_orientation(gyro) * <f32 as num_traits::FloatConst>::PI() / 180.0;
 
             // During burn, skip orientation updates entirely - assume the rocket
             // flies straight. Less wrong than AHRS with launch rail vibrations.
             if self.mode != FlightMode::Burn {
-                self.orientation = self
-                    .ahrs
-                    .update(
-                        &(gyro * <f32 as num_traits::FloatConst>::PI() / 180.0),
-                        acc,
-                        &mag,
-                    )
-                    .ok()
-                    .map(|q| Self::ahrs_to_local() * q);
+                // Without a magnetometer the heading drifts, but the vertical holds.
+                let quat = match magnetometer.map(|mag| self.correct_orientation(&mag)) {
+                    Some(mag) => self.ahrs.update(&gyro, acc, &mag),
+                    None => self.ahrs.update_imu(&gyro, acc),
+                };
+                // On an AHRS error (e.g. a zero mag vector) keep the last orientation.
+                if let Ok(quat) = quat {
+                    self.orientation = Some(Self::ahrs_to_local() * quat);
+                }
             }
-
-            // Rotate acceleration vector to get world-space acceleration
-            // (where Z is straight up) and subtract gravity.
-            self.acceleration_world = self
-                .orientation
-                .map(|quat| quat.transform_vector(acc) - Vector3::new(0.0, 0.0, GRAVITY));
-        } else {
-            self.orientation = None;
-            self.acceleration_world = None;
         }
+
+        // Rotate acceleration vector to get world-space acceleration
+        // (where Z is straight up) and subtract gravity.
+        self.acceleration_world = self
+            .orientation
+            .zip(self.acceleration)
+            .map(|(quat, acc)| quat.transform_vector(&acc) - Vector3::new(0.0, 0.0, GRAVITY));
 
         // In the trans-/supersonic region, barometer readings become unreliable.
         let mach = if self.mode == FlightMode::Burn || self.mode == FlightMode::Coast {
@@ -375,8 +372,8 @@ impl StateEstimator {
                 self.apply_measurements(self.altitude_asl(), accel, gps.as_ref());
             }
             (None, Some(altitude_baro)) => {
-                // Just assume acceleration is zero.
-                self.apply_measurements(altitude_baro, Vector3::new(0.0, 0.0, 0.0), gps.as_ref());
+                // Feed the filter its own acceleration estimate, so the gap carries no information.
+                self.apply_measurements(altitude_baro, self.acceleration_world(), gps.as_ref());
             }
             (None, None) => {
                 // Do nothing, as long as this gap isn't too big and barometer values come back,

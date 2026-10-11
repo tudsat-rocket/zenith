@@ -72,3 +72,53 @@ fn orientation_comes_back_in_the_frame_the_positions_use() {
         );
     }
 }
+
+#[test]
+fn a_missing_sample_keeps_the_orientation() {
+    let truth = on_the_rail();
+    let accel = truth.transpose() * Vector3::new(0.0, 0.0, GRAVITY);
+    let mag = truth.transpose() * FIELD_ENU;
+    let mut estimator = StateEstimator::new_with_quat(
+        1000.0,
+        StateEstimatorParams::default(),
+        UnitQuaternion::from_matrix(&truth),
+    );
+
+    let gaps = [
+        (FlightMode::Idle, Some(Vector3::zeros()), Some(mag)),
+        (FlightMode::Idle, None, Some(mag)),
+        (FlightMode::Idle, Some(Vector3::zeros()), None),
+        (
+            FlightMode::Idle,
+            Some(Vector3::zeros()),
+            Some(Vector3::zeros()),
+        ),
+        (FlightMode::Burn, None, None),
+        (FlightMode::Coast, Some(Vector3::zeros()), None),
+    ];
+    for (t, (mode, gyro, mag)) in (0..).zip(gaps.into_iter().flat_map(|gap| [gap; 1000])) {
+        estimator.update(
+            Wrapping(t),
+            mode,
+            gyro,
+            Some(accel),
+            None,
+            mag,
+            Some(0.0),
+            None,
+        );
+
+        assert!(
+            estimator.orientation.is_some(),
+            "{mode:?}: lost the orientation"
+        );
+        let vertical = estimator
+            .acceleration_world_raw()
+            .expect("no world-frame acceleration")
+            .z;
+        assert!(
+            vertical.abs() < 0.1,
+            "{mode:?}: standing still at {vertical} m/s^2"
+        );
+    }
+}
