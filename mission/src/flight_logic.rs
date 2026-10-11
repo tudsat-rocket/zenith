@@ -74,7 +74,7 @@ impl FlightLogic {
 
             // Apogee detection: sustained negative vertical speed
             FlightMode::Coast => {
-                let falling = self.true_since(time, estimator.vertical_speed() < 0.0, 500);
+                let falling = self.true_since(time, estimator.vertical_speed() < 0.0, 100);
                 let min_exceeded = t_since_takeoff > params.min_time_to_drogue;
                 let max_exceeded = t_since_takeoff > params.max_time_to_drogue;
                 ((min_exceeded && falling) || max_exceeded).then_some(FlightMode::DeployDrogue)
