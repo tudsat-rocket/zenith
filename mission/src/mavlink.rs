@@ -443,7 +443,7 @@ impl Into<ScaledPressure> for &VehicleSnapshot<'_> {
             time_boot_ms: self.time.0,
             press_abs: self.readings.baro1.pressure.unwrap_or_default(),
             press_diff: 0.0,
-            temperature: (self.readings.baro1.temperature.unwrap_or_default() * 10.0) as i16,
+            temperature: centi_celsius(self.readings.baro1.temperature),
             temperature_press_diff: 0,
         }
     }
@@ -455,7 +455,7 @@ impl Into<ScaledPressure2> for &VehicleSnapshot<'_> {
             time_boot_ms: self.time.0,
             press_abs: self.readings.baro2.pressure.unwrap_or_default(),
             press_diff: 0.0,
-            temperature: (self.readings.baro2.temperature.unwrap_or_default() * 10.0) as i16,
+            temperature: centi_celsius(self.readings.baro2.temperature),
             temperature_press_diff: 0,
         }
     }
@@ -467,7 +467,7 @@ impl Into<ScaledPressure3> for &VehicleSnapshot<'_> {
             time_boot_ms: self.time.0,
             press_abs: self.readings.baro3.pressure.unwrap_or_default(),
             press_diff: 0.0,
-            temperature: (self.readings.baro3.temperature.unwrap_or_default() * 10.0) as i16,
+            temperature: centi_celsius(self.readings.baro3.temperature),
             temperature_press_diff: 0,
         }
     }
@@ -1115,6 +1115,32 @@ mod tests {
                 .onboard_control_sensors_health
                 .contains(MavSysStatusSensor::PROPULSION)
         );
+    }
+
+    fn scaled_pressure(readings: &SensorReadings) -> ScaledPressure {
+        let snapshot = VehicleSnapshot {
+            time: Wrapping(0),
+            mode: FlightMode::Idle,
+            state_machine_params: &StateMachineParams::default(),
+            readings,
+            state_estimator: &StateEstimator::new(
+                1000.0,
+                state_estimator::StateEstimatorParams::default(),
+            ),
+            input_image: &BusInputImage::default(),
+            output_image: &BusOutputImage::default(),
+            valves_agree: true,
+        };
+        (&snapshot).into()
+    }
+
+    #[test]
+    fn baro_temperature_is_centi_celsius() {
+        let mut readings = healthy_readings();
+        assert_eq!(scaled_pressure(&readings).temperature, 2000);
+
+        readings.baro1.temperature = None;
+        assert_eq!(scaled_pressure(&readings).temperature, i16::MAX);
     }
 
     /// A board's own SYS_STATUS, with nothing but the bus inputs to go on.
