@@ -140,6 +140,16 @@ pub async fn init() -> Board {
 
     let p = embassy_stm32::init(config);
 
+    // The M7 boots with its caches off, which makes everything that runs from flash several times
+    // slower. Only the I-cache: the D-cache would need cache maintenance around every DMA buffer,
+    // which embassy-stm32 does not do.
+    #[allow(
+        clippy::unwrap_used,
+        reason = "nothing else takes the core peripherals"
+    )]
+    let mut core = cortex_m::Peripherals::take().unwrap();
+    core.SCB.enable_icache();
+
     let mut spi1_config = embassy_stm32::spi::Config::default();
     spi1_config.frequency = Hertz::mhz(10);
     let spi1 = Spi::new(
