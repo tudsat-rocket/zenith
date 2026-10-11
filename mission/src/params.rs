@@ -161,7 +161,8 @@ pub struct FailsafeParams {
 #[param_group(prefix = "MISC")]
 pub struct MiscParams {
     /// Duty cycle (percent, 0-100) of the buzzer PWM signal. A buzzer is loudest at 50%, other
-    /// values trade volume for a lower current draw. Values above 100 are clamped.
+    /// values trade volume for a lower current draw. Values above 100 are clamped,
+    /// 0 disables the buzzer.
     #[param(id = 0x0500, name = "BUZZ_VOL", default = 50)]
     pub buzzer_volume: u32,
 }

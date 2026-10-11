@@ -39,7 +39,7 @@ use sounds::mario::MARIO;
 
 /// Duty cycle of the PWM signal, in percent. Set from the `MISC_BUZZ_VOL`
 /// parameter via [`set_volume`]; the initial value only matters until the
-/// stored parameters have been loaded.
+/// stored parameters have been loaded. At 0, nothing is played at all.
 static VOLUME_PERCENT: AtomicU8 = AtomicU8::new(50);
 
 static STARTUP_TECH: [Note; 6] = [
@@ -193,6 +193,18 @@ async fn player(buzzer: (SimplePwm<'static, TIM2>, embassy_stm32::timer::Channel
             state.apply(COMMANDS.receive().await);
             continue;
         };
+
+        if VOLUME_PERCENT.load(Ordering::Relaxed) == 0 {
+            // Muted: drop one-shots, keep the alert loop armed until the next
+            // command, so it resumes once the volume has been raised again.
+            pwm.channel(channel).disable();
+            if playback.repeat {
+                state.apply(COMMANDS.receive().await);
+            } else {
+                state.finished(playback);
+            }
+            continue;
+        }
 
         'song: loop {
             for note in get_song_notes(playback.sound) {
