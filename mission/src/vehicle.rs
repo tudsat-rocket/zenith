@@ -11,8 +11,8 @@ use crate::inventory::{BinaryOutputId, InventoryId, ServoId};
 use crate::leds::LedState;
 use crate::mavlink::VehicleSnapshot;
 use crate::params::{
-    CalibrationParams, FailsafeParams, LoraParams, MiscParams, Params, PropulsionParams, QdParams,
-    StateMachineParams,
+    CalibrationParams, FailsafeParams, LORA_TX_POWER, LoraParams, MiscParams, Params,
+    PropulsionParams, QdParams, StateMachineParams,
 };
 use crate::servos::ServoController;
 use crate::tank_level::TankLevelEstimator;
@@ -32,6 +32,9 @@ pub struct Vehicle<S: Sensors, O: Outputs, F: Storage, B: Bus> {
     tank_level: TankLevelEstimator,
     misc_params: MiscParams,
     calibration_params: CalibrationParams,
+    lora_params: LoraParams,
+    /// Whether the downlink transmits at `LORA_TX_PWR_HI` rather than `LORA_TX_PWR`.
+    tx_power_armed: bool,
     pub sensors: S,
     pub outputs: O,
     pub storage: F,
@@ -67,6 +70,8 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             tank_level: TankLevelEstimator::new(params.tank_level),
             misc_params: params.misc,
             calibration_params: params.calibration,
+            lora_params: params.lora,
+            tx_power_armed: false,
             sensors,
             outputs,
             storage,
@@ -187,12 +192,13 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.flight_logic.set_mode(self.time, mode);
         self.valves.set_mode(mode, self.time);
 
-        // Camera outputs are turned on automatically, but are not automatically turned
-        // back off.
+        // Camera outputs and the armed transmit power are switched on automatically, but are not
+        // automatically switched back off.
         if mode >= FlightMode::DetectLaunch {
             self.bus_outputs.binary_output[BinaryOutputId::Camera1] = true;
             self.bus_outputs.binary_output[BinaryOutputId::Camera2] = true;
             self.bus_outputs.binary_output[BinaryOutputId::Camera3] = true;
+            self.tx_power_armed = true;
         }
     }
 
@@ -247,8 +253,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
             tank_level: self.tank_level.params().clone(),
             misc: self.misc_params.clone(),
             calibration: self.calibration_params.clone(),
-            // Only the LoRa link reads these, once at boot; the vehicle just persists them.
-            lora: LoraParams::default(),
+            lora: self.lora_params.clone(),
         };
 
         params.set(descriptor.id, value);
@@ -261,9 +266,24 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.tank_level.update_params(params.tank_level);
         self.misc_params = params.misc;
         self.calibration_params = params.calibration;
+        self.lora_params = params.lora;
         self.state_estimator.update_params(params.state_estimator);
 
+        // Whatever the mode, so the operator can bring the radio back down after arming.
+        if descriptor.id == LORA_TX_POWER {
+            self.tx_power_armed = false;
+        }
+
         self.storage.write_param(descriptor.id, value);
+    }
+
+    /// LoRa downlink transmit power in dBm. Clamping to the transceiver's range is the caller's job.
+    pub fn downlink_tx_power_dbm(&self) -> f32 {
+        if self.tx_power_armed {
+            self.lora_params.tx_power_armed
+        } else {
+            self.lora_params.tx_power
+        }
     }
 
     pub fn misc_params(&self) -> &MiscParams {

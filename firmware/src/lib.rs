@@ -50,6 +50,16 @@ pub type LoraVariant =
     lora_iv::BoundedWaits<GenericSx126xInterfaceVariant<Output<'static>, ExtiInput<'static>>>;
 pub type LoraTransceiver = Sx126x<OurSpiDevice<'static>, LoraVariant, Sx1262>;
 
+/// A transmit power for [`LoraTransceiver`], clamped to its output range, which the driver would
+/// otherwise clamp to silently.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "clamped to the transceiver's output range first"
+)]
+pub fn lora_tx_power(dbm: f32) -> i32 {
+    dbm.clamp(-9.0, 22.0) as i32
+}
+
 pub type Vehicle = mission::Vehicle<BoardSensors, BoardOutputs, storage::FlashStorage, BusHandler>;
 
 pub struct BoardSensors {

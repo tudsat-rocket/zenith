@@ -32,7 +32,6 @@ use telemetry::params::PendingParams;
 use telemetry::trx::receiver::{HoppingReceiver, UplinkStats};
 use telemetry::trx::transmitter::HoppingTransmitter;
 
-use crate::LoraTransceiver;
 use crate::Vehicle;
 use crate::can::{CanRxSubscriber, CanTxPublisher};
 use crate::links::UplinkCommand;
@@ -41,12 +40,13 @@ use crate::links::interfaces::{
     InterfaceRxSubscriber, InterfaceTx, InterfaceTxPublisher, InterfaceTxSubscriber,
 };
 use crate::storage::PARAM_STORE;
+use crate::{LoraTransceiver, lora_tx_power};
 use mission::params::LoraParams;
 
 type UplinkItem = (u16, Result<UplinkCommand, MavResult>);
 
 /// Intentionally capacity of 1 for downlink to avoid stale messages backing up.
-pub static DOWNLINK: StaticCell<Channel<CriticalSectionRawMutex, (u16, DownlinkMessage), 1>> =
+pub static DOWNLINK: StaticCell<Channel<CriticalSectionRawMutex, (u16, DownlinkMessage, i32), 1>> =
     StaticCell::new();
 pub static UPLINK: StaticCell<Channel<CriticalSectionRawMutex, UplinkItem, 5>> = StaticCell::new();
 
@@ -57,7 +57,7 @@ static UPLINK_STATS: Watch<CriticalSectionRawMutex, UplinkStats, 3> = Watch::new
 static TIME: Watch<CriticalSectionRawMutex, (Instant, u16), 3> = Watch::new();
 
 pub struct LoraHandle {
-    tx: Sender<'static, CriticalSectionRawMutex, (u16, DownlinkMessage), 1>,
+    tx: Sender<'static, CriticalSectionRawMutex, (u16, DownlinkMessage, i32), 1>,
     rx: Receiver<'static, CriticalSectionRawMutex, UplinkItem, 5>,
     time_sender: embassy_sync::watch::Sender<'static, CriticalSectionRawMutex, (Instant, u16), 3>,
     ack: CommandAck,
@@ -162,7 +162,8 @@ impl LoraHandle {
             return;
         };
 
-        let _ = self.tx.try_send((t as u16, msg));
+        let tx_power = lora_tx_power(vehicle.downlink_tx_power_dbm());
+        let _ = self.tx.try_send((t as u16, msg, tx_power));
     }
 }
 
@@ -171,7 +172,7 @@ async fn run_downlink(
     transmitter: HoppingTransmitter<
         LoraTransceiver,
         DownlinkMessage,
-        Receiver<'static, CriticalSectionRawMutex, (u16, DownlinkMessage), 1>,
+        Receiver<'static, CriticalSectionRawMutex, (u16, DownlinkMessage, i32), 1>,
     >,
 ) {
     transmitter.run_downlink().await;

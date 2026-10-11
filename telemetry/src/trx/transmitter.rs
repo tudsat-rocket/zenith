@@ -13,14 +13,16 @@ use crate::config::{FREQUENCIES, LinkConfig};
 use crate::messages::{DOWNLINK_PACKET_SIZE, DownlinkMessage, TelemetryMessage, UplinkMessage};
 use crate::trx::MAX_CONSECUTIVE_ERRORS;
 
-pub struct HoppingTransmitter<RK: RadioKind, M: TelemetryMessage, R: AnyReceiver<(u16, M)>> {
+pub struct HoppingTransmitter<RK: RadioKind, M: TelemetryMessage, R: AnyReceiver<(u16, M, i32)>> {
     radio: LoRa<RK, Delay>,
     config: LinkConfig,
     receiver: R,
     _msg: PhantomData<M>,
 }
 
-impl<RK: RadioKind, M: TelemetryMessage, R: AnyReceiver<(u16, M)>> HoppingTransmitter<RK, M, R> {
+impl<RK: RadioKind, M: TelemetryMessage, R: AnyReceiver<(u16, M, i32)>>
+    HoppingTransmitter<RK, M, R>
+{
     pub fn new(radio: LoRa<RK, Delay>, config: LinkConfig, receiver: R) -> Self {
         Self {
             radio,
@@ -100,16 +102,14 @@ impl<RK: RadioKind, M: TelemetryMessage, R: AnyReceiver<(u16, M)>> HoppingTransm
     }
 }
 
-impl<RK: RadioKind, R: AnyReceiver<(u16, DownlinkMessage)>>
+impl<RK: RadioKind, R: AnyReceiver<(u16, DownlinkMessage, i32)>>
     HoppingTransmitter<RK, DownlinkMessage, R>
 {
     pub async fn run_downlink(mut self) {
-        const TX_POWER: i32 = 10;
-
         let mut consecutive_errors = 0;
 
         loop {
-            let (time, msg) = self.receiver.anyreceive().await;
+            let (time, msg, tx_power) = self.receiver.anyreceive().await;
             #[allow(
                 clippy::unwrap_used,
                 reason = "message encodes into a buffer sized for the fixed packet layout, infallible"
@@ -118,24 +118,24 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, DownlinkMessage)>>
 
             let frequency = self.config.frequency(time);
 
-            self.transmit_or_reset(frequency, &bytes, TX_POWER, &mut consecutive_errors)
+            self.transmit_or_reset(frequency, &bytes, tx_power, &mut consecutive_errors)
                 .await;
         }
     }
 }
 
-impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage)>> HoppingTransmitter<RK, UplinkMessage, R> {
+impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage, i32)>>
+    HoppingTransmitter<RK, UplinkMessage, R>
+{
     pub async fn run_uplink<CONN: AnyReceiver<Option<(Instant, u16)>>>(
         mut self,
         mut connection_receiver: CONN,
     ) {
-        const TX_POWER: i32 = 22;
-
         let mut connection = None;
         let mut consecutive_errors = 0;
 
         loop {
-            let (seq, message) =
+            let (seq, message, tx_power) =
                 match select(self.receiver.anyreceive(), connection_receiver.anyreceive()).await {
                     Either::First(x) => x,
                     Either::Second(conn) => {
@@ -168,7 +168,7 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage)>> HoppingTransmitter<RK,
                     Timer::after(Duration::from_millis(target.wrapping_sub(t).into())).await;
 
                     let frequency = self.config.frequency(target);
-                    self.transmit_or_reset(frequency, &bytes, TX_POWER, &mut consecutive_errors)
+                    self.transmit_or_reset(frequency, &bytes, tx_power, &mut consecutive_errors)
                         .await;
                 }
             } else {
@@ -178,7 +178,7 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage)>> HoppingTransmitter<RK,
                     .zip(self.config.frequency_mask)
                     .filter_map(|(f, m)| m.then_some(*f))
                 {
-                    self.transmit_or_reset(frequency, &bytes, TX_POWER, &mut consecutive_errors)
+                    self.transmit_or_reset(frequency, &bytes, tx_power, &mut consecutive_errors)
                         .await;
                 }
             }

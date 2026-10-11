@@ -167,8 +167,9 @@ pub struct MiscParams {
     pub buzzer_volume: u32,
 }
 
-/// LoRa settings, including secrets. Exposed over MAVLink as `LORA_*`. Read once at boot, so a
-/// change takes effect on the next one. Ground station modems carry the same values as `GCS_*`.
+/// LoRa settings, including secrets. Exposed over MAVLink as `LORA_*`. Apart from the transmit
+/// powers, read once at boot, so a change takes effect on the next one. Ground station modems carry
+/// the same link values as `GCS_*`.
 #[derive(Debug, Clone, macros::ParameterGroup)]
 #[param_group(prefix = "LORA")]
 pub struct LoraParams {
@@ -180,7 +181,19 @@ pub struct LoraParams {
     /// it back as zeros.
     #[param(id = 0x0802..=0x0805, name = "KEY", default = [0, 0, 0, 0])]
     pub key: [u32; 4],
+    /// Downlink transmit power (dBm) until the vehicle arms. A write applies immediately, also
+    /// switching back from [`Self::tx_power_armed`] until the vehicle next enters an armed mode.
+    #[param(id = 0x0806, name = "TX_PWR", default = 10.0)]
+    pub tx_power: f32,
+    /// Downlink transmit power (dBm) switched to on every entry into an armed mode, including
+    /// transitions between them. Dropping out of the armed modes does not switch back.
+    #[param(id = 0x0807, name = "TX_PWR_HI", default = 22.0)]
+    pub tx_power_armed: f32,
 }
+
+/// Id of [`LoraParams::tx_power`], which the vehicle recognizes writes to. The attribute takes a
+/// literal, so this cannot be derived from the declaration.
+pub const LORA_TX_POWER: ParamId = ParamId::new(0x0806);
 
 /// Sensor offsets, exposed over MAVLink as `CAL_*`. Subtracted from the raw readings in the body
 /// frame (after each driver's axis remap) and in the reading's own unit, before anything else
@@ -478,6 +491,14 @@ impl<G: ParameterGroup + Send> ParamStore for SharedParams<G> {
 mod tests {
     use super::*;
     use crate::traits::BaroReading;
+
+    #[test]
+    fn lora_tx_power_id_matches() {
+        assert_eq!(
+            Params::by_id(LORA_TX_POWER.get()).unwrap().1.name,
+            "LORA_TX_PWR"
+        );
+    }
 
     #[test]
     fn registry_invariants() {

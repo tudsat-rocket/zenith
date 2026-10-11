@@ -60,7 +60,7 @@ const COMMAND_TIMEOUT: Duration = Duration::from_millis(2000);
 const UPLINK_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(500);
 
 static DOWNLINK: StaticCell<Channel<CriticalSectionRawMutex, Downlink, 5>> = StaticCell::new();
-static UPLINK: StaticCell<Channel<CriticalSectionRawMutex, (u16, UplinkMessage), 5>> =
+static UPLINK: StaticCell<Channel<CriticalSectionRawMutex, (u16, UplinkMessage, i32), 5>> =
     StaticCell::new();
 
 /// One wakeup of the GCS relay loop. Folds the two command streams, the physical ignition button
@@ -126,6 +126,7 @@ async fn main(low_priority_spawner: Spawner) {
             usb_rx,
             IGNITION_BUTTON.receiver().unwrap(),
             rx.sender(),
+            fw::lora_tx_power(gcs_params.tx_power),
             tx.sender(),
             COMMAND_ACK.receiver().unwrap(),
             led_yellow,
@@ -185,7 +186,7 @@ async fn run_uplink(
     transmitter: HoppingTransmitter<
         LoraTransceiver,
         UplinkMessage,
-        Receiver<'static, CriticalSectionRawMutex, (u16, UplinkMessage), 5>,
+        Receiver<'static, CriticalSectionRawMutex, (u16, UplinkMessage, i32), 5>,
     >,
     connection_receiver: embassy_sync::watch::Receiver<
         'static,
@@ -288,7 +289,8 @@ async fn join_uplink(
         bool,
         2,
     >,
-    tx: Sender<'static, CriticalSectionRawMutex, (u16, UplinkMessage), 5>,
+    tx: Sender<'static, CriticalSectionRawMutex, (u16, UplinkMessage, i32), 5>,
+    tx_power: i32,
     downlink_tx: Sender<'static, CriticalSectionRawMutex, Downlink, 5>,
     mut ack_rx: embassy_sync::watch::Receiver<'static, CriticalSectionRawMutex, CommandAck, 2>,
     mut led_activity: Output<'static>,
@@ -468,7 +470,7 @@ async fn join_uplink(
         }
 
         defmt::info!("Sending {} with seq={}", defmt::Debug2Format(&message), seq);
-        tx.send((seq, message)).await;
+        tx.send((seq, message, tx_power)).await;
         next_heartbeat = Instant::now() + UPLINK_HEARTBEAT_INTERVAL;
 
         led_activity.set_low();

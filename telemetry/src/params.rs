@@ -39,8 +39,8 @@ const ALL_PARAMS: u128 = !match u128::MAX.checked_shl(Params::PARAM_COUNT as u32
 #[derive(Debug, Default)]
 pub struct PendingParams(u128);
 
-/// The ground station modem's own link settings, exposed over MAVLink as `GCS_*`. They have to
-/// match the vehicle's `LORA_*`, and like those are read once at boot.
+/// The ground station modem's own link settings, exposed over MAVLink as `GCS_*`. The seed and key
+/// have to match the vehicle's `LORA_*`. All are read once at boot.
 #[derive(Debug, Clone, macros::ParameterGroup)]
 #[param_group(prefix = "GCS")]
 pub struct GcsParams {
@@ -50,6 +50,9 @@ pub struct GcsParams {
     /// Key authenticating every packet. See [`LoraParams::key`].
     #[param(id = 0x0902..=0x0905, name = "KEY", default = [0, 0, 0, 0])]
     pub key: [u32; 4],
+    /// Uplink transmit power (dBm)
+    #[param(id = 0x0906, name = "TX_PWR", default = 22.0)]
+    pub tx_power: f32,
 }
 
 /// What a receiver does about one request.
