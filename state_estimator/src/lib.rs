@@ -358,7 +358,7 @@ impl StateEstimator {
         // Update the Kalman filter with barometric altitude and world-space acceleration
         let altitude_baro = barometer
             .and_then(|a| (!a.is_nan()).then_some(a)) // NaN is not a valid altitude
-            .and_then(|a| (a > -100.0 && a < 12_000.0).then_some(a)); // neither is -13000
+            .and_then(|a| (a > -1000.0 && a < 12_000.0).then_some(a)); // neither is -13000
         let accel = self
             .acceleration_world
             .and_then(|a| (!(a.x.is_nan() || a.y.is_nan() || a.z.is_nan())).then_some(a));
