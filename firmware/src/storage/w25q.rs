@@ -18,6 +18,7 @@ use defmt::*;
 
 pub const PAGE_SIZE: u32 = 256;
 pub const SECTOR_SIZE: u32 = 4096;
+const BLOCK_SIZE: u32 = 0x1_0000;
 
 const JEDEC_MANUFACTURER: u8 = 0xef; // Winbond
 
@@ -27,9 +28,10 @@ const OP_JEDEC_ID: u8 = 0x9f;
 
 const STATUS_BUSY: u8 = 0x01;
 
-// Datasheet maxima are 3ms (page program) and 400ms (sector erase)
+// Datasheet maxima are 3ms (page program), 400ms (sector erase) and 2000ms (64 KiB block erase)
 const PAGE_PROGRAM_TIMEOUT: Duration = Duration::from_millis(10);
 const SECTOR_ERASE_TIMEOUT: Duration = Duration::from_millis(1000);
+const BLOCK_ERASE_TIMEOUT: Duration = Duration::from_millis(4000);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Format)]
 pub enum FlashError {
@@ -116,6 +118,13 @@ impl AddressWidth {
         match self {
             AddressWidth::Three => 0x20,
             AddressWidth::Four => 0x21,
+        }
+    }
+
+    fn block_erase(self) -> u8 {
+        match self {
+            AddressWidth::Three => 0xd8,
+            AddressWidth::Four => 0xdc,
         }
     }
 }
@@ -321,18 +330,27 @@ impl<SPI: SpiDevice<u8>> NorFlash for W25Q<SPI> {
             return Err(FlashError::OutOfBounds);
         }
 
+        // Whole 64 KiB blocks erase far faster than their 16 sectors one by one.
         let mut address = from;
         while address < to {
+            let (opcode, size, timeout) = if address % BLOCK_SIZE == 0 && to - address >= BLOCK_SIZE
+            {
+                let opcode = self.address_width.block_erase();
+                (opcode, BLOCK_SIZE, BLOCK_ERASE_TIMEOUT)
+            } else {
+                let opcode = self.address_width.sector_erase();
+                (opcode, SECTOR_SIZE, SECTOR_ERASE_TIMEOUT)
+            };
+
             self.write_enable().await?;
-            let command = self.command(self.address_width.sector_erase(), address);
+            let command = self.command(opcode, address);
             self.spi
                 .write(command.bytes())
                 .await
                 .map_err(|_| FlashError::Spi)?;
-            self.wait_idle(Duration::from_millis(1), SECTOR_ERASE_TIMEOUT)
-                .await?;
+            self.wait_idle(Duration::from_millis(1), timeout).await?;
 
-            address += SECTOR_SIZE;
+            address += size;
         }
 
         Ok(())
