@@ -206,8 +206,8 @@ impl DownlinkMessage {
     /// the receiver has to know when to expect a packet in order to follow the hopping sequence,
     /// and it infers packet loss from the packets that fail to arrive, so we leave no gaps.
     ///
-    /// The pattern is otherwise fixed, except for the one slot the ground side gives back once
-    /// the umbilical is gone.
+    /// The pattern is otherwise fixed, except for the two slots that change hands once the
+    /// umbilical is gone.
     ///
     /// `param_values` is only called for the slots parameters may take from the heartbeat, which
     /// keeps them if it returns `None`.
@@ -230,28 +230,35 @@ impl DownlinkMessage {
 
         // The packed messages repeat over each half of the cycle, so the GPS, external pressure,
         // valve current and error counter slots are paid for out of the heartbeat's share alone.
-        // Status changes slowest, so its second slot goes to the batteries instead.
+        // Status changes slowest, so its second slot goes to the batteries instead. The heartbeat
+        // sits on every fourth slot, so it arrives at a steady 128 ms on the ground, and every
+        // 256 ms while parameters take half of those slots.
         Some(match slot {
             1 | 9 => Self::Pressures(PressuresMessage::pack(snapshot)),
+            2 | 10 => Self::Sensors(SensorsMessage::pack(snapshot)),
             3 | 11 => Self::Components(ComponentsMessage::pack(snapshot)),
             5 => Self::Status(StatusMessage::pack((snapshot, uplink))),
             13 => Self::Battery(BatteryMessage::pack(snapshot)),
-            7 | 15 => Self::Sensors(SensorsMessage::pack(snapshot)),
             // The umbilical is severed at liftoff, so the ground side hands its slot back.
             6 if snapshot.mode < FlightMode::Burn => {
                 Self::ExternalPressures(ExternalPressuresMessage::pack(snapshot))
             }
-            14 => Self::Gps(GpsMessage::pack(snapshot)),
-            8 => Self::ValveCurrents(ValveCurrentsMessage::pack(snapshot)),
+            // Valve currents only matter while the valves are worked from the ground. In flight
+            // the slot doubles the GPS rate, which recovery depends on once the link is at its
+            // weakest, with the rocket on the ground.
+            15 if snapshot.mode < FlightMode::Burn => {
+                Self::ValveCurrents(ValveCurrentsMessage::pack(snapshot))
+            }
+            7 | 15 => Self::Gps(GpsMessage::pack(snapshot)),
             #[allow(
                 clippy::arithmetic_side_effects,
                 reason = "DOWNLINK_MESSAGE_INTERVAL_MS and SLOT_COUNT are nonzero constants"
             )]
-            12 => Self::ComponentStatus(ComponentStatusMessage::pack((
+            14 => Self::ComponentStatus(ComponentStatusMessage::pack((
                 snapshot,
                 time_ms / (DOWNLINK_MESSAGE_INTERVAL_MS * Self::SLOT_COUNT),
             ))),
-            2 | 10 => match param_values() {
+            4 | 12 => match param_values() {
                 Some(values) => Self::ParamValues(values),
                 None => Self::Heartbeat(HeartbeatMessage::pack((snapshot, ack))),
             },
@@ -669,8 +676,8 @@ pub(crate) mod tests {
     }
 
     /// One packet per interval, no gaps, and the slot pattern the module documents. Walked in
-    /// both a pre- and a post-liftoff mode, since slot 6 changes hands between them, and with and
-    /// without parameter values waiting.
+    /// both a pre- and a post-liftoff mode, since slots 6 and 15 change hands between them, and
+    /// with and without parameter values waiting.
     #[test]
     fn the_slot_pattern_repeats_and_leaves_no_gaps() {
         let modes = [FlightMode::Idle, FlightMode::Ignite, FlightMode::Burn];
@@ -696,15 +703,15 @@ pub(crate) mod tests {
                 let slot = (time_ms / DOWNLINK_MESSAGE_INTERVAL_MS) % DownlinkMessage::SLOT_COUNT;
                 let expected = match slot {
                     1 | 9 => PressuresMessage::ID,
+                    2 | 10 => SensorsMessage::ID,
                     3 | 11 => ComponentsMessage::ID,
                     5 => StatusMessage::ID,
                     13 => BatteryMessage::ID,
-                    7 | 15 => SensorsMessage::ID,
                     6 if mode < FlightMode::Burn => ExternalPressuresMessage::ID,
-                    14 => GpsMessage::ID,
-                    8 => ValveCurrentsMessage::ID,
-                    12 => ComponentStatusMessage::ID,
-                    2 | 10 if params_pending => ParamValuesMessage::ID,
+                    15 if mode < FlightMode::Burn => ValveCurrentsMessage::ID,
+                    7 | 15 => GpsMessage::ID,
+                    14 => ComponentStatusMessage::ID,
+                    4 | 12 if params_pending => ParamValuesMessage::ID,
                     _ => HeartbeatMessage::ID,
                 };
 
