@@ -32,6 +32,8 @@ const STATUS_BUSY: u8 = 0x01;
 const PAGE_PROGRAM_TIMEOUT: Duration = Duration::from_millis(10);
 const SECTOR_ERASE_TIMEOUT: Duration = Duration::from_millis(1000);
 const BLOCK_ERASE_TIMEOUT: Duration = Duration::from_millis(4000);
+// Must stay well under the 4 s boot watchdog
+const RESET_BUSY_TIMEOUT: Duration = Duration::from_millis(2500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Format)]
 pub enum FlashError {
@@ -155,9 +157,12 @@ impl<SPI: SpiDevice<u8>> W25Q<SPI> {
     }
 
     /// Identifies the part from its JEDEC id and records the geometry the rest of the driver works
-    /// from. Retried a few times because the chip may still be leaving power-on reset when we first
-    /// get here.
+    /// from. Waits out an erase/program that survived an MCU reset, then retries a few times
+    /// because the chip may still be leaving power-on reset when we first get here.
     pub async fn probe(&mut self) -> Result<(), FlashError> {
+        self.wait_idle(Duration::from_millis(1), RESET_BUSY_TIMEOUT)
+            .await?;
+
         let mut id = (0, 0, 0);
 
         for _i in 0..3 {
