@@ -311,7 +311,7 @@ async fn run_uplink(
             let frame_result = unsafe { mavio::Frame::deserialize(&mavlink_buffer) };
             match frame_result {
                 Ok(frame) => {
-                    publisher.publish(frame).await;
+                    publisher.publish_immediate(frame);
                     mavlink_buffer.truncate(0);
                 }
                 Err(FrameError::FrameBufferIsTooSmall { .. }) => {}

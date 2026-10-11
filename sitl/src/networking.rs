@@ -186,7 +186,7 @@ async fn run_socket(
                 let frame_result = unsafe { mavio::Frame::deserialize(&mavlink_buffer) };
                 match frame_result {
                     Ok(frame) => {
-                        publisher.publish(frame).await;
+                        publisher.publish_immediate(frame);
                         mavlink_buffer.clear();
                     }
                     Err(FrameError::FrameBufferIsTooSmall { .. }) => {}
