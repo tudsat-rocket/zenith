@@ -174,8 +174,15 @@ impl GPS {
             return;
         }
 
-        let segments: Vec<&str, 32> = line.split(',').collect();
-        if segments.len() < 15 {
+        // GGA has exactly 15 fields; more means a corrupted line terminator merged it with the next
+        // sentence
+        let mut fields = line.split(',');
+        let mut segments = [""; 15];
+        for s in &mut segments {
+            let Some(f) = fields.next() else { return };
+            *s = f;
+        }
+        if fields.next().is_some() {
             return;
         }
 
