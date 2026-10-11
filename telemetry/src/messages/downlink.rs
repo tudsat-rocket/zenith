@@ -364,11 +364,12 @@ impl TelemetryMessage for DownlinkMessage {
                 sender.anysend(Downlink::from_self(v)).await;
             }
             Self::Status(inner) => {
-                let (sys, radio, time, version) = inner.unpack(context);
+                let (sys, radio, time, version, storage) = inner.unpack(context);
                 sender.anysend(Downlink::from_self(sys)).await;
                 sender.anysend(Downlink::from_self(radio)).await;
                 sender.anysend(Downlink::from_self(time)).await;
                 sender.anysend(Downlink::from_self(version)).await;
+                sender.anysend(Downlink::from_self(storage)).await;
             }
             Self::Pressures(inner) => {
                 for vessel in inner.unpack(context) {

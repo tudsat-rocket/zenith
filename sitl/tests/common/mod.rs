@@ -124,7 +124,7 @@ impl Harness {
     }
 
     /// One 1ms step of sim and vehicle, mirroring the order of the sitl main loop.
-    async fn tick(&mut self) {
+    pub async fn tick(&mut self) {
         self.tick_sim();
         if self.uplink_connected {
             self.vehicle.note_uplink();

@@ -61,6 +61,7 @@ impl Links {
                     rx: can.1,
                     enabled_at_boot: false,
                 }),
+                serve_log: true,
             },
             low_priority_spawner,
         );

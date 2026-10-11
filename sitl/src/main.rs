@@ -113,6 +113,13 @@ async fn main_loop(mut vehicle: Vehicle, mut links: Links, sim: SharedSimulation
                         }
                     }
                 }
+                UplinkCommand::EraseLog => {
+                    if vehicle.erase_log() {
+                        MavResult::Accepted
+                    } else {
+                        MavResult::Denied
+                    }
+                }
                 #[cfg(feature = "hybrid")]
                 UplinkCommand::CommandValve(valve, valve_cmd) => {
                     match vehicle.try_command_valve(valve, valve_cmd) {

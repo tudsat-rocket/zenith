@@ -68,6 +68,7 @@ async fn main(low_priority_spawner: Spawner) {
                 rx: can1_rx.subscriber().unwrap(),
                 enabled_at_boot: true,
             }),
+            serve_log: false,
         },
         low_priority_spawner,
     );

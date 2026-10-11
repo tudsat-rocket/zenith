@@ -92,6 +92,7 @@ async fn main(low_priority_spawner: Spawner) {
         EthernetConfig {
             system_id: GCS_SYSTEM_ID,
             can: None,
+            serve_log: false,
         },
         low_priority_spawner,
     );
@@ -380,6 +381,8 @@ async fn join_uplink(
                     UplinkCommand::RequestParams { first, mask } => {
                         UplinkMessage::ParamRequest(ParamRequestMessage { first, mask })
                     }
+                    // Every status packet already turns into a STORAGE_INFORMATION here.
+                    UplinkCommand::RequestStorageInformation(_) => continue,
                     // None of these carry a command id today, so there is nothing to ack; the
                     // rejection is still reported if one ever gains one.
                     unsupported => {

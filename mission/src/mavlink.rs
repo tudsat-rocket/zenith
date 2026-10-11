@@ -17,15 +17,18 @@ use rapid_dialect::rapid::enums::{
 use rapid_dialect::rapid::messages::{
     Attitude, AutopilotVersion, BatteryStatus, DebugFloatArray, GlobalPositionInt, GpsRawInt,
     Heartbeat, LocalPositionNed, PressureVessel, RocketInfo, ScaledImu, ScaledImu2, ScaledImu3,
-    ScaledPressure, ScaledPressure2, ScaledPressure3, ServoOutputRaw, SysStatus, Valve, VfrHud,
+    ScaledPressure, ScaledPressure2, ScaledPressure3, ServoOutputRaw, StorageInformation,
+    SysStatus, Valve, VfrHud,
 };
 
 use state_estimator::StateEstimator;
 
 use crate::TelemetryLink;
 use crate::bus::{BusInputImage, BusOutputImage, NodeStatus, ValveState};
+use crate::flight_log::{LOG_STATUS, LOG_USAGE, LogState};
 use crate::inventory::{
-    InventoryId, OxProbeId, PowerBoardId, ServoMap, TankId, ValveId, valve_is_heated,
+    EXTERNAL_VALVES, INTERNAL_VALVES, InventoryId, OxProbeId, PowerBoardId, ServoMap, TankId,
+    ValveId, valve_is_heated,
 };
 use crate::params::StateMachineParams;
 use crate::schedule::downlink_schedule;
@@ -75,10 +78,64 @@ impl VehicleSnapshot<'_> {
             every 200 ms => BatteryStatus[BATTERY_SOURCES], LocalPositionNed,
                 ScaledPressure, ScaledPressure2, ScaledPressure3;
             every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt, DebugFloatArray;
-            every 2000 ms => RocketInfo, AutopilotVersion;
+            every 2000 ms => RocketInfo, AutopilotVersion, StorageInformation;
             // One message per component
             every 200 ms => PressureVessel[TankId::ALL], Valve[ValveId::ALL], ServoOutputRaw;
             every 1000 ms => Heartbeat[crate::bus::IO_NODE_IDS], SysStatus[crate::bus::IO_NODE_IDS];
+        }
+    }
+
+    /// What goes into the on-board flight log, by flight mode. Its own schedule, independent of
+    /// [`Self::send_telemetry`]'s: at most one message per tick each.
+    ///
+    /// The primary IMU and baro (the state estimator's inputs) share one rate, the secondary ones
+    /// another. The IO boards broadcast sensors every 50 ms and valve positions every 200 ms, so
+    /// tanks and valves are sampled at least twice as often to catch every update despite the
+    /// jitter.
+    /// Nothing is logged on the pad before arming.
+    pub fn send_log(&self, link: &mut impl TelemetryLink) {
+        match self.mode {
+            FlightMode::Burn
+            | FlightMode::Coast
+            | FlightMode::DeployDrogue
+            | FlightMode::DeployMain => {
+                downlink_schedule! { self.time.0, self, link:
+                    every 10 ms => ScaledImu, ScaledPressure;
+                    every 20 ms => ScaledImu2, ScaledImu3, ScaledPressure2, ScaledPressure3,
+                        Attitude, PressureVessel[TankId::INTERNAL];
+                    every 100 ms => Valve[INTERNAL_VALVES], VfrHud, LocalPositionNed;
+                    every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt,
+                        BatteryStatus[BATTERY_SOURCES], DebugFloatArray;
+                }
+            }
+            FlightMode::DetectLaunch | FlightMode::Ignite | FlightMode::Pressurize => {
+                downlink_schedule! { self.time.0, self, link:
+                    every 20 ms => PressureVessel[TankId::INTERNAL];
+                    every 50 ms => ScaledImu, ScaledPressure, Attitude;
+                    every 100 ms => ScaledImu2, ScaledImu3, ScaledPressure2, ScaledPressure3,
+                        VfrHud, LocalPositionNed, Valve[INTERNAL_VALVES];
+                    every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt,
+                        BatteryStatus[BATTERY_SOURCES], DebugFloatArray;
+                    every 1000 ms => PressureVessel[TankId::EXTERNAL], Valve[EXTERNAL_VALVES],
+                        Heartbeat[crate::bus::IO_NODE_IDS];
+                }
+            }
+            // Slow, but kept up for as long as the batteries last: leaks, battery decay and
+            // where the vehicle came down.
+            FlightMode::Landed => {
+                downlink_schedule! { self.time.0, self, link:
+                    every 1000 ms => PressureVessel[TankId::INTERNAL], Valve[INTERNAL_VALVES],
+                        BatteryStatus[BATTERY_SOURCES], GlobalPositionInt, GpsRawInt, SysStatus,
+                        Heartbeat, ScaledPressure, ScaledImu, DebugFloatArray;
+                }
+            }
+            FlightMode::Idle
+            | FlightMode::FillPressurant
+            | FlightMode::FillOxidizer
+            | FlightMode::Vent
+            | FlightMode::Disconnect
+            | FlightMode::Retract
+            | FlightMode::Hold => {}
         }
     }
 
@@ -467,7 +524,7 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
         let r = &self.readings;
 
         let hw_armed = self.is_physically_armed();
-        let armed = self.mode >= FlightMode::DetectLaunch;
+        let log = LOG_STATUS.get();
 
         // All sensors/subsystems physically present on the board.
         let present = MavSysStatusSensor::_3D_GYRO
@@ -488,9 +545,10 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
         let outputs_armed = self.input_image.nodes_armed != crate::bus::NodeSet::NONE;
 
         let mut enabled = present;
-        if !armed {
-            enabled -= MavSysStatusSensor::MAV_SYS_STATUS_LOGGING;
-        }
+        enabled.set(
+            MavSysStatusSensor::MAV_SYS_STATUS_LOGGING,
+            matches!(log, LogState::Logging | LogState::Degraded),
+        );
         if !outputs_armed {
             enabled -= MavSysStatusSensor::MOTOR_OUTPUTS;
         }
@@ -508,8 +566,6 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
             .as_ref()
             .is_some_and(|g| self.state_estimator.gps_reliable(g));
 
-        // There is no flight log yet, so the flash's health stands in for it.
-        let logging = armed && crate::health::STORAGE_ERRORS.get() == 0;
         let health = [
             (gyros, MavSysStatusSensor::_3D_GYRO),
             (accels, MavSysStatusSensor::_3D_ACCEL),
@@ -518,7 +574,10 @@ impl Into<SysStatus> for &VehicleSnapshot<'_> {
             (r.gps.is_some(), MavSysStatusSensor::GPS),
             (ahrs, MavSysStatusSensor::MAV_SYS_STATUS_AHRS),
             (r.power.is_some(), MavSysStatusSensor::BATTERY),
-            (logging, MavSysStatusSensor::MAV_SYS_STATUS_LOGGING),
+            (
+                log == LogState::Logging,
+                MavSysStatusSensor::MAV_SYS_STATUS_LOGGING,
+            ),
             (outputs_armed, MavSysStatusSensor::MOTOR_OUTPUTS),
             (
                 gyros && accels && baros && ahrs && gps_reliable,
@@ -581,6 +640,12 @@ impl Into<RocketInfo> for &VehicleSnapshot<'_> {
             propulsion_type: rapid_dialect::rapid::enums::PropulsionType::Hybrid,
             capability_flags: RocketCapability::default(),
         }
+    }
+}
+
+impl Into<StorageInformation> for &VehicleSnapshot<'_> {
+    fn into(self) -> StorageInformation {
+        links::protocols::log::storage_information(self.time.0, LOG_USAGE.get())
     }
 }
 

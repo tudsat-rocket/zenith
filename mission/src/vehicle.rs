@@ -262,6 +262,16 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         &self.misc_params
     }
 
+    /// Erases the flight log, unless armed or in flight. Returns whether it did.
+    pub fn erase_log(&mut self) -> bool {
+        if self.mode >= FlightMode::DetectLaunch {
+            log::warn!("Refusing to erase the flight log in {:?}", self.mode);
+            return false;
+        }
+        self.storage.erase_log();
+        true
+    }
+
     pub fn snapshot(&self) -> VehicleSnapshot<'_> {
         VehicleSnapshot {
             time: self.time,

@@ -16,6 +16,9 @@ embassy-futures = { workspace = true }
 embassy-sync = { workspace = true }
 
 log = { workspace = true }
+lz4_flex = { version = "0.14.0", default-features = false, features = ["safe-encode", "safe-decode"] }
+crc = "3"
+embedded-storage-async = { workspace = true }
 
 # Only for the MCU reset behind PREFLIGHT_REBOOT_SHUTDOWN; the host/SITL build has no use for it.
 [target.'cfg(target_os = "none")'.dependencies]

@@ -249,6 +249,24 @@ impl InventoryId<9> for ValveId {
     }
 }
 
+/// Valves on the vehicle, in [`ValveId::ALL`] order. Free consts rather than associated ones, as
+/// `ValveId` belongs to the dialect.
+pub const INTERNAL_VALVES: [ValveId; 5] = [
+    ValveId::PressurantVent,
+    ValveId::Pressurization,
+    ValveId::OxidizerVent,
+    ValveId::OxidizerFill,
+    ValveId::Main,
+];
+
+/// Valves on the ground side of the umbilical, in [`ValveId::ALL`] order.
+pub const EXTERNAL_VALVES: [ValveId; 4] = [
+    ValveId::ExternalPressurantFill,
+    ValveId::ExternalOxidizerFill,
+    ValveId::ExternalPressurantVent,
+    ValveId::ExternalOxidizerVent,
+];
+
 /// Whether the valve has a heater and temperature sensor.
 pub const fn valve_is_heated(valve: ValveId) -> bool {
     matches!(valve, ValveId::OxidizerVent)
@@ -392,6 +410,9 @@ impl InventoryId<6> for TankId {
 /// has to be a prefix of `ALL` and `EXTERNAL` the rest of it.
 macro_rules! assert_partitioned {
     ($id:ty, $n:literal) => {
+        assert_partitioned!($id, $n, <$id>::INTERNAL, <$id>::EXTERNAL);
+    };
+    ($id:ty, $n:literal, $internal:expr, $external:expr) => {
         #[allow(
             clippy::indexing_slicing,
             clippy::arithmetic_side_effects,
@@ -399,17 +420,19 @@ macro_rules! assert_partitioned {
         )]
         const _: () = {
             let all = <$id as InventoryId<$n>>::ALL;
-            assert!(<$id>::INTERNAL.len() + <$id>::EXTERNAL.len() == all.len());
+            let internal = $internal;
+            let external = $external;
+            assert!(internal.len() + external.len() == all.len());
 
             let mut i = 0;
-            while i < <$id>::INTERNAL.len() {
-                assert!(<$id>::INTERNAL[i] as usize == all[i] as usize);
+            while i < internal.len() {
+                assert!(internal[i] as usize == all[i] as usize);
                 i += 1;
             }
 
             let mut i = 0;
-            while i < <$id>::EXTERNAL.len() {
-                assert!(<$id>::EXTERNAL[i] as usize == all[<$id>::INTERNAL.len() + i] as usize);
+            while i < external.len() {
+                assert!(external[i] as usize == all[internal.len() + i] as usize);
                 i += 1;
             }
         };
@@ -418,6 +441,7 @@ macro_rules! assert_partitioned {
 
 assert_partitioned!(PressSensId, 10);
 assert_partitioned!(TankId, 6);
+assert_partitioned!(ValveId, 9, INTERNAL_VALVES, EXTERNAL_VALVES);
 
 impl<I, T: Clone, const N: usize> Clone for InventoryMap<I, T, N> {
     fn clone(&self) -> Self {

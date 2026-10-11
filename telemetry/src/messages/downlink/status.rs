@@ -1,8 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+use links::protocols::log::{StorageUsage, storage_information};
+use mission::flight_log::LOG_USAGE;
 use mission::mavlink::{VehicleSnapshot, autopilot_version};
 use rapid_dialect::rapid::enums::{MavSysStatusSensor, MavSysStatusSensorExtended};
-use rapid_dialect::rapid::messages::{AutopilotVersion, RadioStatus, SysStatus, SystemTime};
+use rapid_dialect::rapid::messages::{
+    AutopilotVersion, RadioStatus, StorageInformation, SysStatus, SystemTime,
+};
 
 use super::component_status::set_error_counts;
 use super::{ConnectionContext, DownlinkTelemetryMessage, UNKNOWN};
@@ -29,6 +33,14 @@ const RECOVERY_SYSTEM_BIT: usize = TELEMETERED_SENSORS.len();
 /// 0 - 25.5 V for 8 bits
 const BATTERY_MV_PER_CODE: u16 = 100;
 
+/// The log usage byte: the capacity as a power of two MiB in the top bits, how full it is in
+/// 31sts below.
+const LOG_CAPACITY_SHIFT: u8 = 5;
+const LOG_FILL_MAX: u8 = (1 << LOG_CAPACITY_SHIFT) - 1;
+/// A capacity exponent no flash has, for no usable flash at all.
+const LOG_NO_STORAGE: u8 = u8::MAX >> LOG_CAPACITY_SHIFT;
+const MIB: u32 = 1024 * 1024;
+
 /// Vehicle health and link quality.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatusMessage {
@@ -48,13 +60,20 @@ pub struct StatusMessage {
     /// The bits above the time bits in the header, which together give us the full time since boot.
     #[serde(with = "postcard::fixint::le")]
     absolute_time: u16,
-    reserved: u8,
+    /// The flight log's flash usage, see [`pack_log_usage`].
+    log_usage: u8,
 }
 
 impl DownlinkTelemetryMessage for StatusMessage {
     const ID: u8 = 0x02;
     type Input<'a> = (&'a VehicleSnapshot<'a>, RadioStatus);
-    type Output = (SysStatus, RadioStatus, SystemTime, AutopilotVersion);
+    type Output = (
+        SysStatus,
+        RadioStatus,
+        SystemTime,
+        AutopilotVersion,
+        StorageInformation,
+    );
 
     fn pack((snapshot, radio_status): Self::Input<'_>) -> Self {
         let sys_status: SysStatus = snapshot.into();
@@ -79,7 +98,7 @@ impl DownlinkTelemetryMessage for StatusMessage {
             uplink_packet_loss: radio_status.fixed as u8,
             uplink_rssi: radio_status.remrssi,
             uplink_noise: radio_status.remnoise,
-            reserved: 0,
+            log_usage: pack_log_usage(LOG_USAGE.get()),
         }
     }
 
@@ -128,7 +147,15 @@ impl DownlinkTelemetryMessage for StatusMessage {
             time_unix_usec: 0,
         };
 
-        (sys_status, radio_status, system_time, autopilot_version())
+        let storage = storage_information(context.time, unpack_log_usage(self.log_usage));
+
+        (
+            sys_status,
+            radio_status,
+            system_time,
+            autopilot_version(),
+            storage,
+        )
     }
 }
 
@@ -146,6 +173,43 @@ fn pack_sensors(base: MavSysStatusSensor, extended: MavSysStatusSensorExtended) 
     }
 
     bits
+}
+
+/// Squeezes the log usage into a byte. The capacity comes back rounded up to a power of two MiB,
+/// which every W25Q is (less the param region), and the fill is rounded up so that an empty log is
+/// the only one that reads as empty.
+fn pack_log_usage(usage: Option<StorageUsage>) -> u8 {
+    let Some(StorageUsage { total, used }) = usage else {
+        return LOG_NO_STORAGE << LOG_CAPACITY_SHIFT;
+    };
+    let capacity = total.max(MIB).next_power_of_two();
+    let exponent = (capacity / MIB).trailing_zeros() as u8;
+    if exponent >= LOG_NO_STORAGE {
+        return LOG_NO_STORAGE << LOG_CAPACITY_SHIFT;
+    }
+
+    let fill = (u64::from(used).saturating_mul(u64::from(LOG_FILL_MAX)))
+        .div_ceil(u64::from(total))
+        .min(u64::from(LOG_FILL_MAX)) as u8;
+    (exponent << LOG_CAPACITY_SHIFT) | fill
+}
+
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "the exponent is at most 6 and LOG_FILL_MAX is a nonzero constant"
+)]
+fn unpack_log_usage(code: u8) -> Option<StorageUsage> {
+    let exponent = code >> LOG_CAPACITY_SHIFT;
+    if exponent == LOG_NO_STORAGE {
+        return None;
+    }
+    let total = MIB << exponent;
+    let used =
+        u64::from(total).saturating_mul(u64::from(code & LOG_FILL_MAX)) / u64::from(LOG_FILL_MAX);
+    Some(StorageUsage {
+        total,
+        used: used as u32,
+    })
 }
 
 fn unpack_sensors(bits: u16) -> (MavSysStatusSensor, MavSysStatusSensorExtended) {
@@ -202,7 +266,7 @@ mod tests {
         let mut context = ConnectionContext::init(BOOT_MS as u16);
         assert_ne!(context.time, BOOT_MS);
 
-        let (_, _, system_time, _) = decoded.unpack(&mut context);
+        let (_, _, system_time, _, _) = decoded.unpack(&mut context);
 
         assert_eq!(context.time, BOOT_MS);
         assert_eq!(system_time.time_boot_ms, BOOT_MS);
@@ -252,7 +316,7 @@ mod tests {
         let DownlinkMessage::Status(decoded) = through_packet(msg) else {
             panic!("decoded as the wrong message")
         };
-        let (received, _, _, _) = decoded.unpack(&mut ConnectionContext::init(0));
+        let (received, _, _, _, _) = decoded.unpack(&mut ConnectionContext::init(0));
 
         assert_eq!(
             received.onboard_control_sensors_present,
@@ -281,8 +345,36 @@ mod tests {
         let snapshot = parts.snapshot();
 
         let msg = StatusMessage::pack((&snapshot, RadioStatus::default()));
-        let (sys_status, _, _, _) = msg.unpack(&mut ConnectionContext::init(0));
+        let (sys_status, _, _, _, _) = msg.unpack(&mut ConnectionContext::init(0));
 
         assert_eq!(sys_status.voltage_battery, u16::MAX);
+    }
+
+    #[test]
+    fn log_usage_survives_its_byte() {
+        const REGION: u32 = 16 * MIB - 64 * 1024;
+
+        assert_eq!(unpack_log_usage(pack_log_usage(None)), None);
+
+        for used in [0, 1, REGION / 3, REGION - 1, REGION] {
+            let usage = unpack_log_usage(pack_log_usage(Some(StorageUsage {
+                total: REGION,
+                used,
+            })))
+            .expect("a flash came back as none");
+
+            assert_eq!(usage.total, 16 * MIB);
+            assert_eq!(usage.used == 0, used == 0, "{used} bytes");
+            assert!(
+                usage.used.abs_diff(used) <= usage.total / u32::from(LOG_FILL_MAX) + 64 * 1024,
+                "{used} bytes came back as {}",
+                usage.used
+            );
+        }
+
+        for total in [MIB, 64 * MIB] {
+            let usage = unpack_log_usage(pack_log_usage(Some(StorageUsage { total, used: total })));
+            assert_eq!(usage, Some(StorageUsage { total, used: total }));
+        }
     }
 }

@@ -11,7 +11,9 @@ use embassy_sync::watch::Sender;
 use embassy_time::{Duration, Instant, Timer};
 
 use rapid_dialect::rapid::enums::{MavCmd, MavResult, TuneFormat, ValveId};
-use rapid_dialect::rapid::messages::{AvailableModes, CommandAck, CommandLong, SupportedTunes};
+use rapid_dialect::rapid::messages::{
+    AvailableModes, CommandAck, CommandLong, StorageInformation, SupportedTunes,
+};
 use rapid_dialect::{FlightMode, Rapid, ValveCommand};
 
 use crate::protocols::link_quality::LinkQuality;
@@ -137,6 +139,14 @@ pub async fn run(
                                     .into(),
                                 )
                                 .await;
+                                MavResult::Accepted
+                            }
+                            StorageInformation::ID => {
+                                cmd_tx
+                                    .publish(UplinkCommand::RequestStorageInformation(
+                                        cmd.param2 as u8,
+                                    ))
+                                    .await;
                                 MavResult::Accepted
                             }
                             _ => MavResult::Denied,

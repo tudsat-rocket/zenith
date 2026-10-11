@@ -73,4 +73,5 @@ pub trait TelemetryLink {
 pub trait Storage {
     fn read_params(&mut self) -> Option<Params>;
     fn write_param(&mut self, id: ParamId, value: ParamValue);
+    fn erase_log(&mut self);
 }

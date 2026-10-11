@@ -3,6 +3,7 @@
 
 pub mod bus;
 pub mod cpu;
+pub mod flight_log;
 pub mod flight_logic;
 pub mod health;
 pub mod inventory;

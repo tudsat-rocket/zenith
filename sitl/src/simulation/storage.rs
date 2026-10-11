@@ -38,4 +38,7 @@ impl Storage for MemoryStorage {
         params.set(id, value);
         self.stored = Some(params);
     }
+
+    /// The SITL keeps no flight log.
+    fn erase_log(&mut self) {}
 }

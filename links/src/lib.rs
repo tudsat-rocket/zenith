@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(async_fn_in_trait)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -12,6 +13,7 @@ use rapid_dialect::rapid::enums::{MavCmd, MavResult, ValveId};
 use rapid_dialect::rapid::messages::CommandAck;
 use rapid_dialect::{FlightMode, Rapid, ValveCommand};
 
+pub mod log;
 pub mod protocols;
 
 /// The MAVLink component the flight computer speaks as. Also the io boards' `master_node_id`
@@ -104,6 +106,9 @@ pub enum UplinkCommand {
     /// Play one of the firmware's built-in sounds by name, or stop the buzzer
     /// if the name is empty.
     PlayTune(heapless::String<TUNE_NAME_LEN>),
+    EraseLog,
+    /// STORAGE_INFORMATION for this storage id, or all of them for 0.
+    RequestStorageInformation(u8),
 }
 
 impl UplinkCommand {
@@ -118,13 +123,15 @@ impl UplinkCommand {
             | Self::RequestCanForwarding
             | Self::SetParam { .. }
             | Self::PlayTune(_)
-            | Self::RequestParams { .. } => None,
+            | Self::RequestParams { .. }
+            | Self::EraseLog
+            | Self::RequestStorageInformation(_) => None,
         }
     }
 }
 
 pub const DOWNLINK_N: usize = 32;
-pub const DOWNLINK_PUBS: usize = 6;
+pub const DOWNLINK_PUBS: usize = 7;
 pub type InterfaceTx =
     PubSubChannel<CriticalSectionRawMutex, Downlink, DOWNLINK_N, 1, DOWNLINK_PUBS>;
 pub type InterfaceTxPublisher =
@@ -142,7 +149,7 @@ pub type InterfaceRxSubscriber =
 
 pub const COMMAND_N: usize = 32;
 pub const COMMAND_SUBS: usize = 5;
-pub const COMMAND_PUBS: usize = 2;
+pub const COMMAND_PUBS: usize = 3;
 pub type InterfaceCommands =
     PubSubChannel<CriticalSectionRawMutex, UplinkCommand, COMMAND_N, COMMAND_SUBS, COMMAND_PUBS>;
 pub type InterfaceCommandPublisher = Publisher<

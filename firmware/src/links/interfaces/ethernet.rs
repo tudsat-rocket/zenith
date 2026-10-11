@@ -54,6 +54,8 @@ pub struct CanForwarding {
 pub struct EthernetConfig {
     pub system_id: u8,
     pub can: Option<CanForwarding>,
+    /// Serve the on-board flight log over the LOG_* protocol.
+    pub serve_log: bool,
 }
 
 pub struct EthernetHandle {
@@ -153,6 +155,18 @@ impl EthernetHandle {
             ))
             .unwrap();
 
+        if config.serve_log {
+            spawner
+                .spawn(run_log(
+                    config.system_id,
+                    tx.publisher().unwrap(),
+                    rx.subscriber().unwrap(),
+                    commands.subscriber().unwrap(),
+                    commands.publisher().unwrap(),
+                ))
+                .unwrap();
+        }
+
         Self {
             tx: tx.publisher().unwrap(),
             cmd_rx: commands.subscriber().unwrap(),
@@ -214,6 +228,18 @@ async fn run_params(
     cmd_tx: InterfaceCommandPublisher,
 ) {
     protocols::params::run(system_id, tx, rx, cmd_tx).await;
+}
+
+#[embassy_executor::task]
+async fn run_log(
+    system_id: u8,
+    tx: InterfaceTxPublisher,
+    rx: InterfaceRxSubscriber,
+    cmd_rx: InterfaceCommandSubscriber,
+    cmd_tx: InterfaceCommandPublisher,
+) {
+    let store = crate::storage::FlashLogReader;
+    links::protocols::log::run(system_id, tx, rx, cmd_rx, cmd_tx, store).await;
 }
 
 #[embassy_executor::task]

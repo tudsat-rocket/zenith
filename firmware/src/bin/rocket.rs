@@ -62,7 +62,12 @@ async fn init(low_priority_spawner: Spawner) {
     interrupt::I2C3_ER.set_priority(Priority::P7);
     let medium_priority_spawner = EXECUTOR_MEDIUM.start(interrupt::I2C3_ER);
 
-    let storage = fw::storage::spawn(board.flash, board.params, &low_priority_spawner);
+    let storage = fw::storage::spawn(
+        board.flash,
+        board.params,
+        fw::links::interfaces::ethernet::ROCKET_SYSTEM_ID,
+        &low_priority_spawner,
+    );
 
     fw::sensors::power::spawn(board.adc, low_priority_spawner);
     #[cfg(not(feature = "gcs"))]
@@ -117,6 +122,7 @@ pub async fn main_loop(
 ) -> ! {
     let mut cpu = fw::cpu::CpuMonitor::new();
     let mut alerts = Alerts::default();
+    let mut flash_log = fw::storage::FlashLog::default();
     let mut ticker = Ticker::every(Duration::from_micros(1000));
     loop {
         let tick_started = Instant::now();
@@ -195,6 +201,13 @@ pub async fn main_loop(
                         MavResult::Denied
                     }
                 }
+                UplinkCommand::EraseLog => {
+                    if vehicle.erase_log() {
+                        MavResult::Accepted
+                    } else {
+                        MavResult::Denied
+                    }
+                }
                 _ => MavResult::Unsupported,
             };
 
@@ -202,6 +215,7 @@ pub async fn main_loop(
         }
 
         links.send_telemetry_messages(&vehicle);
+        flash_log.log(&vehicle.snapshot());
 
         cpu.update(tick_started.elapsed());
         iwdg.pet();
