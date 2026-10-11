@@ -22,6 +22,12 @@ use defmt::*;
 
 const BARO_MEDIAN_FILTER_LENGTH: usize = 20;
 
+/// How long the PROM takes to reload after a reset (2.8 ms in the datasheet). Reading it any
+/// earlier returns partially loaded coefficients, which can look perfectly plausible.
+const RESET_TIME: Duration = Duration::from_millis(3);
+
+const INIT_ATTEMPTS: usize = 3;
+
 /// Highest pressure, in 0.01mbar, that we expect to see from an MS5607 that is
 /// (incorrectly) evaluated as an MS5611, which halves the reported value.
 const MS5607_MAX_PRESSURE: i32 = 54_000;
@@ -42,7 +48,40 @@ struct MS56CalibrationData {
 }
 
 impl MS56CalibrationData {
-    pub fn valid(&self) -> bool {
+    /// The coefficients in the 8 PROM words, if they pass the CRC4 in the low nibble of word 7
+    /// (application note AN520) and none of them is stuck at 0x0000 or 0xffff, which the CRC
+    /// alone would not catch for an all-zero PROM.
+    fn from_prom(prom: [u16; 8]) -> Option<Self> {
+        let mut words = prom;
+        words[7] &= 0xff00;
+
+        let mut remainder: u16 = 0;
+        for byte in words.iter().flat_map(|word| word.to_be_bytes()) {
+            remainder ^= u16::from(byte);
+            for _ in 0..8 {
+                remainder = if remainder & 0x8000 == 0 {
+                    remainder << 1
+                } else {
+                    (remainder << 1) ^ 0x3000
+                };
+            }
+        }
+        if remainder >> 12 != prom[7] & 0x000f {
+            return None;
+        }
+
+        let data = Self {
+            pressure_sensitivity: prom[1],
+            pressure_offset: prom[2],
+            temp_coef_pressure_sensitivity: prom[3],
+            temp_coef_pressure_offset: prom[4],
+            reference_temperature: prom[5],
+            temp_coef_temperature: prom[6],
+        };
+        data.valid().then_some(data)
+    }
+
+    fn valid(&self) -> bool {
         // We assume that every value needs to be non-zero and non-0xffff.
         self.pressure_sensitivity != 0x0000
             && self.pressure_offset != 0x0000
@@ -85,35 +124,23 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
             baro_filter: BaroFilter::default(),
         };
 
-        'outer: for _i in 0..3 {
-            // did you know that rust has loop labels?
+        for _i in 0..INIT_ATTEMPTS {
             baro.reset().await?;
+            Timer::after(RESET_TIME).await;
 
-            for _j in 0..50 {
-                Timer::after(Duration::from_micros(10)).await;
-
-                baro.read_calibration_values().await?;
-                if baro
-                    .calibration_data
-                    .as_ref()
-                    .map(MS56CalibrationData::valid)
-                    .unwrap_or(false)
-                {
-                    break 'outer;
-                }
+            let prom = baro.read_prom().await?;
+            baro.calibration_data = MS56CalibrationData::from_prom(prom);
+            if baro.calibration_data.is_some() {
+                break;
             }
+            warn!("MS56xx PROM failed its CRC: {:#06x}", prom);
         }
 
-        if baro
-            .calibration_data
-            .as_ref()
-            .map(MS56CalibrationData::valid)
-            .unwrap_or(false)
-        {
+        if baro.calibration_data.is_some() {
             baro.detect_variant().await?;
             info!("MS56xx initialized ({})", baro.variant);
         } else {
-            error!("Failed to initialize MS56xx");
+            error!("Failed to initialize MS56xx, it will not report");
         }
 
         Ok(baro)
@@ -160,27 +187,20 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
         Ok(())
     }
 
-    async fn read_calibration_values(&mut self) -> Result<(), SPI::Error> {
-        let c1 = self.command(MS56Command::ReadProm(1), 2).await?;
-        let c2 = self.command(MS56Command::ReadProm(2), 2).await?;
-        let c3 = self.command(MS56Command::ReadProm(3), 2).await?;
-        let c4 = self.command(MS56Command::ReadProm(4), 2).await?;
-        let c5 = self.command(MS56Command::ReadProm(5), 2).await?;
-        let c6 = self.command(MS56Command::ReadProm(6), 2).await?;
-
-        self.calibration_data = Some(MS56CalibrationData {
-            pressure_sensitivity: ((c1[0] as u16) << 8) + (c1[1] as u16),
-            pressure_offset: ((c2[0] as u16) << 8) + (c2[1] as u16),
-            temp_coef_pressure_sensitivity: ((c3[0] as u16) << 8) + (c3[1] as u16),
-            temp_coef_pressure_offset: ((c4[0] as u16) << 8) + (c4[1] as u16),
-            reference_temperature: ((c5[0] as u16) << 8) + (c5[1] as u16),
-            temp_coef_temperature: ((c6[0] as u16) << 8) + (c6[1] as u16),
-        });
-
-        Ok(())
+    async fn read_prom(&mut self) -> Result<[u16; 8], SPI::Error> {
+        let mut prom = [0; 8];
+        for (address, word) in (0..).zip(prom.iter_mut()) {
+            let bytes = self.command(MS56Command::ReadProm(address), 2).await?;
+            *word = u16::from_be_bytes([bytes[0], bytes[1]]);
+        }
+        Ok(prom)
     }
 
     async fn read_sensor_data(&mut self) -> Result<(), SPI::Error> {
+        if self.calibration_data.is_none() {
+            return Ok(());
+        }
+
         let response = self.command(MS56Command::ReadAdc, 3).await?;
         // when read to fast after starting conversion, conversion is corrupted and data all 0
         if response.iter().all(|&b| b == 0) {
@@ -189,7 +209,9 @@ impl<SPI: SpiDevice<u8>> MS56<SPI> {
         }
         let value =
             ((response[0] as i32) << 16) | ((response[1] as i32) << 8) | (response[2] as i32);
-        let cal = self.calibration_data.as_ref().unwrap();
+        let Some(cal) = self.calibration_data.as_ref() else {
+            return Ok(());
+        };
 
         if self.read_temp {
             let dt = (value as i32) - ((cal.reference_temperature as i32) << 8);
