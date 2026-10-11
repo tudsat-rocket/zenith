@@ -88,8 +88,7 @@ pub struct StateEstimator {
     /// GPS origin (lat, lng)
     // TODO: move altitude_ground into here?
     gps_origin: Option<Vector3<f32>>,
-    last_covariance_update: Wrapping<u32>,
-    /// Sequence number of the last GPS fix
+    /// Sequence number of the last GPS fix folded into the filter
     last_gps_seq: Option<u32>,
     #[cfg(not(target_os = "none"))]
     pub last_apogee_error: f32,
@@ -169,7 +168,6 @@ impl StateEstimator {
             altitude_ground: 0.0,
             altitude_max: -10_000.0,
             gps_origin: None,
-            last_covariance_update: Wrapping(0),
             last_gps_seq: None,
             #[cfg(not(target_os = "none"))]
             last_apogee_error: 0.0,
@@ -261,6 +259,7 @@ impl StateEstimator {
             if self.gps_origin.is_none() {
                 self.gps_origin = Some(global_pos);
             }
+            self.last_gps_seq = Some(gps.seq);
             self.global_to_local(global_pos)
         } else {
             self.position_local()
@@ -268,21 +267,7 @@ impl StateEstimator {
 
         self.kalman.predict(None, None, None, None);
         let z = Vector6::new(altitude_baro, accel.x, accel.y, accel.z, pos.x, pos.y);
-
-        // Updating the state covariance is pretty expensive, so we only do it when there is
-        // something new to learn from: a fix we have not folded in yet, or every tenth tick as
-        // a floor. (TODO: make configurable)
-        let gps_is_new = gps.is_some_and(|gps| Some(gps.seq) != self.last_gps_seq);
-
-        if gps_is_new || (self.time - self.last_covariance_update).0 > 10 {
-            self.kalman.update(&z, None, None);
-            self.last_covariance_update = self.time;
-            if let Some(gps) = gps {
-                self.last_gps_seq = Some(gps.seq);
-            }
-        } else {
-            self.kalman.update_steadystate(&z);
-        }
+        self.kalman.update(&z, None, None);
     }
 
     #[allow(
@@ -377,7 +362,9 @@ impl StateEstimator {
         let accel = self
             .acceleration_world
             .and_then(|a| (!(a.x.is_nan() || a.y.is_nan() || a.z.is_nan())).then_some(a));
-        let gps = gps_datum.and_then(|d| self.gps_reliable(&d).then_some(d));
+        // The receiver keeps reporting its last fix until the next one arrives. Folding that in
+        // again every tick would count one fix as many independent measurements.
+        let gps = gps_datum.filter(|d| Some(d.seq) != self.last_gps_seq && self.gps_reliable(d));
 
         match (accel, altitude_baro) {
             (Some(accel), Some(altitude_baro)) => {
