@@ -8,6 +8,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use nalgebra::Vector3;
 
 use rapid_dialect::rapid::enums::MavParamType;
+use rapid_dialect::rapid::messages::ParamMetadata;
 
 use state_estimator::StateEstimatorParams;
 
@@ -38,39 +39,37 @@ pub struct Params {
 #[derive(Debug, Clone, macros::ParameterGroup)]
 #[param_group(prefix = "SM")]
 pub struct StateMachineParams {
-    /// Altitude AGL (meters) at which to deploy the main parachute
-    #[param(id = 0x0200, name = "MAIN_ALT", default = 400.0)]
+    /// Altitude AGL at which to deploy the main parachute
+    #[param(id = 0x0200, name = "MAIN_ALT", default = 400.0, unit = "m")]
     pub main_deploy_altitude: f32,
-    /// Minimum time (ms) after launch before allowing drogue deployment
-    #[param(id = 0x0201, name = "MIN_T_APOGEE", default = 1000)]
+    /// Minimum time after launch before allowing drogue deployment
+    #[param(id = 0x0201, name = "MIN_T_APOGEE", default = 1000, unit = "ms")]
     pub min_time_to_drogue: u32,
-    /// Minimum delay (ms) after drogue before allowing main deployment
-    #[param(id = 0x0202, name = "DLY_MAIN", default = 3000)]
+    /// Minimum delay after drogue before allowing main deployment
+    #[param(id = 0x0202, name = "DLY_MAIN", default = 3000, unit = "ms")]
     pub min_time_to_main: u32,
-    /// Time (ms) after liftoff after which drogue is automatically deployed
-    ///
-    /// Must be larger than MAX_T_BURN.
-    #[param(id = 0x0203, name = "MAX_T_APOGEE", default = 30_000)]
+    /// Time after liftoff after which drogue is automatically deployed. Must be larger than
+    /// MAX_T_BURN.
+    #[param(id = 0x0203, name = "MAX_T_APOGEE", default = 30_000, unit = "ms")]
     pub max_time_to_drogue: u32,
-    /// Time limit for burn (ms), after which automatically transition to Coast
-    ///
-    /// Must be smaller than MAX_T_DROGUE.
-    #[param(id = 0x0204, name = "MAX_T_BURN", default = 15_000)]
+    /// Time limit for burn, after which automatically transition to Coast. Must be smaller than
+    /// MAX_T_APOGEE.
+    #[param(id = 0x0204, name = "MAX_T_BURN", default = 15_000, unit = "ms")]
     pub max_time_in_burn: u32,
-    /// Acceleration (G) to be exceeded for LODEC_T in order to detect liftoff
-    #[param(id = 0x0205, name = "LODEC_ACC", default = 3.0)]
+    /// Acceleration to be exceeded for LODEC_T in order to detect liftoff
+    #[param(id = 0x0205, name = "LODEC_ACC", default = 3.0, unit = "G")]
     pub liftoff_detection_acceleration: f32,
-    /// Time (ms) to exceed LODEC_ACC in order to detect liftoff
-    #[param(id = 0x0206, name = "LODEC_T", default = 50)]
+    /// Time to exceed LODEC_ACC in order to detect liftoff
+    #[param(id = 0x0206, name = "LODEC_T", default = 50, unit = "ms")]
     pub liftoff_detection_time: u32,
-    /// Time (ms) the main output is high within each firing pulse
-    #[param(id = 0x0207, name = "MAIN_ON_T", default = 250)]
+    /// Time the main output is high within each firing pulse
+    #[param(id = 0x0207, name = "MAIN_ON_T", default = 250, unit = "ms")]
     pub main_on_time: u32,
-    /// Time (ms) the main output is low between firing pulses
-    #[param(id = 0x0208, name = "MAIN_GAP_T", default = 100)]
+    /// Time the main output is low between firing pulses
+    #[param(id = 0x0208, name = "MAIN_GAP_T", default = 100, unit = "ms")]
     pub main_pulse_gap: u32,
     /// Number of main firing pulses. The whole train must fit inside the time the
-    /// vehicle spends in `DeployMain`, which can be as short as 3 seconds.
+    /// vehicle spends in DeployMain, which can be as short as 3 seconds.
     #[param(id = 0x0209, name = "MAIN_PULSES", default = 1)]
     pub main_pulses: u32,
 }
@@ -79,11 +78,11 @@ pub struct StateMachineParams {
 #[derive(Debug, Clone, macros::ParameterGroup)]
 #[param_group(prefix = "PROP")]
 pub struct PropulsionParams {
-    /// Time (ms) the igniter outputs are high after entering ignition mode
-    #[param(id = 0x0300, name = "IGNTR_TIME", default = 1500)]
+    /// Time the igniter outputs are high after entering ignition mode
+    #[param(id = 0x0300, name = "IGNTR_TIME", default = 1500, unit = "ms")]
     pub igniter_on_time: u32,
-    /// Delay (ms) after ignition mode is entered after which main valve is opened
-    #[param(id = 0x0301, name = "MAIN_DELAY", default = 700)]
+    /// Delay after ignition mode is entered after which main valve is opened
+    #[param(id = 0x0301, name = "MAIN_DELAY", default = 700, unit = "ms")]
     pub main_valve_delay: u32,
 }
 
@@ -94,29 +93,41 @@ pub struct PropulsionParams {
 #[param_group(prefix = "QD")]
 pub struct QdParams {
     // oxidizer quick disconnect
-    /// Time (ms) the disconnect servo is actuated after a gripper release before the retract servo
-    /// moves to RETR_OX_PERC
-    #[param(id = 0x0600, name = "HOLD_T_OX", default = 1000)]
+    /// Time the disconnect servo is actuated after a gripper release before the retract servo moves
+    /// to RETR_OX_PERC
+    #[param(id = 0x0600, name = "HOLD_T_OX", default = 1000, unit = "ms")]
     pub disconnect_hold_time_oxidizer: u32,
-    /// Time (ms) after the retract servo moved after which the disconnect servo is closed again
-    #[param(id = 0x0603, name = "RETR_T_OX", default = 1000)]
+    /// Time after the retract servo moved after which the disconnect servo is closed again
+    #[param(id = 0x0603, name = "RETR_T_OX", default = 1000, unit = "ms")]
     pub disconnect_retract_time_oxidizer: u32,
-    /// Position (percent, 0-100) the oxidizer retract servo moves to after a gripper release.
-    /// Values above 100 are clamped.
-    #[param(id = 0x0602, name = "RETR_OX_PERC", default = 10)]
+    /// Position the oxidizer retract servo moves to after a gripper release
+    #[param(
+        id = 0x0602,
+        name = "RETR_OX_PERC",
+        default = 10,
+        unit = "%",
+        min = 0,
+        max = 100
+    )]
     pub disconnect_retract_percent_oxidizer: u32,
 
     // pressurant (n2) quick disconnect
-    /// Time (ms) the disconnect servo is actuated after a gripper release before the retract servo
-    /// moves to RETR_PR_PERC
-    #[param(id = 0x0604, name = "HOLD_T_PR", default = 1000)]
+    /// Time the disconnect servo is actuated after a gripper release before the retract servo moves
+    /// to RETR_PR_PERC
+    #[param(id = 0x0604, name = "HOLD_T_PR", default = 1000, unit = "ms")]
     pub disconnect_hold_time_pressurant: u32,
-    /// Time (ms) after the retract servo moved after which the disconnect servo is closed again
-    #[param(id = 0x0605, name = "RETR_T_PR", default = 4000)]
+    /// Time after the retract servo moved after which the disconnect servo is closed again
+    #[param(id = 0x0605, name = "RETR_T_PR", default = 4000, unit = "ms")]
     pub disconnect_retract_time_pressurant: u32,
-    /// Position (percent, 0-100) the pressurant retract servo moves to after a gripper release.
-    /// Values above 100 are clamped.
-    #[param(id = 0x0601, name = "RETR_PR_PERC", default = 10)]
+    /// Position the pressurant retract servo moves to after a gripper release
+    #[param(
+        id = 0x0601,
+        name = "RETR_PR_PERC",
+        default = 10,
+        unit = "%",
+        min = 0,
+        max = 100
+    )]
     pub disconnect_retract_percent_pressurant: u32,
 }
 
@@ -130,15 +141,15 @@ pub struct TankLevelParams {
     /// level. Higher reads higher.
     #[param(id = 0xF000, name = "THRESHOLD", default = 0.02)]
     pub threshold: f32,
-    /// Time constant (ms) of the low-pass on the reported level.
-    #[param(id = 0xF001, name = "TAU", default = 5000)]
+    /// Time constant of the low-pass on the reported level.
+    #[param(id = 0xF001, name = "TAU", default = 5000, unit = "ms")]
     pub tau: u32,
-    /// Smallest spread (C) the probe readings are scaled by, so that a column whose spread shrinks
-    /// as the tank fills towards the top probe is not stretched to full scale.
-    #[param(id = 0xF002, name = "MIN_SCALE", default = 10.0)]
+    /// Smallest spread the probe readings are scaled by, so that a column whose spread shrinks as
+    /// the tank fills towards the top probe is not stretched to full scale.
+    #[param(id = 0xF002, name = "MIN_SCALE", default = 10.0, unit = "C")]
     pub min_scale: f32,
-    /// Temperature (C) above the coldest probe up to which a probe counts as no warmer than it.
-    #[param(id = 0xF003, name = "DEADBAND", default = 1.0)]
+    /// Temperature above the coldest probe up to which a probe counts as no warmer than it.
+    #[param(id = 0xF003, name = "DEADBAND", default = 1.0, unit = "C")]
     pub deadband: f32,
 }
 
@@ -148,11 +159,11 @@ pub struct TankLevelParams {
 #[derive(Debug, Clone, macros::ParameterGroup)]
 #[param_group(prefix = "FS")]
 pub struct FailsafeParams {
-    /// Time (ms) without ground station contact after which the vehicle returns to Idle. 0 disables.
-    #[param(id = 0x0400, name = "UPLINK_IDLE", default = 10_000)]
+    /// Time without ground station contact after which the vehicle returns to Idle. 0 disables.
+    #[param(id = 0x0400, name = "UPLINK_IDLE", default = 10_000, unit = "ms")]
     pub uplink_idle_timeout: u32,
-    /// Time (ms) without ground station contact after which the vehicle vents. 0 disables.
-    #[param(id = 0x0401, name = "UPLINK_VENT", default = 1_200_000)]
+    /// Time without ground station contact after which the vehicle vents. 0 disables.
+    #[param(id = 0x0401, name = "UPLINK_VENT", default = 1_200_000, unit = "ms")]
     pub uplink_vent_timeout: u32,
 }
 
@@ -160,10 +171,16 @@ pub struct FailsafeParams {
 #[derive(Debug, Clone, macros::ParameterGroup)]
 #[param_group(prefix = "MISC")]
 pub struct MiscParams {
-    /// Duty cycle (percent, 0-100) of the buzzer PWM signal. A buzzer is loudest at 50%, other
-    /// values trade volume for a lower current draw. Values above 100 are clamped,
-    /// 0 disables the buzzer.
-    #[param(id = 0x0500, name = "BUZZ_VOL", default = 50)]
+    /// Duty cycle of the buzzer PWM signal. A buzzer is loudest at 50%, other values trade volume
+    /// for a lower current draw. 0 disables the buzzer.
+    #[param(
+        id = 0x0500,
+        name = "BUZZ_VOL",
+        default = 50,
+        unit = "%",
+        min = 0,
+        max = 100
+    )]
     pub buzzer_volume: u32,
 }
 
@@ -175,19 +192,19 @@ pub struct MiscParams {
 pub struct LoraParams {
     /// Seed of the frequency hopping sequence, low word first. Ground software derives it from a
     /// binding phrase.
-    #[param(id = 0x0800..=0x0801, name = "BIND", default = [0, 0])]
+    #[param(id = 0x0800..=0x0801, name = "BIND", default = [0, 0], reboot_required)]
     pub seed: [u32; 2],
     /// Key authenticating every packet, as little-endian words. Never sent over LoRa, which reads
     /// it back as zeros.
-    #[param(id = 0x0802..=0x0805, name = "KEY", default = [0, 0, 0, 0])]
+    #[param(id = 0x0802..=0x0805, name = "KEY", default = [0, 0, 0, 0], reboot_required)]
     pub key: [u32; 4],
-    /// Downlink transmit power (dBm) until the vehicle arms. A write applies immediately, also
-    /// switching back from [`Self::tx_power_armed`] until the vehicle next enters an armed mode.
-    #[param(id = 0x0806, name = "TX_PWR", default = 10.0)]
+    /// Downlink transmit power until the vehicle arms. A write applies immediately, also switching
+    /// back from TX_PWR_HI until the vehicle next enters an armed mode.
+    #[param(id = 0x0806, name = "TX_PWR", default = 10.0, unit = "dBm", min = -9.0, max = 22.0)]
     pub tx_power: f32,
-    /// Downlink transmit power (dBm) switched to on every entry into an armed mode, including
-    /// transitions between them. Dropping out of the armed modes does not switch back.
-    #[param(id = 0x0807, name = "TX_PWR_HI", default = 22.0)]
+    /// Downlink transmit power switched to on every entry into an armed mode, including transitions
+    /// between them. Dropping out of the armed modes does not switch back.
+    #[param(id = 0x0807, name = "TX_PWR_HI", default = 22.0, unit = "dBm", min = -9.0, max = 22.0)]
     pub tx_power_armed: f32,
 }
 
@@ -201,35 +218,35 @@ pub const LORA_TX_POWER: ParamId = ParamId::new(0x0806);
 #[derive(Debug, Clone, macros::ParameterGroup)]
 #[param_group(prefix = "CAL")]
 pub struct CalibrationParams {
-    /// IMU1 gyro bias [deg/s]
-    #[param(id = 0x0700..=0x0702, name = "IMU1_GYR", default = [0.0, 0.0, 0.0])]
+    /// IMU1 gyro bias
+    #[param(id = 0x0700..=0x0702, name = "IMU1_GYR", default = [0.0, 0.0, 0.0], unit = "deg/s")]
     pub imu1_gyro: Vector3<f32>,
-    /// IMU1 accelerometer bias [m/s^2]
-    #[param(id = 0x0703..=0x0705, name = "IMU1_ACC", default = [0.0, 0.0, 0.0])]
+    /// IMU1 accelerometer bias
+    #[param(id = 0x0703..=0x0705, name = "IMU1_ACC", default = [0.0, 0.0, 0.0], unit = "m/s^2")]
     pub imu1_accel: Vector3<f32>,
-    /// IMU2 gyro bias [deg/s]
-    #[param(id = 0x0706..=0x0708, name = "IMU2_GYR", default = [0.0, 0.0, 0.0])]
+    /// IMU2 gyro bias
+    #[param(id = 0x0706..=0x0708, name = "IMU2_GYR", default = [0.0, 0.0, 0.0], unit = "deg/s")]
     pub imu2_gyro: Vector3<f32>,
-    /// IMU2 accelerometer bias [m/s^2]
-    #[param(id = 0x0709..=0x070B, name = "IMU2_ACC", default = [0.0, 0.0, 0.0])]
+    /// IMU2 accelerometer bias
+    #[param(id = 0x0709..=0x070B, name = "IMU2_ACC", default = [0.0, 0.0, 0.0], unit = "m/s^2")]
     pub imu2_accel: Vector3<f32>,
-    /// IMU3 gyro bias [deg/s]
-    #[param(id = 0x070C..=0x070E, name = "IMU3_GYR", default = [0.0, 0.0, 0.0])]
+    /// IMU3 gyro bias
+    #[param(id = 0x070C..=0x070E, name = "IMU3_GYR", default = [0.0, 0.0, 0.0], unit = "deg/s")]
     pub imu3_gyro: Vector3<f32>,
-    /// IMU3 accelerometer bias [m/s^2]
-    #[param(id = 0x070F..=0x0711, name = "IMU3_ACC", default = [0.0, 0.0, 0.0])]
+    /// IMU3 accelerometer bias
+    #[param(id = 0x070F..=0x0711, name = "IMU3_ACC", default = [0.0, 0.0, 0.0], unit = "m/s^2")]
     pub imu3_accel: Vector3<f32>,
-    /// Magnetometer hard-iron offset [uT]
-    #[param(id = 0x0712..=0x0714, name = "MAG", default = [0.0, 0.0, 0.0])]
+    /// Magnetometer hard-iron offset
+    #[param(id = 0x0712..=0x0714, name = "MAG", default = [0.0, 0.0, 0.0], unit = "uT")]
     pub mag: Vector3<f32>,
-    /// Barometer 1 pressure offset [hPa]
-    #[param(id = 0x0715, name = "BARO1", default = 0.0)]
+    /// Barometer 1 pressure offset
+    #[param(id = 0x0715, name = "BARO1", default = 0.0, unit = "hPa")]
     pub baro1: f32,
-    /// Barometer 2 pressure offset [hPa]
-    #[param(id = 0x0716, name = "BARO2", default = 0.0)]
+    /// Barometer 2 pressure offset
+    #[param(id = 0x0716, name = "BARO2", default = 0.0, unit = "hPa")]
     pub baro2: f32,
-    /// Barometer 3 pressure offset [hPa]
-    #[param(id = 0x0717, name = "BARO3", default = 0.0)]
+    /// Barometer 3 pressure offset
+    #[param(id = 0x0717, name = "BARO3", default = 0.0, unit = "hPa")]
     pub baro3: f32,
 }
 
@@ -346,6 +363,17 @@ pub trait ParamTable: ParameterGroup + Sized {
         (ty == MavParamType::from(descriptor.ty))
             .then(|| descriptor.ty.from_mavlink(value))
             .flatten()
+            .filter(|value| descriptor.accepts(*value))
+    }
+
+    /// The PARAM_METADATA of the param at `index`.
+    fn metadata(index: u16) -> Option<ParamMetadata>
+    where
+        Self: Default,
+    {
+        let descriptor = Self::descriptor_by_index(index)?;
+        let default = Self::default().get(descriptor.id)?;
+        Some(descriptor.metadata(default))
     }
 
     /// The PARAM_VALUE for `value` of the param at `index`.
@@ -359,10 +387,14 @@ pub trait ParamTable: ParameterGroup + Sized {
         }
     }
 
-    /// Apply a raw stored value (as read from flash). Unknown ids are ignored.
+    /// Apply a raw stored value (as read from flash). Unknown ids and values out of bounds, e.g.
+    /// after a firmware update narrowed them, are ignored.
     fn apply_raw(&mut self, id: u16, raw: u32) {
         if let Some((_, descriptor)) = Self::by_id(id) {
-            self.set(descriptor.id, descriptor.ty.decode_raw(raw));
+            let value = descriptor.ty.decode_raw(raw);
+            if descriptor.accepts(value) {
+                self.set(descriptor.id, value);
+            }
         }
     }
 }
@@ -443,9 +475,13 @@ impl<G: ParameterGroup> Default for SharedParams<G> {
     }
 }
 
-impl<G: ParameterGroup + Send> ParamStore for SharedParams<G> {
+impl<G: ParameterGroup + Default + Send> ParamStore for SharedParams<G> {
     fn count(&self) -> u16 {
         G::count()
+    }
+
+    fn metadata(&self, index: u16) -> Option<ParamMetadata> {
+        G::metadata(index)
     }
 
     fn by_index(&self, index: u16) -> Option<ParamInfo> {
@@ -492,6 +528,8 @@ mod tests {
     use super::*;
     use crate::traits::BaroReading;
 
+    use rapid_dialect::rapid::enums::ParamMetadataFlag;
+
     #[test]
     fn lora_tx_power_id_matches() {
         assert_eq!(
@@ -527,6 +565,68 @@ mod tests {
         assert_eq!(s.state_machine.main_on_time, 250);
         assert_eq!(s.state_machine.main_pulses, 1);
         assert_eq!(s.qd.disconnect_retract_percent_pressurant, 10);
+    }
+
+    #[test]
+    fn metadata_describes_every_param() {
+        let defaults = Params::default();
+        for i in 0..Params::count() {
+            let descriptor = Params::descriptor_by_index(i).unwrap();
+            let metadata = Params::metadata(i).unwrap();
+            assert_eq!(metadata.param_id, descriptor.mavlink_name());
+            assert_eq!(
+                metadata.default_value.to_bits(),
+                defaults.get(descriptor.id).unwrap().to_mavlink().to_bits(),
+                "{}",
+                descriptor.name
+            );
+        }
+        assert!(Params::metadata(Params::count()).is_none());
+
+        let (index, _) = Params::by_id(0x0500).unwrap(); // MISC_BUZZ_VOL
+        let metadata = Params::metadata(index).unwrap();
+        assert_eq!(&metadata.units[..2], b"%\0");
+        assert_eq!(metadata.min_value.to_bits(), 0);
+        assert_eq!(metadata.max_value.to_bits(), 100);
+        assert!(metadata.flags.is_empty());
+        assert!(
+            metadata
+                .description
+                .starts_with(b"Duty cycle of the buzzer PWM signal.")
+        );
+
+        // Without declared bounds, the type's own are reported.
+        let (index, _) = Params::by_id(0x0200).unwrap(); // SM_MAIN_ALT
+        let metadata = Params::metadata(index).unwrap();
+        assert_eq!(metadata.min_value, f32::NEG_INFINITY);
+        assert_eq!(metadata.max_value, f32::INFINITY);
+
+        let (index, _) = Params::by_id(0x0803).unwrap(); // LORA_KEY_1
+        assert_eq!(
+            Params::metadata(index).unwrap().flags,
+            ParamMetadataFlag::REBOOT_REQUIRED
+        );
+    }
+
+    #[test]
+    fn values_out_of_bounds_are_rejected() {
+        let store = SharedParams::<Params>::new();
+        store.init(Params::default());
+
+        let name = Params::by_id(0x0500).unwrap().1.mavlink_name(); // MISC_BUZZ_VOL, 0-100
+        assert_eq!(
+            store.set(&name, f32::from_bits(101), MavParamType::Uint32),
+            Err(ParamSetError::InvalidValue)
+        );
+        assert!(
+            store
+                .set(&name, f32::from_bits(100), MavParamType::Uint32)
+                .is_ok()
+        );
+
+        let mut s = Params::default();
+        s.apply_raw(0x0500, 101);
+        assert_eq!(s.misc.buzzer_volume, 50);
     }
 
     #[test]
@@ -637,8 +737,10 @@ mod tests {
     #[derive(Debug, macros::ParameterGroup)]
     #[param_group(prefix = "TST")]
     struct VectorGroup {
+        /// A vector
         #[param(id = 0x0300..=0x0302, name = "BIAS", default = [1.0, 2.0, 3.0])]
         bias: Vector3<f32>,
+        /// A scalar
         #[param(id = 0x0303, name = "GAIN", default = 4.0)]
         gain: f32,
     }

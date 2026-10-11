@@ -44,13 +44,13 @@ pub struct StateEstimatorParams {
     #[param(id = 0x0103, name = "MAHONY_KI_ASC", default = 0.0)]
     pub mahony_ki_ascent: f32,
     /// accelerometer standard deviation for kalman filter
-    #[param(id = 0x0104, name = "STDDEV_ACC", default = 0.5)]
+    #[param(id = 0x0104, name = "STDDEV_ACC", default = 0.5, unit = "m/s^2")]
     pub std_dev_accelerometer: f32,
     /// barometer standard deviation for kalman filter
-    #[param(id = 0x0105, name = "STDDEV_BARO", default = 3.0)]
+    #[param(id = 0x0105, name = "STDDEV_BARO", default = 3.0, unit = "m")]
     pub std_dev_barometer: f32,
     /// barometer standard deviation for kalman filter when in the transsonic region
-    #[param(id = 0x0106, name = "STDDEV_BARO_T", default = 70.0)]
+    #[param(id = 0x0106, name = "STDDEV_BARO_T", default = 70.0, unit = "m")]
     pub std_dev_barometer_transsonic: f32,
     /// process standard deviation for kalman filter
     #[param(id = 0x0107, name = "STDDEV_PROC", default = 0.5)]

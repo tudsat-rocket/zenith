@@ -10,7 +10,8 @@
 )]
 
 use nalgebra::Vector3;
-use rapid_dialect::rapid::enums::MavParamType;
+use rapid_dialect::rapid::enums::{MavParamType, ParamMetadataFlag};
+use rapid_dialect::rapid::messages::ParamMetadata;
 
 /// The wire/storage type of a single parameter slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,12 +31,32 @@ pub enum ParamValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ParamId(u16);
 
-/// Describes one parameter slot: its stable id, full MAVLink name and type.
+/// Describes one parameter slot: its stable id, full MAVLink name, type and what a ground station
+/// shows about it.
 #[derive(Debug, Clone, Copy)]
 pub struct ParamDescriptor {
     pub id: ParamId,
     pub name: &'static str,
     pub ty: ParamType,
+    /// One line, the first paragraph of the field's doc comment.
+    pub description: &'static str,
+    /// Empty if dimensionless.
+    pub unit: &'static str,
+    /// Smallest accepted value, the type's own if the param declares none.
+    pub min: ParamValue,
+    /// Largest accepted value, the type's own if the param declares none.
+    pub max: ParamValue,
+    /// Whether a change only takes effect on the next boot.
+    pub reboot_required: bool,
+}
+
+/// The type of a single parameter slot's value.
+pub trait ParamScalar: Copy {
+    /// The bounds of a param that declares none.
+    const MIN: Self;
+    const MAX: Self;
+
+    fn value(self) -> ParamValue;
 }
 
 /// A single struct field that maps onto one or more parameter slots.
@@ -48,8 +69,8 @@ pub trait ParameterField: Sized {
     const WIDTH: usize;
     /// The type of every slot (all slots of a field share one type).
     const SLOT_TYPE: ParamType;
-    /// The scalar the field is built from (used to type the `default` array).
-    type Scalar: Copy;
+    /// The scalar the field is built from (used to type the `default` array and the bounds).
+    type Scalar: ParamScalar;
 
     fn get_slot(&self, index: usize) -> ParamValue;
 
@@ -143,11 +164,56 @@ impl ParamId {
 impl ParamDescriptor {
     /// The name as a 16-byte NUL-padded MAVLink `param_id`.
     pub fn mavlink_name(&self) -> [u8; 16] {
-        let mut out = [0u8; 16];
-        for (o, b) in out.iter_mut().zip(self.name.bytes()) {
-            *o = b;
+        nul_padded(self.name)
+    }
+
+    /// Whether `value` has this param's type and lies within its bounds.
+    pub fn accepts(&self, value: ParamValue) -> bool {
+        match (value, self.min, self.max) {
+            (ParamValue::F32(v), ParamValue::F32(min), ParamValue::F32(max)) => {
+                (min..=max).contains(&v)
+            }
+            (ParamValue::U32(v), ParamValue::U32(min), ParamValue::U32(max)) => {
+                (min..=max).contains(&v)
+            }
+            _ => false,
         }
-        out
+    }
+
+    /// The PARAM_METADATA describing this param, whose default value is `default`.
+    pub fn metadata(&self, default: ParamValue) -> ParamMetadata {
+        ParamMetadata {
+            param_id: self.mavlink_name(),
+            param_type: self.ty.into(),
+            default_value: default.to_mavlink(),
+            min_value: self.min.to_mavlink(),
+            max_value: self.max.to_mavlink(),
+            flags: if self.reboot_required {
+                ParamMetadataFlag::REBOOT_REQUIRED
+            } else {
+                ParamMetadataFlag::empty()
+            },
+            units: nul_padded(self.unit),
+            description: nul_padded(self.description),
+        }
+    }
+}
+
+impl ParamScalar for f32 {
+    const MIN: Self = f32::NEG_INFINITY;
+    const MAX: Self = f32::INFINITY;
+
+    fn value(self) -> ParamValue {
+        ParamValue::F32(self)
+    }
+}
+
+impl ParamScalar for u32 {
+    const MIN: Self = u32::MIN;
+    const MAX: Self = u32::MAX;
+
+    fn value(self) -> ParamValue {
+        ParamValue::U32(self)
     }
 }
 
@@ -241,4 +307,13 @@ impl ParameterField for Vector3<f32> {
     fn from_slots(slots: &[f32]) -> Self {
         Vector3::new(slots[0], slots[1], slots[2])
     }
+}
+
+/// `s` as a NUL-padded MAVLink char array, cut off at `N` bytes.
+fn nul_padded<const N: usize>(s: &str) -> [u8; N] {
+    let mut out = [0u8; N];
+    for (o, b) in out.iter_mut().zip(s.bytes()) {
+        *o = b;
+    }
+    out
 }

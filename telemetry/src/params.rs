@@ -7,16 +7,19 @@
 //!
 //! The receiver's own [`GcsParams`] are answered locally, appended to the vehicle's in one stream:
 //! they take the indices after the vehicle's, and every value reports the total of both as its
-//! count.
+//! count. The PARAM_METADATA following a list are answered locally for both, the vehicle's params
+//! being static.
 
-use embassy_time::{Duration, Timer};
+use embassy_time::Timer;
 
-use links::protocols::params::{ParamInfo, ParamRequest, ParamSetError, ParamStore};
+use links::protocols::params::{
+    PARAM_STREAM_INTERVAL, ParamInfo, ParamRequest, ParamSetError, ParamStore,
+};
 use links::{
     Downlink, InterfaceCommandPublisher, InterfaceRxSubscriber, InterfaceTxPublisher, UplinkCommand,
 };
 use mission::params::{LoraParams, ParamTable, ParameterGroup, Params, SharedParams};
-use rapid_dialect::rapid::messages::ParamValue;
+use rapid_dialect::rapid::messages::{ParamMetadata, ParamValue};
 
 use crate::messages::{DownlinkTelemetryMessage, ParamEntry, ParamValuesMessage};
 
@@ -44,14 +47,18 @@ pub struct PendingParams(u128);
 #[derive(Debug, Clone, macros::ParameterGroup)]
 #[param_group(prefix = "GCS")]
 pub struct GcsParams {
-    /// Seed of the frequency hopping sequence, low word first. See [`LoraParams::seed`].
-    #[param(id = 0x0900..=0x0901, name = "BIND", default = [0, 0])]
+    /// Seed of the frequency hopping sequence, low word first. Has to match LORA_BIND.
+    ///
+    /// See [`LoraParams::seed`].
+    #[param(id = 0x0900..=0x0901, name = "BIND", default = [0, 0], reboot_required)]
     pub seed: [u32; 2],
-    /// Key authenticating every packet. See [`LoraParams::key`].
-    #[param(id = 0x0902..=0x0905, name = "KEY", default = [0, 0, 0, 0])]
+    /// Key authenticating every packet. Has to match LORA_KEY.
+    ///
+    /// See [`LoraParams::key`].
+    #[param(id = 0x0902..=0x0905, name = "KEY", default = [0, 0, 0, 0], reboot_required)]
     pub key: [u32; 4],
-    /// Uplink transmit power (dBm)
-    #[param(id = 0x0906, name = "TX_PWR", default = 22.0)]
+    /// Uplink transmit power
+    #[param(id = 0x0906, name = "TX_PWR", default = 22.0, unit = "dBm", min = -9.0, max = 22.0, reboot_required)]
     pub tx_power: f32,
 }
 
@@ -214,9 +221,24 @@ pub async fn forward(
         for info in &answer.local {
             tx.publish(Downlink::from_self(ParamValue::from(info)))
                 .await;
-            // Same pacing as links::protocols::params::run, the downlink is shared with telemetry.
-            Timer::after(Duration::from_millis(20)).await;
+            Timer::after(PARAM_STREAM_INTERVAL).await;
         }
+        if request == ParamRequest::List {
+            for index in 0..RECEIVER_PARAM_COUNT {
+                if let Some(metadata) = receiver_metadata(index) {
+                    tx.publish(Downlink::from_self(metadata)).await;
+                    Timer::after(PARAM_STREAM_INTERVAL).await;
+                }
+            }
+        }
+    }
+}
+
+/// The PARAM_METADATA of the param a receiver serves at `index`.
+fn receiver_metadata(index: u16) -> Option<ParamMetadata> {
+    match index.checked_sub(Params::count()) {
+        None => Params::metadata(index),
+        Some(local) => GcsParams::metadata(local),
     }
 }
 
@@ -506,6 +528,21 @@ mod tests {
 
         assert_eq!(answer.forward, Params::commands(&request));
         assert!(answer.local.is_empty());
+    }
+
+    #[test]
+    fn a_receiver_describes_every_param_it_serves() {
+        let names: Vec<_> = (0..RECEIVER_PARAM_COUNT)
+            .map(|index| receiver_metadata(index).expect("in range").param_id)
+            .collect();
+        let expected: Vec<_> = (0..Params::count())
+            .filter_map(Params::descriptor_by_index)
+            .chain((0..GcsParams::count()).filter_map(GcsParams::descriptor_by_index))
+            .map(|descriptor| descriptor.mavlink_name())
+            .collect();
+
+        assert_eq!(names, expected);
+        assert!(receiver_metadata(RECEIVER_PARAM_COUNT).is_none());
     }
 
     #[test]

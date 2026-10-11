@@ -4,6 +4,9 @@
 //! The actual parameter definitions live in the mission crate, which depends on this one, so the
 //! task is generic over a [`ParamStore`].
 //!
+//! A list request is answered with every PARAM_VALUE, followed by a PARAM_METADATA describing each
+//! param.
+//!
 //! Parameter values are exchanged bytewise: `param_value` carries the raw bits rather than a
 //! by-value cast, so integer params survive exactly. That is advertised in the `AutopilotVersion`
 //! message.
@@ -12,12 +15,15 @@ use embassy_time::{Duration, Timer};
 
 use rapid_dialect::Rapid;
 use rapid_dialect::rapid::enums::MavParamType;
-use rapid_dialect::rapid::messages::ParamValue;
+use rapid_dialect::rapid::messages::{ParamMetadata, ParamValue};
 
 use crate::{
     Downlink, InterfaceCommandPublisher, InterfaceRxSubscriber, InterfaceTxPublisher,
     SELF_COMPONENT_ID, UplinkCommand,
 };
+
+/// Spacing of the messages answering a list request.
+pub const PARAM_STREAM_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Everything needed to emit one PARAM_VALUE message.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,6 +47,7 @@ pub trait ParamStore: Sync {
     fn count(&self) -> u16;
     fn by_index(&self, index: u16) -> Option<ParamInfo>;
     fn by_name(&self, name: &[u8; 16]) -> Option<ParamInfo>;
+    fn metadata(&self, index: u16) -> Option<ParamMetadata>;
 
     /// Validate and apply a PARAM_SET to the live mirror. Returns the storage id and raw encoding
     /// (for persistence) and the info to echo back.
@@ -155,7 +162,13 @@ pub async fn run<P: ParamStore>(
                         tx.publish(param_value_msg(&info)).await;
                         // Pace the stream so we don't crowd out telemetry on the shared downlink
                         // channel.
-                        Timer::after(Duration::from_millis(20)).await;
+                        Timer::after(PARAM_STREAM_INTERVAL).await;
+                    }
+                }
+                for index in 0..store.count() {
+                    if let Some(metadata) = store.metadata(index) {
+                        tx.publish(Downlink::from_self(metadata)).await;
+                        Timer::after(PARAM_STREAM_INTERVAL).await;
                     }
                 }
             }
