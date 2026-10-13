@@ -130,9 +130,26 @@ impl ValveController {
             // Hold: every valve commandable
             M::Hold => true,
 
-            // Both vent valves manually openable during either fill or the disconnect for relief.
-            M::FillPressurant | M::FillOxidizer | M::Disconnect | M::Retract => {
-                matches!(valve, V::PressurantVent | V::OxidizerVent)
+            M::FillPressurant => {
+                matches!(
+                    valve,
+                    V::ExternalPressurantFill
+                        | V::ExternalPressurantVent
+                        | V::PressurantVent
+                        | V::OxidizerVent
+                )
+            }
+            M::FillOxidizer | M::Disconnect | M::Retract => {
+                matches!(
+                    valve,
+                    V::ExternalOxidizerFill
+                        | V::ExternalOxidizerVent
+                        | V::ExternalPressurantFill
+                        | V::ExternalPressurantVent
+                        | V::OxidizerFill
+                        | V::PressurantVent
+                        | V::OxidizerVent
+                )
             }
 
             // Vent valves pulsable for relief during pressurize, plus the ox fill for dump.
