@@ -15,7 +15,7 @@
 //!
 //! 1. manual command (only if allowed for mode and valve)
 //! 2. mode-based state
-//! 3. `Hold` baseline (the setpoints frozen at the moment `Hold` was entered)
+//! 3. baseline (the setpoints frozen at the moment `Hold` or a fill mode was entered)
 //!
 //! # Manual Valve Commands
 //!
@@ -29,7 +29,8 @@
 //! - PulseOpen: pulse the valve open for a certain time, then return to previous state
 //!
 //! Manual commands are reset upon flight mode changes (both for manual and automatic changes),
-//! except for the Hold mode.
+//! except for the Hold mode. The fill modes keep the commands and frozen setpoints of the valves
+//! they allow manual commands for, and close the rest.
 //!
 //! PulseOpen does nothing (noticable) if the valve is already open, and will not close the valve
 //! after the pulse is over.
@@ -91,7 +92,7 @@ pub struct ValveController {
     /// This is what entering Hold freezes, so an active pulse cannot leak its temporary "open"
     /// into the Hold baseline.
     nonpulse_setpoints: ValveMap<ValveState>,
-    /// What Hold holds: the non-pulse setpoints frozen when Hold was last
+    /// What Hold holds: the non-pulse setpoints frozen when Hold or a fill mode was last
     /// entered.
     hold_baseline: ValveMap<ValveState>,
     /// Vehicle time [ms] at which [`Self::mode`] was entered, for the modes whose valve states are
@@ -221,20 +222,27 @@ impl ValveController {
     ///
     /// Clears all manual commands, except when entering Hold, which instead freezes the current
     /// non-pulse setpoints as the baseline it maintains and lets running commands (e.g. an active
-    /// pulse) finish on top.
+    /// pulse) finish on top. The fill modes do the same, but only for the valves they allow manual
+    /// commands for.
     pub fn set_mode(&mut self, entered: FlightMode, now: Wrapping<u32>) {
-        if entered == FlightMode::Hold {
-            self.hold_baseline = self.nonpulse_setpoints;
-        } else {
-            self.commands = ValveMap::splat(None);
+        match entered {
+            FlightMode::Hold => self.hold_baseline = self.nonpulse_setpoints,
+            FlightMode::FillPressurant | FlightMode::FillOxidizer => {
+                self.hold_baseline = self.nonpulse_setpoints;
+                self.commands = ValveMap::from_fn(|valve| {
+                    self.commands[valve].filter(|_| Self::manual_valve_allowed(entered, valve))
+                });
+            }
+            _ => self.commands = ValveMap::splat(None),
         }
 
         self.mode = entered;
         self.mode_entered_at = now;
     }
 
-    /// The per-mode valve truth table. `None` only for Hold, which has no opinion of its own;
-    /// every other mode asserts a state for every valve.
+    /// The per-mode valve truth table. `None` for Hold, which has no opinion of its own, and for
+    /// the manually commandable valves of the fill modes; every other mode asserts a state for
+    /// every valve.
     fn mode_valve_state(
         &self,
         valve: ValveId,
@@ -253,18 +261,16 @@ impl ValveController {
             // entered.
             M::Hold => return None,
 
-            // Inert ground modes: everything closed.
-            M::Idle | M::Disconnect | M::Retract | M::DetectLaunch => closed,
-
             // On-pad modes
-            M::FillPressurant => match valve {
-                V::ExternalPressurantFill => open,
-                _ => closed,
-            },
-            M::FillOxidizer => match valve {
-                V::OxidizerFill | V::ExternalOxidizerFill => open,
-                _ => closed,
-            },
+            M::FillPressurant | M::FillOxidizer if Self::manual_valve_allowed(self.mode, valve) => {
+                return None;
+            }
+            M::Idle
+            | M::FillPressurant
+            | M::FillOxidizer
+            | M::Disconnect
+            | M::Retract
+            | M::DetectLaunch => closed,
             M::Pressurize => match valve {
                 V::Pressurization => open,
                 _ => closed,
@@ -450,15 +456,16 @@ mod tests {
     }
 
     #[test]
-    fn every_mode_except_hold_asserts_every_valve() {
+    fn every_mode_except_hold_and_fill_asserts_every_valve() {
         let mut c = ValveController::new();
         for mode in all_modes() {
             c.set_mode(mode, Wrapping(0));
             for valve in ValveId::ALL {
+                let fill = matches!(mode, M::FillPressurant | M::FillOxidizer);
                 assert_eq!(
                     c.mode_valve_state(valve, 0, &PropulsionParams::default())
                         .is_none(),
-                    mode == M::Hold,
+                    mode == M::Hold || fill && ValveController::manual_valve_allowed(mode, valve),
                     "mode {mode:?} valve {valve:?}"
                 );
             }
@@ -487,7 +494,7 @@ mod tests {
     #[test]
     fn pulse_returns_control_to_mode_policy_after_expiry() {
         let mut c = ValveController::new();
-        c.set_mode(M::FillOxidizer, Wrapping(0));
+        c.set_mode(M::Pressurize, Wrapping(0));
 
         c.try_command(
             V::OxidizerVent,
@@ -496,21 +503,23 @@ mod tests {
         )
         .unwrap();
 
-        // During the pulse the vent is open, afterwards FillOxidizer's policy
+        // During the pulse the vent is open, afterwards Pressurize's policy
         // (closed) resumes - a future in-mode auto controller would regain
         // control the same way.
         assert!(resolve(&mut c, 1400)[V::OxidizerVent] == OPEN);
         assert!(resolve(&mut c, 1600)[V::OxidizerVent] == CLOSED);
         // The mode policy is untouched by all this.
-        assert!(resolve(&mut c, 1600)[V::OxidizerFill] == OPEN);
+        assert!(resolve(&mut c, 1600)[V::Pressurization] == OPEN);
     }
 
     #[test]
     fn pulse_in_hold_restores_the_setpoints_from_entry() {
         let mut c = ValveController::new();
 
-        // FillOxidizer, with a manually opened pressurant vent.
+        // FillOxidizer, with a manually opened ox fill and pressurant vent.
         c.set_mode(M::FillOxidizer, Wrapping(0));
+        c.try_command(V::OxidizerFill, ValveCommand::Open, Wrapping(0))
+            .unwrap();
         c.try_command(V::PressurantVent, ValveCommand::Open, Wrapping(0))
             .unwrap();
         resolve(&mut c, 1);
@@ -541,6 +550,8 @@ mod tests {
     fn pulse_survives_hold_entry_and_ends_at_non_pulse_setpoint() {
         let mut c = ValveController::new();
         c.set_mode(M::FillOxidizer, Wrapping(0));
+        c.try_command(V::OxidizerFill, ValveCommand::Open, Wrapping(0))
+            .unwrap();
 
         c.try_command(
             V::OxidizerVent,
@@ -554,12 +565,61 @@ mod tests {
         c.set_mode(M::Hold, Wrapping(0));
         assert!(resolve(&mut c, 300)[V::OxidizerVent] == OPEN);
 
-        // ...and finishes into the pre-pulse setpoint (closed under FillOxidizer's
-        // policy), not the pulsed-open state.
+        // ...and finishes into the pre-pulse setpoint (closed), not the pulsed-open state.
         let after = resolve(&mut c, 600);
         assert!(after[V::OxidizerVent] == CLOSED);
         // The rest of the frozen FillOxidizer picture is untouched.
         assert!(after[V::OxidizerFill] == OPEN);
+    }
+
+    #[test]
+    fn fill_entry_holds_its_manual_valves_and_closes_the_rest() {
+        let mut c = ValveController::new();
+        c.set_mode(M::Hold, Wrapping(0));
+        for valve in [V::Main, V::OxidizerVent, V::OxidizerFill] {
+            c.try_command(valve, ValveCommand::Open, Wrapping(0))
+                .unwrap();
+        }
+        resolve(&mut c, 1);
+
+        c.set_mode(M::FillOxidizer, Wrapping(2));
+        let filling = resolve(&mut c, 3);
+        assert!(filling[V::OxidizerVent] == OPEN);
+        assert!(filling[V::OxidizerFill] == OPEN);
+        assert!(filling[V::Main] == CLOSED);
+
+        // The ox fill is not manually commandable in FillPressurant.
+        c.set_mode(M::FillPressurant, Wrapping(4));
+        let filling = resolve(&mut c, 5);
+        assert!(filling[V::OxidizerVent] == OPEN);
+        assert!(filling[V::OxidizerFill] == CLOSED);
+        assert!(filling[V::Main] == CLOSED);
+    }
+
+    #[test]
+    fn fill_entry_finishes_allowed_pulses_and_cuts_the_rest() {
+        let mut c = ValveController::new();
+        c.set_mode(M::Hold, Wrapping(0));
+        c.try_command(V::OxidizerVent, ValveCommand::Partial(0.5), Wrapping(0))
+            .unwrap();
+        resolve(&mut c, 1);
+
+        for valve in [V::OxidizerVent, V::OxidizerFill] {
+            c.try_command(
+                valve,
+                ValveCommand::PulseOpen(Duration::from_millis(500)),
+                Wrapping(100),
+            )
+            .unwrap();
+        }
+        resolve(&mut c, 200);
+
+        c.set_mode(M::FillPressurant, Wrapping(300));
+        let during = resolve(&mut c, 300);
+        assert!(during[V::OxidizerVent] == OPEN);
+        assert!(during[V::OxidizerFill] == CLOSED);
+
+        assert!(resolve(&mut c, 700)[V::OxidizerVent] == ValveState::from_promille_clamped(500));
     }
 
     #[test]

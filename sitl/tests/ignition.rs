@@ -6,6 +6,7 @@
 mod common;
 
 use common::{Harness, block_on};
+use mission::valves::ValveCommand;
 use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::ValveId;
 
@@ -15,6 +16,9 @@ async fn ready_to_ignite() -> Harness {
     h.fill_pressurant().await;
 
     h.vehicle.set_mode(FlightMode::FillOxidizer);
+    h.vehicle
+        .try_command_valve(ValveId::OxidizerFill, ValveCommand::Open)
+        .unwrap();
     h.run_ticks(60_000).await;
 
     h.vehicle.set_mode(FlightMode::Pressurize);

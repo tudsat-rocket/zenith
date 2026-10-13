@@ -7,6 +7,7 @@ mod common;
 
 use common::{Harness, block_on};
 use mission::inventory::InventoryId;
+use mission::valves::ValveCommand;
 use mission::{FailsafeParams, Params};
 use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::ValveId;
@@ -23,6 +24,9 @@ async fn filling(params: Option<Params>) -> Harness {
     let mut h = Harness::new(params).await;
     h.fill_pressurant().await;
     h.vehicle.set_mode(FlightMode::FillOxidizer);
+    h.vehicle
+        .try_command_valve(ValveId::OxidizerFill, ValveCommand::Open)
+        .unwrap();
     h.run_ticks(30_000).await;
     h
 }

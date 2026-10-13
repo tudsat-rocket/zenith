@@ -32,6 +32,9 @@ fn derived(h: &Harness) -> Option<f32> {
 /// tank again.
 async fn fill_to(h: &mut Harness, target: f32) {
     h.vehicle.set_mode(FlightMode::FillOxidizer);
+    h.vehicle
+        .try_command_valve(ValveId::OxidizerFill, ValveCommand::Open)
+        .unwrap();
     let filled = h.run_until(120_000, |h| actual(h) >= target).await;
     assert!(filled.is_ok(), "the sim only reached {:.2}", actual(h));
     h.run_ticks(4_000).await;
@@ -44,6 +47,9 @@ fn the_derived_level_follows_the_fill() {
         assert_eq!(derived(&h), Some(0.0), "an empty tank should read empty");
 
         h.vehicle.set_mode(FlightMode::FillOxidizer);
+        h.vehicle
+            .try_command_valve(ValveId::OxidizerFill, ValveCommand::Open)
+            .unwrap();
 
         let mut checked = 0;
         let mut previous = 0.0;
@@ -92,6 +98,9 @@ fn a_tank_filled_past_the_top_probe_reads_full() {
     block_on(async {
         let mut h = harness().await;
         h.vehicle.set_mode(FlightMode::FillOxidizer);
+        h.vehicle
+            .try_command_valve(ValveId::OxidizerFill, ValveCommand::Open)
+            .unwrap();
         for _ in 0..12 {
             h.run_ticks(10_000).await;
             let _ = h
