@@ -134,6 +134,14 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         self.bus_outputs.binary_output[BinaryOutputId::Igniter1] = igniting;
         self.bus_outputs.binary_output[BinaryOutputId::Igniter2] = igniting;
 
+        // Pad and post-launch heating are separately operator-settable: `heat_en_pad` governs
+        // everything up to and including `Ignite`, `heat_en_post` takes over from `Burn` onward.
+        self.bus_outputs.binary_output[BinaryOutputId::ValveHeating] = if self.mode <= FM::Ignite {
+            self.misc_params.heat_en_pad != 0
+        } else {
+            self.misc_params.heat_en_post != 0
+        };
+
         // Determine the intended state of all valves and push it out on the vehicle bus.
         self.bus_outputs.valve = self.valves.resolve(self.time, &self.propulsion_params);
         self.bus_outputs.servo = self.servos.resolve(self.time, &self.qd_params);

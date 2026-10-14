@@ -11,6 +11,10 @@ pub const VALVE_STORE_IDX: u16 = 0x2010;
 pub const HC_OUTPUT_STORE_IDX: u16 = 0x2020;
 /// "payload go" flag on the payload node, a plain variable (sub 0).
 pub const PAYLOAD_GO_STORE_IDX: u16 = 0x2036;
+/// Valve heating enable flag, a plain variable (sub 0).
+pub const VALVE_HEATING_STORE_IDX: u16 = 0x3080;
+
+pub const OX_VENT_SOLENOID_STORE_SUB: u8 = 1;
 
 #[allow(dead_code)]
 const HCO1: u8 = 1;
@@ -43,7 +47,7 @@ pub const VALVE_ID_MAP: ValveMap<IoAddr> = ValveMap::new([
     // Pressurization = 1,
     IoAddr::new(5, VALVE_STORE_IDX, 1),
     // OxidizerVent = 2,
-    IoAddr::new(4, VALVE_STORE_IDX, 1),
+    IoAddr::new(4, VALVE_STORE_IDX, OX_VENT_SOLENOID_STORE_SUB),
     // OxidizerFill = 3,
     IoAddr::new(6, VALVE_STORE_IDX, 2),
     // Main = 4,
@@ -79,6 +83,7 @@ pub const BINARY_OUTPUT_ID_MAP: BinaryOutputMap<IoAddr> = BinaryOutputMap::new([
     IoAddr::new(2, HC_OUTPUT_STORE_IDX, HCO3), // BinaryOutputId::Camera2,
     IoAddr::new(3, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Camera3,
     IoAddr::new(3, PAYLOAD_GO_STORE_IDX, 0),   // BinaryOutputId::PayloadGo,
+    IoAddr::new(4, VALVE_HEATING_STORE_IDX, OX_VENT_SOLENOID_STORE_SUB), // BinaryOutputId::ValveHeating,
 ]);
 
 // Sensor slots, unlike the sub-indices above, are the protocol's own 0-based slot numbering:

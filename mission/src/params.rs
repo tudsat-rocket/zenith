@@ -182,6 +182,12 @@ pub struct MiscParams {
         max = 100
     )]
     pub buzzer_volume: u32,
+    /// Enables valve heating while on the pad, up to and including `Ignite`. 0 disables, 1 enables.
+    #[param(id = 0x0501, name = "HEAT_PAD", default = 1, min = 0, max = 1)]
+    pub heat_en_pad: u32,
+    /// Enables valve heating after launch, from `Burn` onward. 0 disables, 1 enables.
+    #[param(id = 0x0502, name = "HEAT_POST", default = 0, min = 0, max = 1)]
+    pub heat_en_post: u32,
 }
 
 /// LoRa settings, including secrets. Exposed over MAVLink as `LORA_*`. Apart from the transmit
