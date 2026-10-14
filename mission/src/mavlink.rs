@@ -10,9 +10,10 @@ use num_traits::Float as _;
 
 use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::{
-    GpsFixType, MavAutopilot, MavBatteryChargeState, MavBatteryFault, MavBatteryFunction,
-    MavBatteryMode, MavBatteryType, MavModeFlag, MavProtocolCapability, MavState,
-    MavSysStatusSensor, MavSysStatusSensorExtended, MavType, RocketCapability, ValveFlag,
+    FluidType, GpsFixType, MavAutopilot, MavBatteryChargeState, MavBatteryFault,
+    MavBatteryFunction, MavBatteryMode, MavBatteryType, MavModeFlag, MavProtocolCapability,
+    MavState, MavSysStatusSensor, MavSysStatusSensorExtended, MavType, PressureVesselFlag,
+    RocketCapability, ValveFlag,
 };
 use rapid_dialect::rapid::messages::{
     Attitude, AutopilotVersion, BatteryStatus, CameraCaptureStatus, DebugFloatArray,
@@ -28,7 +29,7 @@ use crate::bus::{BusInputImage, BusOutputImage, NodeStatus, ValveState};
 use crate::flight_log::{LOG_STATUS, LOG_USAGE, LogState};
 use crate::inventory::{
     BinaryOutputId, EXTERNAL_VALVES, INTERNAL_VALVES, InventoryId, OxProbeId, PowerBoardId,
-    ServoMap, TankId, ValveId, valve_is_heated,
+    PressSensId, ServoMap, TankId, ValveId, valve_is_heated,
 };
 use crate::params::StateMachineParams;
 use crate::schedule::downlink_schedule;
@@ -80,7 +81,7 @@ impl VehicleSnapshot<'_> {
             every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt, DebugFloatArray;
             every 2000 ms => RocketInfo, AutopilotVersion, StorageInformation;
             // One message per component
-            every 200 ms => PressureVessel[TankId::ALL], Valve[ValveId::ALL], ServoOutputRaw;
+            every 200 ms => PressureVessel[TankId::ALL], PressureVessel, Valve[ValveId::ALL], ServoOutputRaw;
             every 1000 ms => Heartbeat[crate::bus::IO_NODE_IDS], SysStatus[crate::bus::IO_NODE_IDS],
                 CameraCaptureStatus[BinaryOutputId::CAMERAS];
         }
@@ -103,7 +104,7 @@ impl VehicleSnapshot<'_> {
                 downlink_schedule! { self.time.0, self, link:
                     every 10 ms => ScaledImu, ScaledPressure;
                     every 20 ms => ScaledImu2, ScaledImu3, ScaledPressure2, ScaledPressure3,
-                        Attitude, PressureVessel[TankId::INTERNAL];
+                        Attitude, PressureVessel[TankId::INTERNAL], PressureVessel;
                     every 100 ms => Valve[INTERNAL_VALVES], VfrHud, LocalPositionNed;
                     every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt,
                         BatteryStatus[BATTERY_SOURCES], DebugFloatArray;
@@ -114,7 +115,7 @@ impl VehicleSnapshot<'_> {
                     every 20 ms => PressureVessel[TankId::INTERNAL];
                     every 50 ms => ScaledImu, ScaledPressure, Attitude;
                     every 100 ms => ScaledImu2, ScaledImu3, ScaledPressure2, ScaledPressure3,
-                        VfrHud, LocalPositionNed, Valve[INTERNAL_VALVES];
+                        VfrHud, LocalPositionNed, Valve[INTERNAL_VALVES], PressureVessel;
                     every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt,
                         BatteryStatus[BATTERY_SOURCES], DebugFloatArray;
                     every 1000 ms => PressureVessel[TankId::EXTERNAL], Valve[EXTERNAL_VALVES],
@@ -125,7 +126,8 @@ impl VehicleSnapshot<'_> {
             // where the vehicle came down.
             FlightMode::Landed => {
                 downlink_schedule! { self.time.0, self, link:
-                    every 1000 ms => PressureVessel[TankId::INTERNAL], Valve[INTERNAL_VALVES],
+                    every 1000 ms => PressureVessel[TankId::INTERNAL], PressureVessel,
+                        Valve[INTERNAL_VALVES],
                         BatteryStatus[BATTERY_SOURCES], GlobalPositionInt, GpsRawInt, SysStatus,
                         Heartbeat, ScaledPressure, ScaledImu, DebugFloatArray;
                 }
@@ -930,6 +932,31 @@ impl InstanceMessage<TankId> for PressureVessel {
             volume: (tank.volume_l() * 1000.0) as u16,
             level,
         })
+    }
+}
+
+// TODO: hacky one-off pressure vessel for the recovery pressure sensor in addition to the proper
+// mechanism of building one per TankId.
+impl Into<PressureVessel> for &VehicleSnapshot<'_> {
+    fn into(self) -> PressureVessel {
+        let sensor = PressSensId::Nosecone;
+
+        let pressure1 = self.input_image.press_sens[sensor]
+            .map(|d| (d.data * 100.0).clamp(0.0, f32::from(u16::MAX)) as u16)
+            .unwrap_or(u16::MAX);
+
+        PressureVessel {
+            id: TankId::ALL.len() as u8,
+            flags: PressureVesselFlag::empty(),
+            fluid: FluidType::Air,
+            pressure1,
+            pressure2: u16::MAX,
+            rated_pressure: (sensor.full_scale_bar() * 100.0) as u16,
+            temperature1: i16::MAX,
+            temperature2: i16::MAX,
+            volume: 0,
+            level: u16::MAX,
+        }
     }
 }
 
