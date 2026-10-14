@@ -546,6 +546,7 @@ pub(crate) mod tests {
             VehicleSnapshot {
                 time: self.time,
                 mode: self.mode,
+                mode_time: Wrapping(0),
                 state_machine_params: &self.params,
                 readings: &self.readings,
                 state_estimator: &self.estimator,

@@ -1,4 +1,3 @@
-#![cfg(not(feature = "hybrid"))]
 //! The flight log schedule over a whole simulated flight, through the on-board log codec: nothing
 //! may be lost between record and `.tlog`, and each mode has to stay within its share of the
 //! flash. The sizes are printed (`--nocapture`) to see what compression buys on real telemetry.
@@ -14,11 +13,13 @@ use mavio::protocol::{IntoPayload, MavLinkVersion};
 use mission::TelemetryLink;
 use rapid_dialect::FlightMode;
 
+#[cfg(not(feature = "hybrid"))]
 const MAX_TICKS: u32 = 400_000;
 /// A 4 KiB sequential-storage page minus its markers and one item header.
 const MAX_CHUNK: usize = 4086;
 
 /// Raw record bytes per second each mode may log at most. Every mode not listed logs nothing.
+#[cfg(not(feature = "hybrid"))]
 const BUDGETS: [(FlightMode, usize); 7] = [
     (FlightMode::DetectLaunch, 12_000),
     (FlightMode::Ignite, 12_000),
@@ -50,6 +51,31 @@ struct LogSink {
 }
 
 impl LogSink {
+    fn new() -> Self {
+        Self {
+            time_ms: 0,
+            builder: Box::new(ChunkBuilder::new()),
+            records: 0,
+            raw_bytes: 0,
+            chunk_bytes: 0,
+            chunks: 0,
+            tlog_bytes: 0,
+            decoded_records: 0,
+            mode: FlightMode::Idle,
+            usage: HashMap::new(),
+        }
+    }
+
+    /// Steps `h` by one tick and logs it.
+    async fn tick(&mut self, h: &mut Harness) {
+        h.tick().await;
+        let snapshot = h.vehicle.snapshot();
+        self.time_ms = snapshot.time.0;
+        self.mode = snapshot.mode;
+        self.usage.entry(snapshot.mode).or_default().ticks += 1;
+        snapshot.send_log(self);
+    }
+
     fn flush(&mut self, all: bool) {
         while self.builder.is_ready() || (all && !self.builder.is_empty()) {
             let mut chunk = [0; ChunkBuilder::<16384, MAX_CHUNK>::OUT_LEN];
@@ -87,33 +113,18 @@ impl TelemetryLink for LogSink {
 }
 
 #[test]
+#[cfg(not(feature = "hybrid"))]
 fn a_logged_flight_survives_the_codec() {
     block_on(async {
         let mut h = Harness::new(None).await;
-        let mut sink = LogSink {
-            time_ms: 0,
-            builder: Box::new(ChunkBuilder::new()),
-            records: 0,
-            raw_bytes: 0,
-            chunk_bytes: 0,
-            chunks: 0,
-            tlog_bytes: 0,
-            decoded_records: 0,
-            mode: FlightMode::Idle,
-            usage: HashMap::new(),
-        };
+        let mut sink = LogSink::new();
 
         // Some time on the pad, then the flight.
         for i in 0..MAX_TICKS {
             if i == 10_000 {
                 h.arm();
             }
-            h.tick().await;
-            let snapshot = h.vehicle.snapshot();
-            sink.time_ms = snapshot.time.0;
-            sink.mode = snapshot.mode;
-            sink.usage.entry(snapshot.mode).or_default().ticks += 1;
-            snapshot.send_log(&mut sink);
+            sink.tick(&mut h).await;
             // A while on the ground to see the landed schedule.
             if h.mode() == FlightMode::Landed && sink.usage[&FlightMode::Landed].ticks >= 10_000 {
                 break;
@@ -146,5 +157,43 @@ fn a_logged_flight_survives_the_codec() {
                 "{mode:?} logs {rate} B/s, over its {budget}"
             );
         }
+    });
+}
+
+/// A vehicle may stay pressurized for hours: after the pressurization itself, Pressurize has to
+/// log slowly enough not to fill the flash before the flight.
+#[test]
+#[cfg(feature = "hybrid")]
+fn pressurize_slows_down_after_the_fast_window() {
+    use mission::mavlink::PRESSURIZE_FAST_LOG_MS;
+
+    block_on(async {
+        let mut h = Harness::new(None).await;
+        let mut sink = LogSink::new();
+
+        h.vehicle.set_mode(FlightMode::Pressurize);
+        let mut rates = [(0, 0); 2];
+        for (ticks, rate) in [PRESSURIZE_FAST_LOG_MS, 60_000].into_iter().zip(&mut rates) {
+            let (raw, flash) = (sink.raw_bytes, sink.chunk_bytes);
+            for _ in 0..ticks {
+                sink.tick(&mut h).await;
+            }
+            sink.flush(true);
+            let per_second = |bytes: usize| bytes * 1000 / ticks as usize;
+            *rate = (
+                per_second(sink.raw_bytes - raw),
+                per_second(sink.chunk_bytes - flash),
+            );
+        }
+        let [(fast_raw, fast_flash), (slow_raw, slow_flash)] = rates;
+
+        assert_eq!(h.mode(), FlightMode::Pressurize);
+        assert_eq!(sink.decoded_records, sink.records);
+        println!(
+            "Pressurize, first {PRESSURIZE_FAST_LOG_MS} ms: {fast_raw} B/s raw, {fast_flash} B/s on flash"
+        );
+        println!("Pressurize, after: {slow_raw} B/s raw, {slow_flash} B/s on flash");
+        assert!(fast_raw <= 12_000, "{fast_raw} B/s in the fast window");
+        assert!(slow_raw <= 1_500, "{slow_raw} B/s after the fast window");
     });
 }

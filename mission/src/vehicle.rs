@@ -338,6 +338,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         VehicleSnapshot {
             time: self.time,
             mode: self.mode,
+            mode_time: self.flight_logic.mode_time(),
             state_machine_params: &self.state_machine_params,
             readings: &self.readings,
             input_image: &self.bus_inputs,
