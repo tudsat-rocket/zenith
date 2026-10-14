@@ -19,10 +19,10 @@ pub const FREQUENCIES: [u32; NUM_FREQUENCIES] = [
     866_250_000,
     866_750_000,
     867_250_000,
-    867_750_000,
-    868_250_000,
-    868_750_000,
-    869_250_000,
+    867_750_000, // probably busy
+    868_250_000, // probably busy
+    868_750_000, // probably busy
+    869_250_000, // 869_525_00 probably busy as well
     869_750_000,
 ];
 
@@ -32,11 +32,15 @@ pub const SEQUENCE_LENGTH: usize = 64;
 ///
 /// Outer two channels left unoccupied so we stay in our band.
 const DOWNLINK_FREQUENCY_MASK: [bool; NUM_FREQUENCIES] = [
-    false, false, true, true, false, true, true, false, true, true, true, true, false, false,
+    // false, false, true, true, false, true, true, false, true, true, true, true, false, false,
+    false, false, true, false, true, false, true, false, true, // here only downlink
+    true, true, true, true, false,
 ];
 
 const UPLINK_FREQUENCY_MASK: [bool; NUM_FREQUENCIES] = [
-    false, true, false, false, true, false, false, true, false, false, false, false, true, false,
+    // false, true, false, false, true, false, false, true, false, false, false, false, true, false,
+    false, true, false, true, false, true, false, true, false, // here only unused
+    false, false, false, false, false,
 ];
 
 /// How far into a downlink message interval a transmission should start.

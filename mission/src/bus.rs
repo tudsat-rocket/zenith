@@ -67,8 +67,9 @@ pub struct NodeStatus {
     pub current_ma: Option<i32>,
     /// Frames from this node the flight computer could not make sense of. Cumulative, wrapping.
     pub comm_errors: u16,
-    // TODO: placeholder until the IO board protocol carries error counters of its own.
-    /// SYS_STATUS `errors_count1` to `4`.
+    /// The board's own error summary, as SYS_STATUS `errors_count1` to `4`: general, peripheral,
+    /// CAN and reboot. Each counts the 250 ms windows in which an error of its kind occurred, not
+    /// the errors themselves. Cumulative, wrapping.
     pub errors: [u16; 4],
 }
 

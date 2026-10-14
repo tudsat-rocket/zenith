@@ -249,6 +249,14 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
 
     let frame = TpdoFrame::decode(kind, data);
 
+    // Ahead of the power boards branching off, since their summary means the same thing.
+    if let TpdoFrame::ErrorSummary(summary) = frame {
+        if let Some(status) = image.node_status.get_mut(usize::from(node_id)) {
+            status.errors = summary;
+        }
+        return Some(node_id);
+    }
+
     if let Some(board) = power_board(node_id) {
         injest_power_board_frame(image, board, frame);
         return Some(node_id);
@@ -324,6 +332,7 @@ fn try_injest_can_msg(image: &mut BusInputImage, frame: Frame, time: Wrapping<u3
         | TpdoFrame::I2cScan { .. }
         | TpdoFrame::Status { .. }
         | TpdoFrame::Temperature { .. }
+        // Taken above, ahead of the power boards.
         | TpdoFrame::ErrorSummary(_) => (),
     }
 
