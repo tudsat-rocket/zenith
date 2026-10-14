@@ -60,6 +60,30 @@ pub struct GcsParams {
     /// Uplink transmit power
     #[param(id = 0x0906, name = "TX_PWR", default = 22.0, unit = "dBm", min = -9.0, max = 22.0, reboot_required)]
     pub tx_power: f32,
+    /// Downlink hopping channels. Has to match LORA_DN_CHAN.
+    ///
+    /// See [`LoraParams::downlink_channels`].
+    #[param(
+        id = 0x0907,
+        name = "DN_CHAN",
+        default = 0b00_0001_0110_1100,
+        min = 0,
+        max = 0x3FFF,
+        reboot_required
+    )]
+    pub downlink_channels: u32,
+    /// Uplink hopping channels. Has to match LORA_UP_CHAN.
+    ///
+    /// See [`LoraParams::uplink_channels`].
+    #[param(
+        id = 0x0908,
+        name = "UP_CHAN",
+        default = 0b01_0000_1001_0010,
+        min = 0,
+        max = 0x3FFF,
+        reboot_required
+    )]
+    pub uplink_channels: u32,
 }
 
 /// What a receiver does about one request.
@@ -554,5 +578,23 @@ mod tests {
         pending.request(u16::MAX, 1);
 
         assert!(pending.take(&store).is_none());
+    }
+
+    /// The param attributes take literals, so they are a second copy of the default masks.
+    #[test]
+    fn channel_param_defaults_are_the_default_masks() {
+        use crate::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG};
+
+        let down = DEFAULT_DOWNLINK_CONFIG.channel_mask;
+        let up = DEFAULT_UPLINK_CONFIG.channel_mask;
+
+        let vehicle = LoraParams::default();
+        assert_eq!(
+            (vehicle.downlink_channels, vehicle.uplink_channels),
+            (down, up)
+        );
+
+        let gcs = GcsParams::default();
+        assert_eq!((gcs.downlink_channels, gcs.uplink_channels), (down, up));
     }
 }

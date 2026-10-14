@@ -24,7 +24,7 @@ use embassy_sync::{
 };
 use embassy_time::{Duration, Instant, Ticker, Timer, with_deadline};
 
-use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG, LinkConfig};
+use telemetry::config::LinkConfig;
 use telemetry::messages::{
     CommandAck, DownlinkMessage, GripperMessage, ParamEntry, ParamRequestMessage, ParamSetMessage,
     SetServoMessage, SetValveMessage, UplinkMessage,
@@ -137,15 +137,14 @@ async fn main(low_priority_spawner: Spawner) {
     // TODO
     //board.iwdg.unleash();
 
-    let downlink_config = LinkConfig {
-        hop_seed: gcs_params.hop_seed(),
-        hmac_key: gcs_params.hmac_key(),
-        ..DEFAULT_DOWNLINK_CONFIG
-    };
-    let uplink_config = LinkConfig {
-        hop_seed: gcs_params.hop_seed(),
-        hmac_key: gcs_params.hmac_key(),
-        ..DEFAULT_UPLINK_CONFIG
+    let Some((downlink_config, uplink_config)) = LinkConfig::links(
+        gcs_params.downlink_channels,
+        gcs_params.uplink_channels,
+        gcs_params.hop_seed(),
+        gcs_params.hmac_key(),
+    ) else {
+        defmt::warn!("No LoRa channels configured, LoRa disabled.");
+        return;
     };
 
     let downlink = HoppingReceiver::new(board.lora2, downlink_config, tx.sender());

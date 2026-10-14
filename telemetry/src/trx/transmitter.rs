@@ -9,7 +9,7 @@ use lora_phy::mod_traits::RadioKind;
 
 use utils::anychannel::AnyReceiver;
 
-use crate::config::{FREQUENCIES, LinkConfig};
+use crate::config::LinkConfig;
 use crate::messages::{DOWNLINK_PACKET_SIZE, DownlinkMessage, TelemetryMessage, UplinkMessage};
 use crate::trx::MAX_CONSECUTIVE_ERRORS;
 
@@ -173,11 +173,7 @@ impl<RK: RadioKind, R: AnyReceiver<(u16, UplinkMessage, i32)>>
                 }
             } else {
                 // If we don't have a good connection, we send on all uplink frequencies.
-                for frequency in FREQUENCIES
-                    .iter()
-                    .zip(self.config.frequency_mask)
-                    .filter_map(|(f, m)| m.then_some(*f))
-                {
+                for frequency in self.config.channels() {
                     self.transmit_or_reset(frequency, &bytes, tx_power, &mut consecutive_errors)
                         .await;
                 }

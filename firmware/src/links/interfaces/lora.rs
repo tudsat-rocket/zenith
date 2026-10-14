@@ -24,7 +24,7 @@ use rapid_dialect::Rapid;
 use rapid_dialect::rapid::enums::MavResult;
 use rapid_dialect::rapid::messages::RadioStatus;
 
-use telemetry::config::{DEFAULT_DOWNLINK_CONFIG, DEFAULT_UPLINK_CONFIG, FREQUENCIES, LinkConfig};
+use telemetry::config::LinkConfig;
 use telemetry::messages::TelemetryMessage;
 use telemetry::messages::UplinkMessage;
 use telemetry::messages::{CommandAck, DOWNLINK_PACKET_SIZE, DownlinkMessage};
@@ -74,28 +74,28 @@ impl LoraHandle {
         let tx = DOWNLINK.init(Channel::new());
         let rx = UPLINK.init(Channel::new());
 
-        let downlink_config = LinkConfig {
-            hop_seed: params.hop_seed(),
-            hmac_key: params.hmac_key(),
-            ..DEFAULT_DOWNLINK_CONFIG
-        };
-        let uplink_config = LinkConfig {
-            hop_seed: params.hop_seed(),
-            hmac_key: params.hmac_key(),
-            ..DEFAULT_UPLINK_CONFIG
-        };
+        let links = LinkConfig::links(
+            params.downlink_channels,
+            params.uplink_channels,
+            params.hop_seed(),
+            params.hmac_key(),
+        );
 
-        let downlink = HoppingTransmitter::new(lora1, downlink_config, tx.receiver());
-        spawner.spawn(run_downlink(downlink)).unwrap();
+        if let Some((downlink_config, uplink_config)) = links {
+            let downlink = HoppingTransmitter::new(lora1, downlink_config, tx.receiver());
+            spawner.spawn(run_downlink(downlink)).unwrap();
 
-        let uplink = HoppingReceiver::new(lora2, uplink_config, rx.sender());
-        spawner
-            .spawn(run_uplink(
-                uplink,
-                UPLINK_STATS.sender(),
-                TIME.receiver().unwrap(),
-            ))
-            .unwrap();
+            let uplink = HoppingReceiver::new(lora2, uplink_config, rx.sender());
+            spawner
+                .spawn(run_uplink(
+                    uplink,
+                    UPLINK_STATS.sender(),
+                    TIME.receiver().unwrap(),
+                ))
+                .unwrap();
+        } else {
+            defmt::warn!("No LoRa channels configured, LoRa disabled.");
+        }
 
         Self {
             tx: tx.sender(),

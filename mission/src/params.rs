@@ -212,6 +212,27 @@ pub struct LoraParams {
     /// between them. Dropping out of the armed modes does not switch back.
     #[param(id = 0x0807, name = "TX_PWR_HI", default = 22.0, unit = "dBm", min = -9.0, max = 22.0)]
     pub tx_power_armed: f32,
+    /// Downlink hopping channels, bit i = 863.25 + 0.5 i MHz. Has to match GCS_DN_CHAN. Both 0
+    /// disables LoRa.
+    #[param(
+        id = 0x0808,
+        name = "DN_CHAN",
+        default = 0b00_0001_0110_1100,
+        min = 0,
+        max = 0x3FFF,
+        reboot_required
+    )]
+    pub downlink_channels: u32,
+    /// Uplink hopping channels, bit i = 863.25 + 0.5 i MHz. Has to match GCS_UP_CHAN.
+    #[param(
+        id = 0x0809,
+        name = "UP_CHAN",
+        default = 0b01_0000_1001_0010,
+        min = 0,
+        max = 0x3FFF,
+        reboot_required
+    )]
+    pub uplink_channels: u32,
 }
 
 /// Id of [`LoraParams::tx_power`], which the vehicle recognizes writes to. The attribute takes a
