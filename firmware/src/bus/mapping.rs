@@ -121,11 +121,8 @@ pub const PRESS_SENSOR_ID_MAP: PressureSensorMap<SensorAddr> = PressureSensorMap
     SensorAddr::from_sensor_idx(6, 1).unwrap(), // PressSensId::CombustionChamber1
     SensorAddr::from_sensor_idx(6, 3).unwrap(), // PressSensId::CombustionChamber2
     // TODO: external io board
-    SensorAddr::from_sensor_idx(8, 0).unwrap(), // PressSensId::ExternalPressurant
-    SensorAddr {
-        node_id: 0xff,
-        slot: 0xff,
-    }, // PressSensId::ExternalOxidizer
+    SensorAddr::from_sensor_idx(7, 1).unwrap(), // PressSensId::ExternalPressurant
+    SensorAddr::from_sensor_idx(7, 0).unwrap(), // PressSensId::ExternalOxidizer
 ]);
 
 /// The power boards' `Status` frame repurposes `stalled_mask` for charger state. Restated from
