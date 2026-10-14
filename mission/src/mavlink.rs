@@ -770,14 +770,17 @@ impl InstanceMessage<u8> for SysStatus {
 
 /// Shared because the ground station rebuilds these from the LoRa downlink, and both paths have
 /// to produce the same message.
+///
+/// A camera whose output the bus does not report is still sent, with `video_status` `u8::MAX`
+/// (not a MAVLink value) for unknown.
 pub fn camera_capture_status(
     time: Wrapping<u32>,
     camera_device_id: u8,
-    recording: bool,
+    recording: Option<bool>,
 ) -> CameraCaptureStatus {
     CameraCaptureStatus {
         time_boot_ms: time.0,
-        video_status: recording.into(),
+        video_status: recording.map_or(u8::MAX, u8::from),
         camera_device_id,
         ..Default::default()
     }
@@ -787,7 +790,7 @@ pub fn camera_capture_status(
 /// back is the recording state.
 impl InstanceMessage<BinaryOutputId> for CameraCaptureStatus {
     fn build(snap: &VehicleSnapshot<'_>, output: BinaryOutputId) -> Option<Self> {
-        let recording = snap.input_image.binary_outputs[output]?.data;
+        let recording = snap.input_image.binary_outputs[output].map(|r| r.data);
         let id = output.camera_device_id()?;
         Some(camera_capture_status(snap.time, id, recording))
     }

@@ -180,7 +180,7 @@ impl DownlinkTelemetryMessage for ComponentsMessage {
     const ID: u8 = 0x04;
     type Input<'a> = &'a VehicleSnapshot<'a>;
     /// One per [`ValveId`], the commanded servos, the nodes on the bus and the armed subset of
-    /// them, then one per camera the bus reports on.
+    /// them, then one per camera.
     type Output = (
         [Valve; 9],
         ServoOutputRaw,
@@ -268,7 +268,7 @@ impl DownlinkTelemetryMessage for ComponentsMessage {
 
         let cameras = BinaryOutputId::CAMERAS.map(|camera| {
             let id = camera.camera_device_id()?;
-            let recording = ValveCode::unpack_one(self.reported, camera_slot(id)).switch()?;
+            let recording = ValveCode::unpack_one(self.reported, camera_slot(id)).switch();
             Some(camera_capture_status(Wrapping(context.time), id, recording))
         });
 
@@ -488,7 +488,7 @@ pub(crate) mod tests {
         };
         assert_eq!(
             cameras.each_ref().map(status),
-            [Some((1, 1)), None, Some((3, 0))]
+            [Some((1, 1)), Some((2, u8::MAX)), Some((3, 0))]
         );
 
         let Some(heated) = valves.iter().find(|v| valve_is_heated(v.id)) else {

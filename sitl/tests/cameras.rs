@@ -7,11 +7,9 @@ use common::{Harness, block_on};
 #[cfg(feature = "hybrid")]
 use rapid_dialect::FlightMode;
 use rapid_dialect::Rapid;
-#[cfg(feature = "hybrid")]
 use rapid_dialect::rapid::messages::CameraCaptureStatus;
 
 /// The last `video_status` of each camera, by camera id, over one second of telemetry.
-#[cfg(feature = "hybrid")]
 async fn recording(h: &mut Harness) -> [Option<u8>; 3] {
     let mut status = [None; 3];
     for msg in h.collect_telemetry(1000).await {
@@ -92,20 +90,13 @@ fn a_command_naming_a_missing_camera_changes_nothing() {
     });
 }
 
-/// Without IO boards nothing reports the outputs, so there is no status to send.
+/// Without IO boards nothing reports the outputs, so every camera is sent as unknown.
 #[cfg(not(feature = "hybrid"))]
 #[test]
-fn no_status_without_a_bus() {
+fn unknown_without_a_bus() {
     block_on(async {
         let mut h = Harness::new(None).await;
         h.vehicle.try_command_camera(0, true).unwrap();
-
-        let statuses = h
-            .collect_telemetry(1000)
-            .await
-            .into_iter()
-            .filter(|m| matches!(m, Rapid::CameraCaptureStatus(_)))
-            .count();
-        assert_eq!(statuses, 0);
+        assert_eq!(recording(&mut h).await, [Some(u8::MAX); 3]);
     });
 }
