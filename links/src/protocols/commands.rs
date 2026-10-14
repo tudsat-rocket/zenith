@@ -281,6 +281,17 @@ pub async fn run(
                     ),
                 }
             }
+            // Answered here rather than by the log task, which only runs where the log is, so
+            // that a GCS modem relays it too.
+            Rapid::LogErase(req)
+                if crate::protocols::log::addressed(
+                    req.target_system,
+                    req.target_component,
+                    system_id,
+                ) =>
+            {
+                cmd_tx.publish(UplinkCommand::EraseLog).await;
+            }
             _ => {}
         }
 
