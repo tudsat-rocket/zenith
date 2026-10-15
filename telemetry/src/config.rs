@@ -19,29 +19,25 @@ pub const FREQUENCIES: [u32; NUM_FREQUENCIES] = [
     866_250_000,
     866_750_000,
     867_250_000,
-    867_750_000, // probably busy
-    868_250_000, // probably busy
-    868_750_000, // probably busy
-    869_250_000, // 869_525_00 probably busy as well
+    867_750_000,
+    868_250_000,
+    868_750_000,
+    869_250_000,
     869_750_000,
 ];
 
 pub const SEQUENCE_LENGTH: usize = 64;
 
-/// Eight channels, so [`SEQUENCE_LENGTH`] divides evenly by them.
-///
-/// Outer two channels left unoccupied so we stay in our band.
-const DOWNLINK_FREQUENCY_MASK: [bool; NUM_FREQUENCIES] = [
-    // false, false, true, true, false, true, true, false, true, true, true, true, false, false,
-    false, false, true, false, true, false, true, false, true, // here only downlink
-    true, true, true, true, false,
-];
+/// 864.25, 864.75, 865.75, 866.25 and 867.25 MHz. Neither default uses the outer two channels,
+/// which at 500 kHz reach past 863 and 870 MHz.
+// TODO: replace with a more general default
+const DOWNLINK_CHANNEL_MASK: u32 = 0b00_0001_0110_1100;
 
-const UPLINK_FREQUENCY_MASK: [bool; NUM_FREQUENCIES] = [
-    // false, true, false, false, true, false, false, true, false, false, false, false, true, false,
-    false, true, false, true, false, true, false, true, false, // here only unused
-    false, false, false, false, false,
-];
+/// 863.75, 865.25, 866.75 and 869.25 MHz.
+const UPLINK_CHANNEL_MASK: u32 = 0b01_0000_1001_0010;
+
+/// Every channel a mask can select.
+const ALL_CHANNELS: u32 = (1 << NUM_FREQUENCIES) - 1;
 
 /// How far into a downlink message interval a transmission should start.
 const DOWNLINK_OFFSET_MS: u16 = 1;
@@ -68,7 +64,7 @@ pub const DEFAULT_DOWNLINK_CONFIG: LinkConfig = LinkConfig {
     bandwidth: Bandwidth::_500KHz,
     coding_rate: CodingRate::_4_5,
     preamble_length: 8,
-    frequency_mask: DOWNLINK_FREQUENCY_MASK,
+    channel_mask: DOWNLINK_CHANNEL_MASK,
     hop_seed: 0,
     hopping_interval: DOWNLINK_MESSAGE_INTERVAL_MS,
     hmac_key: [0; 16],
@@ -79,7 +75,7 @@ pub const DEFAULT_UPLINK_CONFIG: LinkConfig = LinkConfig {
     bandwidth: Bandwidth::_500KHz,
     coding_rate: CodingRate::_4_5,
     preamble_length: 8,
-    frequency_mask: UPLINK_FREQUENCY_MASK,
+    channel_mask: UPLINK_CHANNEL_MASK,
     hop_seed: 0,
     hopping_interval: UPLINK_HOP_INTERVAL_MS,
     hmac_key: [0; 16],
@@ -90,7 +86,8 @@ pub struct LinkConfig {
     pub bandwidth: Bandwidth,
     pub coding_rate: CodingRate,
     pub preamble_length: u16,
-    pub frequency_mask: [bool; NUM_FREQUENCIES],
+    /// Bit `i` selects `FREQUENCIES[i]`.
+    pub channel_mask: u32,
     /// See [`hop_seed`].
     pub hop_seed: u64,
     pub hopping_interval: u32,
@@ -106,6 +103,49 @@ pub fn hop_seed(binding_phrase: &str) -> u64 {
 }
 
 impl LinkConfig {
+    /// The downlink and uplink configs, or `None` if both masks are empty. Masks that cannot work
+    /// (fewer than two channels, unknown channels, overlap) fall back to the defaults.
+    pub fn links(
+        downlink_mask: u32,
+        uplink_mask: u32,
+        hop_seed: u64,
+        hmac_key: [u8; 16],
+    ) -> Option<(Self, Self)> {
+        if downlink_mask == 0 && uplink_mask == 0 {
+            return None;
+        }
+
+        let valid = |mask: u32| mask & !ALL_CHANNELS == 0 && mask.count_ones() >= 2;
+        let (downlink_mask, uplink_mask) =
+            if valid(downlink_mask) && valid(uplink_mask) && downlink_mask & uplink_mask == 0 {
+                (downlink_mask, uplink_mask)
+            } else {
+                // Host tests have no defmt logger to link against.
+                #[cfg(not(test))]
+                defmt::error!(
+                    "Invalid LoRa channel masks {=u32:#x}/{=u32:#x}, using the defaults.",
+                    downlink_mask,
+                    uplink_mask
+                );
+                (DOWNLINK_CHANNEL_MASK, UPLINK_CHANNEL_MASK)
+            };
+
+        Some((
+            Self {
+                channel_mask: downlink_mask,
+                hop_seed,
+                hmac_key,
+                ..DEFAULT_DOWNLINK_CONFIG
+            },
+            Self {
+                channel_mask: uplink_mask,
+                hop_seed,
+                hmac_key,
+                ..DEFAULT_UPLINK_CONFIG
+            },
+        ))
+    }
+
     /// The hopping sequence, as channel indices into [`FREQUENCIES`].
     ///
     /// Built as back-to-back shuffles of the link's channels so channels don't repeat and are
@@ -123,7 +163,7 @@ impl LinkConfig {
 
         // One block, one of each channel.
         let mut block: heapless::Vec<usize, NUM_FREQUENCIES> = (0..NUM_FREQUENCIES)
-            .filter(|i| self.frequency_mask[*i])
+            .filter(|i| self.channel_mask >> i & 1 == 1)
             .collect();
 
         let mut sequence: [usize; SEQUENCE_LENGTH] = [0; SEQUENCE_LENGTH];
@@ -183,8 +223,8 @@ impl LinkConfig {
     pub fn channels(&self) -> heapless::Vec<u32, NUM_FREQUENCIES> {
         FREQUENCIES
             .iter()
-            .zip(self.frequency_mask)
-            .filter_map(|(f, in_use)| in_use.then_some(*f))
+            .enumerate()
+            .filter_map(|(i, f)| (self.channel_mask >> i & 1 == 1).then_some(*f))
             .collect()
     }
 
@@ -229,18 +269,21 @@ mod tests {
     extern crate std;
     use std::{format, string::String, vec::Vec};
 
-    /// Both links, and enough binding phrases that the properties below are claims about the
-    /// construction rather than about the one phrase we happen to ship. Nobody inspects a
-    /// generated sequence once every vehicle has its own phrase.
-    fn sequences() -> Vec<(String, [bool; NUM_FREQUENCIES], [usize; SEQUENCE_LENGTH])> {
+    /// Every channel count and enough binding phrases that the properties below are claims about
+    /// the construction rather than about the masks and the one phrase we happen to ship.
+    fn sequences() -> Vec<(String, u32, [usize; SEQUENCE_LENGTH])> {
         let mut out = Vec::new();
 
-        for mask in [DOWNLINK_FREQUENCY_MASK, UPLINK_FREQUENCY_MASK] {
+        let every_count = (2..=NUM_FREQUENCIES).map(|n| (1 << n) - 1);
+        for mask in [DOWNLINK_CHANNEL_MASK, UPLINK_CHANNEL_MASK]
+            .into_iter()
+            .chain(every_count)
+        {
             for i in 0..200 {
                 let binding_phrase = format!("phrase-{i}");
                 let sequence = LinkConfig {
                     hop_seed: hop_seed(&binding_phrase),
-                    frequency_mask: mask,
+                    channel_mask: mask,
                     ..DEFAULT_DOWNLINK_CONFIG
                 }
                 .sequence();
@@ -251,8 +294,8 @@ mod tests {
         out
     }
 
-    fn channel_count(mask: &[bool; NUM_FREQUENCIES]) -> usize {
-        mask.iter().filter(|in_use| **in_use).count()
+    fn channel_count(mask: u32) -> usize {
+        mask.count_ones() as usize
     }
 
     /// A run parks the link on one frequency for as long as it lasts, which is what the hopping
@@ -271,24 +314,18 @@ mod tests {
         }
     }
 
-    /// Both masks hold a power of two channels and [`SEQUENCE_LENGTH`] is one too, so every
-    /// channel gets exactly the same number of slots. Anything else would mean some channel
-    /// carrying more of the duty cycle than the others.
+    /// Every channel gets the same number of slots, or one more where the channel count does not
+    /// divide [`SEQUENCE_LENGTH`].
     #[test]
-    fn every_channel_gets_the_same_share() {
+    fn every_channel_gets_an_even_share() {
         for (phrase, mask, sequence) in sequences() {
-            let channels = channel_count(&mask);
-            assert!(
-                channels.is_power_of_two(),
-                "{channels} channels do not divide the sequence"
-            );
-            let expected = SEQUENCE_LENGTH / channels;
+            let fewest = SEQUENCE_LENGTH / channel_count(mask);
 
-            for (channel, _) in mask.iter().enumerate().filter(|(_, in_use)| **in_use) {
+            for channel in (0..NUM_FREQUENCIES).filter(|i| mask >> i & 1 == 1) {
                 let slots = sequence.iter().filter(|c| **c == channel).count();
-                assert_eq!(
-                    slots, expected,
-                    "{phrase} gives channel {channel} {slots} slots"
+                assert!(
+                    slots == fewest || slots == fewest + 1,
+                    "{phrase} gives channel {channel} of {mask:#x} {slots} slots"
                 );
             }
         }
@@ -296,17 +333,23 @@ mod tests {
 
     /// A receiver sweeping for a vehicle sits on each channel for a multiple of this, so it has to
     /// be bounded and small. One block can hold a channel's slot at its start and the next at its
-    /// end, which is the worst a block construction allows.
+    /// end, which is the worst a block construction allows. A cut-off last block can add one more
+    /// across the wrap.
     #[test]
     fn the_gap_between_a_channels_slots_is_bounded() {
         for (phrase, mask, _) in sequences() {
             let config = LinkConfig {
                 hop_seed: hop_seed(&phrase),
-                frequency_mask: mask,
+                channel_mask: mask,
                 ..DEFAULT_DOWNLINK_CONFIG
             };
 
-            let bound = 2 * channel_count(&mask);
+            let channels = channel_count(mask);
+            let bound = if SEQUENCE_LENGTH % channels == 0 {
+                2 * channels
+            } else {
+                3 * channels
+            };
             let gap = config.max_hop_gap();
             assert!(
                 gap <= bound,
@@ -322,10 +365,10 @@ mod tests {
     fn the_shipped_sequence_does_not_change_by_accident() {
         #[rustfmt::skip]
         const DOWNLINK: [usize; SEQUENCE_LENGTH] = [
-            2, 3, 6, 9, 8, 5, 10, 11, 6, 3, 5, 11, 9, 10, 8, 2,
-            9, 10, 6, 3, 2, 5, 11, 8, 9, 2, 8, 6, 5, 3, 11, 10,
-            5, 8, 10, 2, 9, 11, 6, 3, 10, 8, 5, 6, 9, 11, 2, 3,
-            9, 10, 11, 8, 3, 6, 5, 2, 10, 3, 8, 9, 2, 5, 6, 11,
+            3, 2, 6, 5, 8, 6, 3, 8, 2, 5, 8, 5, 6, 3, 2, 8,
+            2, 5, 6, 3, 5, 3, 6, 2, 8, 6, 3, 5, 2, 8, 6, 8,
+            2, 3, 5, 8, 5, 3, 6, 2, 5, 3, 8, 2, 6, 8, 2, 5,
+            6, 3, 2, 3, 5, 8, 6, 8, 3, 5, 6, 2, 5, 3, 6, 2,
         ];
         #[rustfmt::skip]
         const UPLINK: [usize; SEQUENCE_LENGTH] = [
@@ -349,12 +392,7 @@ mod tests {
     /// transmissions on a channel the vehicle is trying to be heard on.
     #[test]
     fn the_two_directions_do_not_share_a_channel() {
-        for (down, up) in DOWNLINK_FREQUENCY_MASK
-            .into_iter()
-            .zip(UPLINK_FREQUENCY_MASK)
-        {
-            assert!(!(down && up));
-        }
+        assert_eq!(DOWNLINK_CHANNEL_MASK & UPLINK_CHANNEL_MASK, 0);
 
         let downlink = DEFAULT_DOWNLINK_CONFIG.channels();
         let uplink = DEFAULT_UPLINK_CONFIG.channels();
@@ -366,6 +404,23 @@ mod tests {
         for edge in [FREQUENCIES[0], FREQUENCIES[NUM_FREQUENCIES - 1]] {
             assert!(!downlink.contains(&edge) && !uplink.contains(&edge));
         }
+    }
+
+    #[test]
+    fn channel_masks_that_cannot_work_fall_back_to_the_defaults() {
+        let masks = |down, up| {
+            LinkConfig::links(down, up, 0, [0; 16])
+                .map(|(down, up)| (down.channel_mask, up.channel_mask))
+        };
+        let defaults = Some((DOWNLINK_CHANNEL_MASK, UPLINK_CHANNEL_MASK));
+
+        assert_eq!(masks(0, 0), None);
+        assert_eq!(masks(0b0011, 0b1100), Some((0b0011, 0b1100)));
+
+        assert_eq!(masks(0, 0b1100), defaults);
+        assert_eq!(masks(0b0001, 0b1100), defaults);
+        assert_eq!(masks(0b0111, 0b1100), defaults);
+        assert_eq!(masks(0b0011 | 1 << NUM_FREQUENCIES, 0b1100), defaults);
     }
 
     /// Radio setup plus time-on-air of one uplink packet, i.e. how long a transmission occupies
