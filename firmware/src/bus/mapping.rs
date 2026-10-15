@@ -79,9 +79,9 @@ pub const SERVO_ID_MAP: ServoMap<IoAddr> = ServoMap::new([
 pub const BINARY_OUTPUT_ID_MAP: BinaryOutputMap<IoAddr> = BinaryOutputMap::new([
     IoAddr::new(7, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Igniter1,
     IoAddr::new(7, HC_OUTPUT_STORE_IDX, HCO2), // BinaryOutputId::Igniter2,
-    IoAddr::new(2, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Camera1,
-    IoAddr::new(2, HC_OUTPUT_STORE_IDX, HCO3), // BinaryOutputId::Camera2,
-    IoAddr::new(3, HC_OUTPUT_STORE_IDX, HCO1), // BinaryOutputId::Camera3,
+    IoAddr::new(2, HC_OUTPUT_STORE_IDX, HCO2), // BinaryOutputId::Camera1,
+    IoAddr::new(2, HC_OUTPUT_STORE_IDX, HCO4), // BinaryOutputId::Camera2,
+    IoAddr::new(3, HC_OUTPUT_STORE_IDX, HCO2), // BinaryOutputId::Camera3,
     IoAddr::new(3, PAYLOAD_GO_STORE_IDX, 0),   // BinaryOutputId::PayloadGo,
     IoAddr::new(4, VALVE_HEATING_STORE_IDX, OX_VENT_SOLENOID_STORE_SUB), // BinaryOutputId::ValveHeating,
 ]);

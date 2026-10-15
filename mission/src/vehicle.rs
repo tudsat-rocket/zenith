@@ -203,7 +203,8 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         // Camera outputs and the armed transmit power are switched on automatically, but are not
         // automatically switched back off. A camera stopped from the ground comes back on with the
         // next mode change.
-        if mode >= FlightMode::DetectLaunch {
+        // TODO: (felix) check how this maps to solid rocket / non Zephyr specific rocket
+        if mode >= FlightMode::Pressurize && mode != FlightMode::Hold {
             for camera in BinaryOutputId::CAMERAS {
                 self.bus_outputs.binary_output[camera] = true;
             }
