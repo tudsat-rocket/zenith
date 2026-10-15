@@ -98,13 +98,13 @@ pub struct QdParams {
     #[param(id = 0x0600, name = "HOLD_T_OX", default = 1000, unit = "ms")]
     pub disconnect_hold_time_oxidizer: u32,
     /// Time after the retract servo moved after which the disconnect servo is closed again
-    #[param(id = 0x0603, name = "RETR_T_OX", default = 1000, unit = "ms")]
+    #[param(id = 0x0603, name = "RETR_T_OX", default = 700, unit = "ms")]
     pub disconnect_retract_time_oxidizer: u32,
     /// Position the oxidizer retract servo moves to after a gripper release
     #[param(
         id = 0x0602,
         name = "RETR_OX_PERC",
-        default = 10,
+        default = 0,
         unit = "%",
         min = 0,
         max = 100
