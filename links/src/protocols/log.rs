@@ -2,7 +2,8 @@
 //! LOG_REQUEST_END) for the on-board flight log, one log per boot, and answers requests for
 //! STORAGE_INFORMATION about the flash holding it.
 //!
-//! Erasing goes through the vehicle as [`UplinkCommand::EraseLog`], which knows whether it is safe.
+//! LOG_ERASE only ends a running download here; the command task turns it into
+//! [`UplinkCommand::EraseLog`] for the vehicle, which knows whether it is safe.
 //!
 //! On the wire a log's id is its index, oldest first: ground stations file LOG_ENTRY by id into
 //! `0..num_logs` (QGroundControl only shifts that by one for ArduPilot), so the store's own ids,
@@ -16,8 +17,8 @@ use rapid_dialect::rapid::enums::{StorageStatus, StorageType, StorageUsageFlag};
 use rapid_dialect::rapid::messages::{LogData, LogEntry, StorageInformation};
 
 use crate::{
-    DOWNLINK_N, Downlink, InterfaceCommandPublisher, InterfaceCommandSubscriber,
-    InterfaceRxSubscriber, InterfaceTxPublisher, SELF_COMPONENT_ID, UplinkCommand,
+    DOWNLINK_N, Downlink, InterfaceCommandSubscriber, InterfaceRxSubscriber, InterfaceTxPublisher,
+    SELF_COMPONENT_ID, UplinkCommand,
 };
 
 pub const DATA_LEN: usize = 90;
@@ -66,7 +67,7 @@ pub enum LogRequest {
 }
 
 /// Whether a message targeting `(target_system, target_component)` is for us.
-fn addressed(target_system: u8, target_component: u8, system_id: u8) -> bool {
+pub(crate) fn addressed(target_system: u8, target_component: u8, system_id: u8) -> bool {
     (target_system == 0 || target_system == system_id)
         && (target_component == 0 || target_component == SELF_COMPONENT_ID)
 }
@@ -253,7 +254,6 @@ pub async fn run<L: LogStore>(
     tx: InterfaceTxPublisher,
     mut rx: InterfaceRxSubscriber,
     mut commands: InterfaceCommandSubscriber,
-    cmd_tx: InterfaceCommandPublisher,
     store: L,
 ) {
     log::info!("log: task started");
@@ -285,9 +285,8 @@ pub async fn run<L: LogStore>(
             LogRequest::Data { id, ofs, count } => {
                 next = stream(&store, &tx, &mut rx, system_id, (id, ofs, count)).await;
             }
-            LogRequest::Erase => cmd_tx.publish(UplinkCommand::EraseLog).await,
-            // A stream it interrupts is all there is to end.
-            LogRequest::End => {}
+            // A stream they interrupt is all there is to end.
+            LogRequest::Erase | LogRequest::End => {}
         }
     }
 }

@@ -142,6 +142,11 @@ impl FlightLogic {
         }
     }
 
+    /// When the current mode was entered.
+    pub fn mode_time(&self) -> Wrapping<u32> {
+        self.mode_time
+    }
+
     /// Must be called when the mode actually changes, to track mode timing.
     pub fn set_mode(&mut self, time: Wrapping<u32>, new_mode: FlightMode) {
         self.mode_time = time;

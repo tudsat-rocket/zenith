@@ -10,9 +10,10 @@ use num_traits::Float as _;
 
 use rapid_dialect::FlightMode;
 use rapid_dialect::rapid::enums::{
-    GpsFixType, MavAutopilot, MavBatteryChargeState, MavBatteryFault, MavBatteryFunction,
-    MavBatteryMode, MavBatteryType, MavModeFlag, MavProtocolCapability, MavState,
-    MavSysStatusSensor, MavSysStatusSensorExtended, MavType, RocketCapability, ValveFlag,
+    FluidType, GpsFixType, MavAutopilot, MavBatteryChargeState, MavBatteryFault,
+    MavBatteryFunction, MavBatteryMode, MavBatteryType, MavModeFlag, MavProtocolCapability,
+    MavState, MavSysStatusSensor, MavSysStatusSensorExtended, MavType, PressureVesselFlag,
+    RocketCapability, ValveFlag,
 };
 use rapid_dialect::rapid::messages::{
     Attitude, AutopilotVersion, BatteryStatus, CameraCaptureStatus, DebugFloatArray,
@@ -27,13 +28,17 @@ use crate::TelemetryLink;
 use crate::bus::{BusInputImage, BusOutputImage, NodeStatus, ValveState};
 use crate::flight_log::{LOG_STATUS, LOG_USAGE, LogState};
 use crate::inventory::{
-    BinaryOutputId, EXTERNAL_VALVES, INTERNAL_VALVES, InventoryId, OxProbeId, PowerBoardId,
-    ServoMap, TankId, ValveId, valve_is_heated,
+    BinaryOutputId, INTERNAL_VALVES, InventoryId, OxProbeId, PowerBoardId, PressSensId, ServoMap,
+    TankId, ValveId, valve_is_heated,
 };
 use crate::params::StateMachineParams;
 use crate::schedule::downlink_schedule;
 use crate::traits::SensorReadings;
 use crate::valves::ValveController;
+
+/// How long after entering Pressurize the flight log keeps the armed pad rates, to catch the
+/// pressurization itself.
+pub const PRESSURIZE_FAST_LOG_MS: u32 = 5 * 60 * 1000;
 
 /// `None` is the flight computer's own power monitor, which only reports while no power board is
 /// present.
@@ -49,6 +54,8 @@ const BATTERY_SOURCES: [Option<PowerBoardId>; 4] = [
 pub struct VehicleSnapshot<'a> {
     pub time: Wrapping<u32>,
     pub mode: FlightMode,
+    /// When `mode` was entered.
+    pub mode_time: Wrapping<u32>,
     pub state_machine_params: &'a StateMachineParams,
     pub readings: &'a SensorReadings,
     pub state_estimator: &'a StateEstimator,
@@ -80,7 +87,7 @@ impl VehicleSnapshot<'_> {
             every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt, DebugFloatArray;
             every 2000 ms => RocketInfo, AutopilotVersion, StorageInformation;
             // One message per component
-            every 200 ms => PressureVessel[TankId::ALL], Valve[ValveId::ALL], ServoOutputRaw;
+            every 200 ms => PressureVessel[TankId::ALL], PressureVessel, Valve[ValveId::ALL], ServoOutputRaw;
             every 1000 ms => Heartbeat[crate::bus::IO_NODE_IDS], SysStatus[crate::bus::IO_NODE_IDS],
                 CameraCaptureStatus[BinaryOutputId::CAMERAS];
         }
@@ -93,9 +100,17 @@ impl VehicleSnapshot<'_> {
     /// another. The IO boards broadcast sensors every 50 ms and valve positions every 200 ms, so
     /// tanks and valves are sampled at least twice as often to catch every update despite the
     /// jitter.
-    /// Nothing is logged on the pad before arming.
+    /// Nothing is logged on the pad before pressurizing, and Pressurize drops to a slow schedule
+    /// after [`PRESSURIZE_FAST_LOG_MS`].
     pub fn send_log(&self, link: &mut impl TelemetryLink) {
         match self.mode {
+            FlightMode::Pressurize if (self.time - self.mode_time).0 >= PRESSURIZE_FAST_LOG_MS => {
+                downlink_schedule! { self.time.0, self, link:
+                    every 1000 ms => PressureVessel[TankId::INTERNAL], Valve[INTERNAL_VALVES],
+                        Heartbeat, SysStatus, ScaledPressure, ScaledImu, DebugFloatArray;
+                    every 2000 ms => BatteryStatus[BATTERY_SOURCES], Heartbeat[crate::bus::IO_NODE_IDS];
+                }
+            }
             FlightMode::Burn
             | FlightMode::Coast
             | FlightMode::DeployDrogue
@@ -103,7 +118,7 @@ impl VehicleSnapshot<'_> {
                 downlink_schedule! { self.time.0, self, link:
                     every 10 ms => ScaledImu, ScaledPressure;
                     every 20 ms => ScaledImu2, ScaledImu3, ScaledPressure2, ScaledPressure3,
-                        Attitude, PressureVessel[TankId::INTERNAL];
+                        Attitude, PressureVessel[TankId::INTERNAL], PressureVessel;
                     every 100 ms => Valve[INTERNAL_VALVES], VfrHud, LocalPositionNed;
                     every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt,
                         BatteryStatus[BATTERY_SOURCES], DebugFloatArray;
@@ -114,11 +129,10 @@ impl VehicleSnapshot<'_> {
                     every 20 ms => PressureVessel[TankId::INTERNAL];
                     every 50 ms => ScaledImu, ScaledPressure, Attitude;
                     every 100 ms => ScaledImu2, ScaledImu3, ScaledPressure2, ScaledPressure3,
-                        VfrHud, LocalPositionNed, Valve[INTERNAL_VALVES];
+                        VfrHud, LocalPositionNed, Valve[INTERNAL_VALVES], PressureVessel;
                     every 500 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt,
                         BatteryStatus[BATTERY_SOURCES], DebugFloatArray;
-                    every 1000 ms => PressureVessel[TankId::EXTERNAL], Valve[EXTERNAL_VALVES],
-                        Heartbeat[crate::bus::IO_NODE_IDS];
+                    every 1000 ms => Heartbeat[crate::bus::IO_NODE_IDS];
                 }
             }
             // Slow, but kept up for as long as the batteries last: leaks, battery decay and
@@ -126,8 +140,9 @@ impl VehicleSnapshot<'_> {
             FlightMode::Landed => {
                 downlink_schedule! { self.time.0, self, link:
                     every 1000 ms => PressureVessel[TankId::INTERNAL], Valve[INTERNAL_VALVES],
-                        BatteryStatus[BATTERY_SOURCES], GlobalPositionInt, GpsRawInt, SysStatus,
-                        Heartbeat, ScaledPressure, ScaledImu, DebugFloatArray;
+                        LocalPositionNed, ScaledPressure, ScaledImu;
+                    every 5000 ms => Heartbeat, SysStatus, GlobalPositionInt, GpsRawInt,
+                        BatteryStatus[BATTERY_SOURCES], DebugFloatArray, Heartbeat[crate::bus::IO_NODE_IDS];
                 }
             }
             FlightMode::Idle
@@ -933,6 +948,31 @@ impl InstanceMessage<TankId> for PressureVessel {
     }
 }
 
+// TODO: hacky one-off pressure vessel for the recovery pressure sensor in addition to the proper
+// mechanism of building one per TankId.
+impl Into<PressureVessel> for &VehicleSnapshot<'_> {
+    fn into(self) -> PressureVessel {
+        let sensor = PressSensId::Nosecone;
+
+        let pressure1 = self.input_image.press_sens[sensor]
+            .map(|d| (d.data * 100.0).clamp(0.0, f32::from(u16::MAX)) as u16)
+            .unwrap_or(u16::MAX);
+
+        PressureVessel {
+            id: TankId::ALL.len() as u8,
+            flags: PressureVesselFlag::empty(),
+            fluid: FluidType::Air,
+            pressure1,
+            pressure2: u16::MAX,
+            rated_pressure: (sensor.full_scale_bar() * 100.0) as u16,
+            temperature1: i16::MAX,
+            temperature2: i16::MAX,
+            volume: 0,
+            level: u16::MAX,
+        }
+    }
+}
+
 impl InstanceMessage<ValveId> for Valve {
     fn build(snap: &VehicleSnapshot<'_>, valve: ValveId) -> Option<Self> {
         // Both fields use 0.0 = fully closed, 1.0 = fully open; NAN = unknown.
@@ -1088,6 +1128,7 @@ mod tests {
         let snapshot = VehicleSnapshot {
             time: Wrapping(0),
             mode,
+            mode_time: Wrapping(0),
             state_machine_params: &StateMachineParams::default(),
             readings,
             state_estimator: &estimator,
@@ -1150,6 +1191,7 @@ mod tests {
         let snapshot = VehicleSnapshot {
             time: Wrapping(0),
             mode: FlightMode::Idle,
+            mode_time: Wrapping(0),
             state_machine_params: &StateMachineParams::default(),
             readings,
             state_estimator: &StateEstimator::new(
@@ -1177,6 +1219,7 @@ mod tests {
         let snapshot = VehicleSnapshot {
             time: Wrapping(0),
             mode: FlightMode::Idle,
+            mode_time: Wrapping(0),
             state_machine_params: &StateMachineParams::default(),
             readings: &SensorReadings::default(),
             state_estimator: &StateEstimator::new(

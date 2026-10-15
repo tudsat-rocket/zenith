@@ -162,7 +162,6 @@ impl EthernetHandle {
                     tx.publisher().unwrap(),
                     rx.subscriber().unwrap(),
                     commands.subscriber().unwrap(),
-                    commands.publisher().unwrap(),
                 ))
                 .unwrap();
         }
@@ -236,10 +235,9 @@ async fn run_log(
     tx: InterfaceTxPublisher,
     rx: InterfaceRxSubscriber,
     cmd_rx: InterfaceCommandSubscriber,
-    cmd_tx: InterfaceCommandPublisher,
 ) {
     let store = crate::storage::FlashLogReader;
-    links::protocols::log::run(system_id, tx, rx, cmd_rx, cmd_tx, store).await;
+    links::protocols::log::run(system_id, tx, rx, cmd_rx, store).await;
 }
 
 #[embassy_executor::task]

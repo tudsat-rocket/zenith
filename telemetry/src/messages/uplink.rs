@@ -19,6 +19,11 @@ const UPLINK_PAYLOAD_SIZE: usize = UPLINK_PACKET_SIZE - 10;
 /// Resets the vehicle, the RF counterpart of MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN. Has no payload.
 const REBOOT_ID: u8 = 0x08;
 
+/// 0x0A: EraseLog
+///
+/// Erases the flight log, the RF counterpart of LOG_ERASE. Has no payload.
+const ERASE_LOG_ID: u8 = 0x0A;
+
 /// Sequence numbers occupy just 11 bits of the packet header.
 pub const UPLINK_SEQ_MODULO: u16 = 1 << 11;
 
@@ -33,6 +38,7 @@ pub enum UplinkMessage {
     Gripper(GripperMessage),
     Reboot(()),
     SetCamera(SetCameraMessage),
+    EraseLog(()),
 }
 
 impl TelemetryMessage for UplinkMessage {
@@ -56,6 +62,7 @@ impl TelemetryMessage for UplinkMessage {
             Self::Gripper(inner) => (GripperMessage::ID, inner.serialize()?),
             Self::Reboot(()) => (REBOOT_ID, [0x00; UPLINK_PAYLOAD_SIZE]),
             Self::SetCamera(inner) => (SetCameraMessage::ID, inner.serialize()?),
+            Self::EraseLog(()) => (ERASE_LOG_ID, [0x00; UPLINK_PAYLOAD_SIZE]),
         };
 
         let mut buffer = [0x00; UPLINK_PACKET_SIZE];
@@ -118,6 +125,7 @@ impl TelemetryMessage for UplinkMessage {
             GripperMessage::ID => UplinkMessage::Gripper(postcard::from_bytes(payload)?),
             REBOOT_ID => UplinkMessage::Reboot(()),
             SetCameraMessage::ID => UplinkMessage::SetCamera(postcard::from_bytes(payload)?),
+            ERASE_LOG_ID => UplinkMessage::EraseLog(()),
             id => {
                 return Err(TelemetryError::UnknownMessageId(id));
             }
@@ -173,6 +181,7 @@ impl UplinkMessage {
                 defmt::warn!("Rejecting uplink command for an unknown camera.");
                 MavResult::Denied
             }),
+            Self::EraseLog(()) => Ok(UplinkCommand::EraseLog),
         })
     }
 }
@@ -630,6 +639,14 @@ mod tests {
         assert!(matches!(
             through_packet(UplinkMessage::Reboot(())),
             UplinkMessage::Reboot(())
+        ));
+    }
+
+    #[test]
+    fn erase_log_survives_the_packet() {
+        assert!(matches!(
+            through_packet(UplinkMessage::EraseLog(())),
+            UplinkMessage::EraseLog(())
         ));
     }
 
