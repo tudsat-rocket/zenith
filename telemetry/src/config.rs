@@ -28,13 +28,10 @@ pub const FREQUENCIES: [u32; NUM_FREQUENCIES] = [
 
 pub const SEQUENCE_LENGTH: usize = 64;
 
-/// 864.25, 864.75, 865.75, 866.25 and 867.25 MHz. Neither default uses the outer two channels,
-/// which at 500 kHz reach past 863 and 870 MHz.
 // TODO: replace with a more general default
-const DOWNLINK_CHANNEL_MASK: u32 = 0b00_0001_0110_1100;
+const DOWNLINK_CHANNEL_MASK: u32 = 0b01_0001_0110_1000;
 
-/// 863.75, 865.25, 866.75 and 869.25 MHz.
-const UPLINK_CHANNEL_MASK: u32 = 0b01_0000_1001_0010;
+const UPLINK_CHANNEL_MASK: u32 = 0b00_0000_1001_0110;
 
 /// Every channel a mask can select.
 const ALL_CHANNELS: u32 = (1 << NUM_FREQUENCIES) - 1;
