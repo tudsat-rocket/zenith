@@ -27,6 +27,15 @@ pub const SELF_COMPONENT_ID: u8 = 0x01;
 /// the MAVLink message provides.
 pub const TUNE_NAME_LEN: usize = 24;
 
+/// Cameras attached to the flight computer, without MAVLink component ids of their own. MAVLink
+/// numbers them 1 to `CAMERA_COUNT` in `camera_device_id`.
+pub const CAMERA_COUNT: u8 = 3;
+
+const _: () = assert!(
+    CAMERA_COUNT <= 6,
+    "MAVLink numbers autopilot-attached cameras 1 to 6"
+);
+
 /// One message on its way out, plus the MAVLink component it speaks for.
 ///
 /// Almost everything zenith sends is its own; the exception is the heartbeat per IO board node,
@@ -94,6 +103,12 @@ pub enum UplinkCommand {
         instance: u8,
         grab: bool,
     },
+    /// Power a camera output, which starts or stops its recording. `camera` is 0 for all cameras
+    /// or a 1-based MAVLink camera id.
+    SetCameraRecording {
+        camera: u8,
+        recording: bool,
+    },
     SetParam {
         id: u16,
         raw: u32,
@@ -122,6 +137,11 @@ impl UplinkCommand {
             Self::SetServo { command, .. } => Some(*command),
             Self::Gripper { .. } => Some(MavCmd::DoGripper),
             Self::Reboot => Some(MavCmd::PreflightRebootShutdown),
+            Self::SetCameraRecording { recording, .. } => Some(if *recording {
+                MavCmd::VideoStartCapture
+            } else {
+                MavCmd::VideoStopCapture
+            }),
             Self::RequestAvailableModes(_)
             | Self::RequestCanForwarding
             | Self::SetParam { .. }
