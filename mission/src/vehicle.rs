@@ -123,7 +123,7 @@ impl<S: Sensors, O: Outputs, F: Storage, B: Bus> Vehicle<S, O, F, B> {
         // Set our on-board recovery outputs and LEDs based on flight mode.
         self.outputs
             .set_recovery_armed(self.mode >= FM::DetectLaunch);
-        self.outputs.set_drogue(self.mode == FM::DeployDrogue);
+        self.outputs.set_drogue(self.mode >= FM::DeployDrogue);
         self.outputs
             .set_leds(LedState::for_mode(self.mode, self.time.0));
         self.outputs.set_main(self.main_output_high());
